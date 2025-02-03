@@ -1,60 +1,146 @@
-use crate::utils::crypto;
-use crate::utils::crypto::{generate_long_time_key_pair, CryptoError};
-use crate::utils::hex::hex_to_bytes;
+use crate::utils::crypto::{
+    CryptoError, ED25519_PUBLICKEYBYTES, ED25519_SECRETKEYBYTES, generate_sign_keypair, sha256,
+};
+use crate::utils::hex::{bytes_to_hex, hex_to_bytes};
+use log::info;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
+use thiserror::Error;
 
-pub const fn derive_public_key(secret_key: &[u8; crypto::ED25519_SECRETKEYBYTES]) -> [u8; crypto::ED25519_PUBLICKEYBYTES] {
-    let mut public_key = [0u8; crypto::ED25519_PUBLICKEYBYTES];
-    let mut i = 0;
-    while i < crypto::ED25519_SECRETKEYBYTES - crypto::ED25519_PUBLICKEYBYTES {
-        public_key[i] = secret_key[i + crypto::ED25519_SECRETKEYBYTES - crypto::ED25519_PUBLICKEYBYTES];
-        i += 1;
+#[derive(Clone)]
+pub struct Identity {
+    pub sk: [u8; ED25519_SECRETKEYBYTES],
+    pub pk: [u8; ED25519_PUBLICKEYBYTES],
+    pub pow: [u8; 4],
+}
+
+impl Identity {
+    pub fn new(sk: [u8; ED25519_SECRETKEYBYTES], pow: [u8; 4]) -> Self {
+        Self {
+            sk,
+            pk: Self::derive_pk(&sk),
+            pow,
+        }
     }
-    public_key
+
+    pub fn generate(min_pow_difficulty: u8) -> Result<Identity, IdentityError> {
+        let (pk, sk) = generate_sign_keypair()?;
+        let pow = generate_proof_of_work(&pk, min_pow_difficulty)?;
+
+        Ok(Self::new(sk, pow))
+    }
+
+    pub const fn derive_pk(sk: &[u8; ED25519_SECRETKEYBYTES]) -> [u8; ED25519_PUBLICKEYBYTES] {
+        let mut pk = [0u8; ED25519_PUBLICKEYBYTES];
+        let mut i = 0;
+        while i < ED25519_SECRETKEYBYTES - ED25519_PUBLICKEYBYTES {
+            pk[i] = sk[i + ED25519_SECRETKEYBYTES - ED25519_PUBLICKEYBYTES];
+            i += 1;
+        }
+        pk
+    }
+
+    pub fn save(path: &str, id: &Identity) -> io::Result<()> {
+        let sk_hex = bytes_to_hex(&id.sk);
+        let pow_int = i32::from_be_bytes(id.pow);
+
+        let mut file = File::create(path)?;
+
+        writeln!(file, "[Identity]")?;
+        writeln!(file, "SecretKey = {sk_hex}")?;
+        writeln!(file, "ProofOfWork = {pow_int}")?;
+
+        Ok(())
+    }
+
+    pub fn load(path: &str) -> io::Result<Identity> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut sk: Option<[u8; ED25519_SECRETKEYBYTES]> = None;
+        let mut proof_of_work: Option<[u8; 4]> = None;
+
+        for line in reader.lines() {
+            let line = line?;
+            let line = line.trim();
+
+            if line.starts_with("SecretKey") {
+                if let Some(value) = line.split('=').nth(1) {
+                    sk = Some(hex_to_bytes::<64>(value.trim()));
+                }
+            } else if line.starts_with("ProofOfWork") {
+                if let Some(value) = line.split('=').nth(1) {
+                    proof_of_work = Some(
+                        value
+                            .trim()
+                            .to_string()
+                            .parse::<i32>()
+                            .unwrap()
+                            .to_be_bytes(),
+                    );
+                }
+            }
+        }
+
+        match (sk, proof_of_work) {
+            (Some(sk), Some(pow)) => Ok(Identity {
+                sk,
+                pk: Self::derive_pk(&sk),
+                pow,
+            }),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Missing required fields in identity file",
+            )),
+        }
+    }
+
+    pub fn load_or_generate(
+        identity_file: &str,
+        min_pow_difficulty: u8,
+    ) -> Result<Identity, IdentityError> {
+        match Identity::load(identity_file) {
+            Ok(id) => {
+                info!("Loaded identity from file '{}'.", identity_file);
+                Ok(id)
+            }
+            Err(e) => {
+                info!(
+                    "Could not load identity from file '{}' ({}). Generate new one...",
+                    identity_file, e
+                );
+                let id = Identity::generate(min_pow_difficulty)?;
+                Identity::save(identity_file, &id)?;
+                Ok(id)
+            }
+        }
+    }
 }
 
-pub fn generate_identity() -> Result<([u8; crypto::ED25519_SECRETKEYBYTES], [u8; 4]), IdentityError> {
-    let (pk, sk) = generate_long_time_key_pair().map_err(|e| IdentityError::GenerationFailed(e))?;
-    let pow = generate_proof_of_work(&pk)?;
-
-    Ok((sk, pow))
-}
-
-pub fn save_identity(path: &str, secret_key: &[u8; crypto::ED25519_SECRETKEYBYTES], pow: &[u8; 4]) -> io::Result<()> {
-    let secret_key_hex: String = secret_key.iter().map(|b| format!("{:02x}", b)).collect();
-    let pow_int = i32::from_le_bytes(*pow);
-
-    let mut file = File::create(path)?;
-
-    writeln!(file, "[Identity]")?;
-    writeln!(file, "SecretKey = {}", secret_key_hex)?;
-    writeln!(file, "ProofOfWork = {}", pow_int)?;
-
-    Ok(())
-}
-
-pub fn generate_proof_of_work(
-    public_key: &[u8; crypto::ED25519_PUBLICKEYBYTES],
+fn generate_proof_of_work(
+    pk: &[u8; ED25519_PUBLICKEYBYTES],
+    min_pow_difficulty: u8,
 ) -> Result<[u8; 4], IdentityError> {
     for candidate in i32::MIN..i32::MAX {
-        let candidate_bytes = candidate.to_le_bytes();
-        if validate_proof_of_work(public_key, &candidate_bytes) {
+        let candidate_bytes = candidate.to_be_bytes();
+        if validate_proof_of_work(pk, &candidate_bytes, min_pow_difficulty) {
             return Ok(candidate_bytes);
         }
     }
     Err(IdentityError::PowNotFound)
 }
 
-pub fn validate_proof_of_work(public_key: &[u8; crypto::ED25519_PUBLICKEYBYTES], pow: &[u8; 4]) -> bool {
+pub fn validate_proof_of_work(
+    pk: &[u8; ED25519_PUBLICKEYBYTES],
+    pow: &[u8; 4],
+    min_pow_difficulty: u8,
+) -> bool {
     // calculate proof of work difficulty
-    let public_key_hex: String = public_key.iter().map(|b| format!("{:02x}", b)).collect();
-    let input = format!("{}{}", public_key_hex, i32::from_be_bytes(*pow));
-    let hash = crypto::sha256(input.as_bytes());
+    let input = format!("{}{}", bytes_to_hex(pk), i32::from_be_bytes(*pow));
+    let hash = sha256(input.as_bytes());
 
     // count leading zero bits
     let mut leading_zeros: u8 = 0;
-    for &byte in hash.iter() {
+    for &byte in &hash {
         if byte == 0 {
             leading_zeros += 8;
         } else {
@@ -63,57 +149,20 @@ pub fn validate_proof_of_work(public_key: &[u8; crypto::ED25519_PUBLICKEYBYTES],
         }
     }
 
-    let is_valid = leading_zeros >= *crate::MIN_POW_DIFFICULTY;
-
-    is_valid
+    leading_zeros >= min_pow_difficulty
 }
 
-pub fn load_identity(path: &str) -> io::Result<([u8; crypto::ED25519_SECRETKEYBYTES], [u8; 4])> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut secret_key: Option<[u8; crypto::ED25519_SECRETKEYBYTES]> = None;
-    let mut proof_of_work: Option<[u8; 4]> = None;
-
-    for line in reader.lines() {
-        let line = line?;
-        let line = line.trim();
-
-        if line.starts_with("SecretKey") {
-            if let Some(value) = line.split('=').nth(1) {
-                secret_key = Some(hex_to_bytes::<64>(value.trim()));
-            }
-        } else if line.starts_with("ProofOfWork") {
-            if let Some(value) = line.split('=').nth(1) {
-                proof_of_work = Some(value.trim().to_string().parse::<i32>().unwrap().to_be_bytes());
-            }
-        }
-    }
-
-    match (secret_key, proof_of_work) {
-        (Some(sk), Some(pow)) => Ok((sk, pow)),
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Missing required fields in identity file",
-        )),
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum IdentityError {
+    #[error("Proof of Work could not be found")]
     PowNotFound,
-    GenerationFailed(CryptoError),
-}
 
-impl std::fmt::Display for IdentityError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IdentityError::PowNotFound => write!(f, "Proof of Work could not be found"),
-            IdentityError::GenerationFailed(e) => write!(f, "Identity generation failed: {}", e),
-        }
-    }
-}
+    #[error("Identity generation failed: {0}")]
+    GenerationFailed(#[from] CryptoError),
 
-impl std::error::Error for IdentityError {}
+    #[error("I/O error: {0}")]
+    IoError(#[from] io::Error),
+}
 
 #[cfg(test)]
 mod tests {
@@ -122,10 +171,32 @@ mod tests {
 
     #[test]
     fn test_derive_public_key() {
-        let secret_key = hex_to_bytes::<64>("3e6499116ba86b4884345891f3421a5a16c902247326928ce41c10ad8a66bd1f668178a3be9ad22f4f6e94c835ac824cf365db86bb486ab4a42c021dec09c0e4");
-        let expected_public_key =
+        let sk = hex_to_bytes::<64>(
+            "3e6499116ba86b4884345891f3421a5a16c902247326928ce41c10ad8a66bd1f668178a3be9ad22f4f6e94c835ac824cf365db86bb486ab4a42c021dec09c0e4",
+        );
+        let expected_pk =
             hex_to_bytes::<32>("668178a3be9ad22f4f6e94c835ac824cf365db86bb486ab4a42c021dec09c0e4");
 
-        assert_eq!(derive_public_key(&secret_key), expected_public_key);
+        assert_eq!(Identity::derive_pk(&sk), expected_pk);
+    }
+
+    #[test]
+    fn test_validate_proof_of_work_valid() {
+        let pk =
+            hex_to_bytes::<32>("9331341e09d313baa4027a2fccea4fd471b9637f2305de714009c46b9192e006");
+        let pow = (-2130520098i32).to_be_bytes();
+        let difficulty = 24;
+
+        assert!(validate_proof_of_work(&pk, &pow, difficulty));
+    }
+
+    #[test]
+    fn test_validate_proof_of_work_invalid() {
+        let pk =
+            hex_to_bytes::<32>("38fddd8d068165f227199b521bf91c09577231f05cae822d78c04be7595fb81d");
+        let pow = (-2110011455i32).to_be_bytes();
+        let difficulty = 24;
+
+        assert!(!validate_proof_of_work(&pk, &pow, difficulty));
     }
 }
