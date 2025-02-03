@@ -1,25 +1,15 @@
-pub const fn hex_to_byte(c: u8) -> u8 {
-    match c {
-        b'0'..=b'9' => c - b'0',
-        b'a'..=b'f' => c - b'a' + 10,
-        b'A'..=b'F' => c - b'A' + 10,
-        _ => panic!("Invalid hex character"),
-    }
-}
+use faster_hex::{hex_decode, hex_encode};
 
-pub const fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
-    let hex = hex.as_bytes();
+pub fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
     let mut bytes = [0u8; N];
-    let mut i = 0;
-    while i < N {
-        bytes[i] = hex_to_byte(hex[i * 2]) << 4 | hex_to_byte(hex[i * 2 + 1]);
-        i += 1;
-    }
+    hex_decode(hex.as_bytes(), &mut bytes).expect("Invalid hex string");
     bytes
 }
 
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    let mut hex = vec![0u8; bytes.len() * 2];
+    hex_encode(bytes, &mut hex).expect("Failed to encode bytes to hex");
+    String::from_utf8(hex).expect("Invalid UTF-8")
 }
 
 #[cfg(test)]
@@ -37,11 +27,15 @@ mod tests {
         );
 
         assert_eq!(
-            hex_to_bytes::<64>("3e6499116ba86b4884345891f3421a5a16c902247326928ce41c10ad8a66bd1f668178a3be9ad22f4f6e94c835ac824cf365db86bb486ab4a42c021dec09c0e4"),
-            [62, 100, 153, 17, 107, 168, 107, 72, 132, 52, 88, 145, 243, 66, 26, 90,
-             22, 201, 2, 36, 115, 38, 146, 140, 228, 28, 16, 173, 138, 102, 189, 31,
-             102, 129, 120, 163, 190, 154, 210, 47, 79, 110, 148, 200, 53, 172, 130, 76,
-             243, 101, 219, 134, 187, 72, 106, 180, 164, 44, 2, 29, 236, 9, 192, 228]
+            hex_to_bytes::<64>(
+                "3e6499116ba86b4884345891f3421a5a16c902247326928ce41c10ad8a66bd1f668178a3be9ad22f4f6e94c835ac824cf365db86bb486ab4a42c021dec09c0e4"
+            ),
+            [
+                62, 100, 153, 17, 107, 168, 107, 72, 132, 52, 88, 145, 243, 66, 26, 90, 22, 201, 2,
+                36, 115, 38, 146, 140, 228, 28, 16, 173, 138, 102, 189, 31, 102, 129, 120, 163,
+                190, 154, 210, 47, 79, 110, 148, 200, 53, 172, 130, 76, 243, 101, 219, 134, 187,
+                72, 106, 180, 164, 44, 2, 29, 236, 9, 192, 228
+            ]
         );
     }
 }

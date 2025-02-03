@@ -1,0 +1,1257 @@
+mod peers;
+
+use crate::identity::Identity;
+use crate::messages::{
+    AckMessage, AppMessage, EndpointsList, HELLO_MAX_ENDPOINTS, HelloMessageSigned,
+    HelloMessageUnsigned, MessageError, MessageType, PRIVATE_HEADER_ARMED_LEN,
+    PRIVATE_HEADER_UNARMED_LEN, PUBLIC_HEADER_NETWORK_ID_LEN, PrivateHeader, PublicHeader,
+    UniteMessage,
+};
+use crate::node::peers::TransportProt::{TCP, UDP};
+use crate::node::peers::{
+    EndpointCandidate, NodePeer, Peer, PeersError, PeersList, SuperPeer, TransportProt,
+};
+use crate::utils::crypto::{
+    CURVE25519_PUBLICKEYBYTES, CURVE25519_SECRETKEYBYTES, CryptoError, ED25519_PUBLICKEYBYTES,
+    SESSIONKEYBYTES, convert_ed25519_pk_to_curve22519_pk, convert_ed25519_sk_to_curve25519_sk,
+};
+use crate::utils::hex::{bytes_to_hex, hex_to_bytes};
+use crate::utils::net;
+use crate::utils::net::get_addrs;
+use ahash::RandomState;
+use core::sync::atomic::Ordering::SeqCst;
+use derive_builder::Builder;
+use log::{Level, debug, error, info, log_enabled, trace, warn};
+use murmur3::murmur3_32;
+use net::listening_addrs;
+use papaya::HashMap;
+use std::collections::{HashMap as StdHashMap, HashSet};
+use std::io;
+use std::io::Cursor;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
+use std::string::ToString;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU64};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::OwnedWriteHalf;
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::{Mutex, mpsc};
+use tokio::task::JoinError;
+
+pub const NETWORK_ID_DEFAULT: i32 = 1;
+pub const UDP_LISTEN_DEFAULT: &str = "0.0.0.0:-1";
+pub const ARM_MESSAGES_DEFAULT: bool = true;
+pub const MAX_PEERS_DEFAULT: u64 = 10_000; // set to 0 removes peers limit
+pub const MIN_POW_DIFFICULTY_DEFAULT: u8 = 24;
+pub const HELLO_TIMEOUT_DEFAULT: u64 = 30 * 1_000; // milliseconds
+pub const HELLO_MAX_AGE_DEFAULT: u64 = 60 * 1_000; // milliseconds
+pub const SUPER_PEERS_DEFAULT: &str = "udp://sp-fkb1.drasyl.org:22527?publicKey=c0900bcfabc493d062ecd293265f571edb70b85313ba4cdda96c9f77163ba62d&networkId=1 udp://sp-rjl1.drasyl.org:22527?publicKey=5b4578909bf0ad3565bb5faf843a9f68b325dd87451f6cb747e49d82f6ce5f4c&networkId=1 udp://sp-nyc1.drasyl.org:22527?publicKey=bf3572dba7ebb6c5ccd037f3a978707b5d7c5a9b9b01b56b4b9bf059af56a4e0&networkId=1 udp://sp-sgp1.drasyl.org:22527?publicKey=ab7a1654d463f9986530bed00569cc895697827b802153b8ef1598579713045f&networkId=1";
+pub const RECV_BUF_CAP_DEFAULT: usize = 64; // messages
+pub const MTU_DEFAULT: usize = 1472; // Ethernet MTU (1500) - IPv4 header (20) - UDP header (8)
+pub const PROCESS_UNITES_DEFAULT: bool = true;
+pub const HOUSEKEEPING_DELAY_DEFAULT: u64 = 5 * 1_000; // milliseconds
+pub(in crate::node) const DIRECT_LINK_TIMEOUT: u64 = 60_000; // milliseconds
+pub(in crate::node) const RTT_WINDOW_SIZE: usize = 5;
+
+#[derive(Debug, Error)]
+pub enum NodeError {
+    #[error("Send via {0} failed: {1}")]
+    SendFailed(TransportProt, io::Error),
+
+    #[error("Message error: {0}")]
+    MessageError(#[from] MessageError),
+
+    #[error("Peers manager error: {0}")]
+    PeersError(#[from] PeersError),
+
+    #[error("Crypto error: {0}")]
+    CryptoError(#[from] CryptoError),
+
+    #[error("Bind error: {0}")]
+    BindError(io::Error),
+
+    #[error("Message from other network: {}", i32::from_be_bytes(*.0))]
+    NetworkIdInvalid([u8; PUBLIC_HEADER_NETWORK_ID_LEN]),
+
+    #[error("Invalid proof of work")]
+    PowInvalid,
+
+    #[error("Unarmed message")]
+    MessageUnarmed,
+
+    #[error("Armed message")]
+    MessageArmed,
+
+    #[error("Packet too short to contain a private header")]
+    PrivateHeaderInvalid,
+
+    #[error("Unexpected message type {0}")]
+    MessageTypeUnexpected(MessageType),
+
+    #[error("No super peers")]
+    NoSuperPeers,
+
+    #[error("Message invalid recipient")]
+    MessageInvalidRecipient,
+
+    #[error("HELLO time diff too large: {0} ms")]
+    HelloTimeDiffTooLarge(u64),
+
+    #[error("ACK time is in the future")]
+    AckTimeIsInFuture,
+
+    #[error("ACK time too old: {0} ms")]
+    AckTooOld(u64),
+
+    #[error("Recv buf is closed")]
+    RecvBufClosed,
+
+    #[error("Message type invalid")]
+    MessageTypeInvalid,
+
+    #[error("Get addrs failed: {0}")]
+    GetAddrsFailed(io::Error),
+
+    #[error("UDP send_to {1} error: {0}")]
+    UdpSendToError(io::Error, SocketAddr),
+
+    #[error("UDP local_addr error: {0}")]
+    UdpLocalAddrError(io::Error),
+
+    #[error("Peer not present")]
+    PeerNotPresent,
+
+    #[error("TCP peer_addr error: {0}")]
+    TcpPeerAddrError(io::Error),
+
+    #[error("TCP shutdown error: {0}")]
+    TcpShutdownError(io::Error),
+
+    #[error("Recipient unreachable")]
+    RecipientUnreachable,
+
+    #[error("Housekeeping failed: {0}")]
+    HousekeepingFailed(#[from] JoinError),
+
+    #[error("Invalid Hello endpoint: {0}")]
+    HelloEndpointInvalid(String),
+
+    #[error("APP len {0} is larger than MTU {1}")]
+    AppLenInvalid(usize, usize),
+
+    #[error("Peers list capacity ({0}) exceeded")]
+    PeersListCapacityExceeded(u64),
+}
+
+#[derive(Clone, Builder)]
+pub struct NodeOpts {
+    pub id: Identity,
+    #[builder(default = "NETWORK_ID_DEFAULT.to_be_bytes()")]
+    pub network_id: [u8; 4],
+    #[builder(default = "UDP_LISTEN_DEFAULT.to_string()")]
+    pub udp_listen: String,
+    #[builder(default = "ARM_MESSAGES_DEFAULT")]
+    pub arm_messages: bool,
+    #[builder(default = "MAX_PEERS_DEFAULT")]
+    pub max_peers: u64,
+    #[builder(default = "MIN_POW_DIFFICULTY_DEFAULT")]
+    pub min_pow_difficulty: u8,
+    #[builder(default = "HELLO_TIMEOUT_DEFAULT")]
+    pub hello_timeout: u64,
+    #[builder(default = "HELLO_MAX_AGE_DEFAULT")]
+    pub hello_max_age: u64,
+    #[builder(default = "SUPER_PEERS_DEFAULT.to_string()")]
+    pub super_peers: String,
+    #[builder(default = "RECV_BUF_CAP_DEFAULT")]
+    pub recv_buf_cap: usize,
+    #[builder(default = "MTU_DEFAULT")]
+    pub mtu: usize,
+    #[builder(default = "PROCESS_UNITES_DEFAULT")]
+    pub process_unites: bool,
+    #[builder(default = "String::new()")]
+    pub hello_endpoints: String,
+    #[builder(default = "HOUSEKEEPING_DELAY_DEFAULT")]
+    pub housekeeping_delay: u64,
+}
+
+pub struct NodeInner {
+    pub(in crate::node) opts: NodeOpts,
+    coarse_timer: AtomicU64,
+    peers_list: PeersList,
+    udp_socket: UdpSocket,
+    udp_socket_addr: SocketAddr,
+    recv_buf_tx: Sender<([u8; ED25519_PUBLICKEYBYTES], Vec<u8>)>,
+}
+
+impl NodeInner {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        opts: NodeOpts,
+        peers: HashMap<[u8; ED25519_PUBLICKEYBYTES], Peer, RandomState>,
+        agreement_sk: Option<[u8; CURVE25519_SECRETKEYBYTES]>,
+        agreement_pk: Option<[u8; CURVE25519_PUBLICKEYBYTES]>,
+        default_route: AtomicPtr<[u8; ED25519_PUBLICKEYBYTES]>,
+        udp_socket: UdpSocket,
+        udp_socket_addr: SocketAddr,
+        recv_buf_tx: Sender<([u8; ED25519_PUBLICKEYBYTES], Vec<u8>)>,
+    ) -> Self {
+        let peers = PeersList::new(peers, agreement_sk, agreement_pk, default_route);
+
+        NodeInner {
+            opts,
+            coarse_timer: AtomicU64::new(Self::clock()),
+            peers_list: peers,
+            udp_socket,
+            udp_socket_addr,
+            recv_buf_tx,
+        }
+    }
+
+    pub async fn on_udp_datagram(
+        &self,
+        src: SocketAddr,
+        buf: &mut [u8],
+        response_buf: &mut [u8],
+    ) -> Result<(), NodeError> {
+        self.on_packet(src, UDP, buf, response_buf).await
+    }
+
+    pub async fn on_tcp_segment(
+        &self,
+        src: SocketAddr,
+        buf: &mut [u8],
+        response_buf: &mut [u8],
+    ) -> Result<(), NodeError> {
+        self.on_packet(src, TCP, buf, response_buf).await
+    }
+
+    pub(in crate::node) async fn on_packet(
+        &self,
+        src: SocketAddr,
+        prot: TransportProt,
+        buf: &mut [u8],
+        response_buf: &mut [u8],
+    ) -> Result<(), NodeError> {
+        trace!("Got packet from src {}://{}", prot, src);
+
+        // public header
+        let (public_header, private_header_and_body_slice) = PublicHeader::parse(buf)?;
+        trace!("{}", public_header);
+
+        if public_header.network_id != self.opts.network_id {
+            return Err(NodeError::NetworkIdInvalid(public_header.network_id));
+        }
+
+        // recipient
+        if public_header.recipient == self.opts.id.pk {
+            let private_header_len = if public_header.is_armed() {
+                if !self.opts.arm_messages {
+                    return Err(NodeError::MessageArmed);
+                }
+                PRIVATE_HEADER_ARMED_LEN
+            } else {
+                if self.opts.arm_messages {
+                    return Err(NodeError::MessageUnarmed);
+                }
+                PRIVATE_HEADER_UNARMED_LEN
+            };
+
+            if private_header_and_body_slice.len() < private_header_len {
+                return Err(NodeError::PrivateHeaderInvalid);
+            }
+
+            let mut send_queue: Vec<(Vec<u8>, SocketAddr)> = Vec::new();
+            {
+                let peers = self.peers_list.peers.pin();
+                let peer = if let Some(peer) = peers.get(&public_header.sender) {
+                    if let Peer::NodePeer(node_peer) = peer {
+                        if !node_peer.validate_pow(
+                            &public_header.pow,
+                            &public_header.sender,
+                            self.opts.min_pow_difficulty,
+                        )? {
+                            return Err(NodeError::PowInvalid);
+                        }
+                    }
+                    peer
+                } else {
+                    if peers.len() >= self.opts.max_peers as usize {
+                        return Err(NodeError::PeersListCapacityExceeded(self.opts.max_peers));
+                    }
+
+                    peers.get_or_insert(
+                        public_header.sender,
+                        Peer::NodePeer(NodePeer::new(
+                            Some(&public_header.pow),
+                            &public_header.sender,
+                            self.opts.min_pow_difficulty,
+                            self.opts.arm_messages,
+                            self.peers_list.agreement_sk,
+                            self.peers_list.agreement_pk,
+                        )?),
+                    )
+                };
+
+                let rx_key = match peer {
+                    Peer::SuperPeer(super_peer) => super_peer.rx_key(),
+                    Peer::NodePeer(node_peer) => node_peer.rx_key(),
+                };
+
+                // private header
+                let (private_header, body_slice) = PrivateHeader::parse(
+                    private_header_and_body_slice,
+                    public_header,
+                    rx_key.as_ref(),
+                )?;
+                trace!("{}", private_header);
+
+                match peer {
+                    Peer::SuperPeer(super_peer) => {
+                        // process packet from super peer
+                        let rx_key = super_peer.rx_key();
+                        match private_header.message_type.try_into() {
+                            Ok(MessageType::ACK) => {
+                                // process ACK
+                                let ack = AckMessage::parse(
+                                    body_slice,
+                                    public_header,
+                                    private_header,
+                                    rx_key.as_ref(),
+                                )?;
+                                trace!("{}", ack);
+
+                                // update peer information
+                                let time = self.current_time();
+                                super_peer.ack_rx(time, src, prot, ack.time.into());
+                            }
+                            Ok(MessageType::UNITE) => {
+                                if self.opts.process_unites {
+                                    // process UNITE
+                                    let unite = UniteMessage::parse(
+                                        body_slice,
+                                        public_header,
+                                        private_header,
+                                        rx_key.as_ref(),
+                                    )?;
+                                    trace!("{}", unite);
+
+                                    if let Some(Peer::NodePeer(node_peer)) =
+                                        self.peers_list.peers.pin().get(&unite.address)
+                                    {
+                                        let unite_endpoints: HashSet<SocketAddr> =
+                                            <&[u8] as Into<EndpointsList>>::into(&unite.endpoints)
+                                                .0;
+
+                                        // remove all endpoints in unite_endpoints whose ip addr is not in the same ip family as socket_ip
+                                        let unite_endpoints = unite_endpoints
+                                            .into_iter()
+                                            .filter(|endpoint| {
+                                                endpoint.ip().is_ipv4()
+                                                    == self.udp_socket_addr.ip().is_ipv4()
+                                            })
+                                            .collect::<HashSet<_>>();
+
+                                        let existing_addrs: HashSet<SocketAddr> = node_peer
+                                            .endpoint_candidates()
+                                            .keys()
+                                            .copied()
+                                            .collect();
+                                        let new_addrs: HashSet<SocketAddr> = unite_endpoints
+                                            .difference(&existing_addrs)
+                                            .copied()
+                                            .collect();
+
+                                        let mut new_endpoints: StdHashMap<
+                                            SocketAddr,
+                                            EndpointCandidate,
+                                        > = new_addrs
+                                            .iter()
+                                            .map(|&addr| (addr, EndpointCandidate::new()))
+                                            .collect();
+
+                                        for (endpoint_addr, candidate) in &mut new_endpoints {
+                                            trace!(
+                                                "Try to reach peer via new endpoint retrieved from UNITE: {}",
+                                                endpoint_addr
+                                            );
+                                            let time = self.current_time();
+                                            let hello = HelloMessageUnsigned::build(
+                                                &self.opts.network_id,
+                                                &self.opts.id.pk,
+                                                &self.opts.id.pow,
+                                                node_peer.tx_key().as_ref(),
+                                                &unite.address,
+                                                time,
+                                            )?;
+
+                                            // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                                            send_queue.push((hello, *endpoint_addr));
+
+                                            candidate.hello_tx(time);
+                                        }
+                                        for (addr, candidate) in new_endpoints {
+                                            node_peer.endpoint_candidates().insert(addr, candidate);
+                                        }
+                                    }
+                                } else {
+                                    trace!("Ignoring unite message");
+                                }
+                            }
+                            Ok(message_type @ (MessageType::APP | MessageType::HELLO)) => {
+                                return Err(NodeError::MessageTypeUnexpected(message_type));
+                            }
+                            Err(_) => return Err(NodeError::MessageTypeInvalid),
+                        }
+                    }
+                    Peer::NodePeer(node_peer) => {
+                        // process packet from node peer
+                        let rx_key = node_peer.rx_key();
+                        match private_header.message_type.try_into() {
+                            Ok(MessageType::ACK) => {
+                                // process ACK
+                                let ack = AckMessage::parse(
+                                    body_slice,
+                                    public_header,
+                                    private_header,
+                                    rx_key.as_ref(),
+                                )?;
+                                self.on_node_peer_ack(src, node_peer, ack)?;
+                            }
+                            Ok(MessageType::APP) => {
+                                // process APP
+                                let app = AppMessage::parse(
+                                    body_slice,
+                                    public_header,
+                                    private_header,
+                                    rx_key.as_ref(),
+                                )?;
+                                self.on_app(node_peer, public_header.sender, &app)?;
+                            }
+                            Ok(MessageType::HELLO) => {
+                                // process HELLO
+                                let hello = HelloMessageUnsigned::parse(
+                                    body_slice,
+                                    public_header,
+                                    private_header,
+                                    rx_key.as_ref(),
+                                )?;
+                                trace!("{}", hello);
+
+                                // time
+                                let time = self.current_time();
+                                let hello_time = hello.time.into();
+
+                                let time_diff = if time > hello_time {
+                                    time - hello_time
+                                } else {
+                                    hello_time - time
+                                };
+                                if time_diff > self.opts.hello_max_age {
+                                    return Err(NodeError::HelloTimeDiffTooLarge(time_diff));
+                                }
+
+                                // reply with ACK
+                                let ack_len = AckMessage::build(
+                                    response_buf,
+                                    &self.opts.network_id,
+                                    &self.opts.id.pk,
+                                    &self.opts.id.pow,
+                                    node_peer.tx_key().as_ref(),
+                                    &public_header.sender,
+                                    hello_time,
+                                )?;
+
+                                let hello_from_unknown_endpoint =
+                                    !node_peer.endpoint_candidates().contains_key(&src);
+                                let tx_key = if hello_from_unknown_endpoint {
+                                    node_peer.hello_tx(time);
+
+                                    let candidate = EndpointCandidate::new();
+                                    candidate.hello_tx(time);
+                                    node_peer.endpoint_candidates().insert(src, candidate);
+
+                                    node_peer.tx_key()
+                                } else {
+                                    None
+                                };
+
+                                // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                                // FIXME: avoid to_vec clone!
+                                send_queue.push((response_buf[..ack_len].to_vec(), src));
+
+                                // HELLO from unknown endpoint? peer might be behind symmetric NAT
+                                #[allow(clippy::map_entry)]
+                                if hello_from_unknown_endpoint {
+                                    trace!(
+                                        "Try to reach peer via new endpoint observed from received HELLO: {}",
+                                        src
+                                    );
+
+                                    let time = self.current_time();
+                                    let hello = HelloMessageUnsigned::build(
+                                        &self.opts.network_id,
+                                        &self.opts.id.pk,
+                                        &self.opts.id.pow,
+                                        tx_key.as_ref(),
+                                        &public_header.sender,
+                                        time,
+                                    )?;
+                                    send_queue.push((hello, src));
+                                }
+                            }
+                            Ok(MessageType::UNITE) => {
+                                // node peers not sending UNITEs
+                                return Err(NodeError::MessageTypeUnexpected(MessageType::UNITE));
+                            }
+                            Err(_) => return Err(NodeError::MessageTypeInvalid),
+                        }
+                    }
+                }
+            }
+
+            // process send queue
+            for (msg, dst) in send_queue {
+                if let Err(e) = self.udp_socket.send_to(&msg, dst).await {
+                    debug!("Failed to send msg to udp://{}: {}", dst, e);
+                    continue;
+                } else if log_enabled!(Level::Trace) {
+                    trace!("Sent msg to udp://{}.", dst);
+                }
+            }
+
+            Ok(())
+        } else {
+            Err(NodeError::MessageInvalidRecipient)
+        }
+    }
+
+    pub fn cached_time(&self) -> u64 {
+        self.coarse_timer.load(SeqCst)
+    }
+
+    pub(in crate::node) fn current_time(&self) -> u64 {
+        self.coarse_timer.store(Self::clock(), SeqCst);
+        self.cached_time()
+    }
+
+    fn on_node_peer_ack(
+        &self,
+        src: SocketAddr,
+        node_peer: &NodePeer,
+        ack: &AckMessage,
+    ) -> Result<(), NodeError> {
+        trace!("{}", ack);
+
+        // time
+        let time = self.current_time();
+        let ack_time = ack.time.into();
+
+        if time < ack_time {
+            return Err(NodeError::AckTimeIsInFuture);
+        }
+
+        let message_age = time - ack_time;
+        if message_age > self.opts.hello_max_age {
+            return Err(NodeError::AckTooOld(message_age));
+        }
+
+        // update peer information
+        node_peer.ack_rx(time, src, ack_time);
+
+        Ok(())
+    }
+
+    fn on_app(
+        &self,
+        node_peer: &NodePeer,
+        sender: [u8; ED25519_PUBLICKEYBYTES],
+        app: &AppMessage,
+    ) -> Result<(), NodeError> {
+        trace!("{}", app);
+
+        // update peer information
+        let time = self.cached_time();
+        node_peer.app_rx(time);
+
+        let tx = &self.recv_buf_tx;
+        // FIXME: `to_vec` allocates new memory. Using something like an MPSC ring buffer would allow us to reuse the same memory, potentially improving performance.
+        match tx.try_send((sender, app.payload.to_vec())) {
+            Ok(_) => {}
+            Err(TrySendError::Full(_)) => warn!("Received APP dropped: recv buf full."),
+            Err(TrySendError::Closed(_)) => return Err(NodeError::RecvBufClosed),
+        }
+
+        Ok(())
+    }
+
+    async fn housekeeping(&self, inner: &Arc<NodeInner>) -> Result<(), NodeError> {
+        let time = inner.cached_time();
+
+        {
+            // remove stale peers
+            let guard = self.peers_list.peers.guard();
+            self.peers_list.peers.retain(
+                |_, peer| !peer.is_stale(time, inner.opts.hello_timeout),
+                &guard,
+            );
+        }
+
+        // get local addresses
+        let my_ips = get_addrs().map_err(NodeError::GetAddrsFailed)?;
+
+        // endpoints
+        let endpoints: Vec<u8> =
+            self.my_endpoint_candidates(&inner.opts.hello_endpoints, &my_ips)?;
+
+        let mut best_median_rtt = u64::MAX;
+        let mut best_sp = self.peers_list.default_route_ptr.load(SeqCst) as usize;
+
+        let mut hello_queue: Vec<(Vec<u8>, SocketAddr)> = Vec::new();
+        for (peer_key, peer) in &inner.peers_list.peers.pin_owned() {
+            let peer_key_ptr = peer_key as *const [u8; ED25519_PUBLICKEYBYTES];
+            match (*peer_key, peer) {
+                (peer_key, Peer::SuperPeer(super_peer)) => {
+                    let time = inner.current_time();
+
+                    // best super peer?
+                    if let Some(median_rtt) = super_peer.median_rtt() {
+                        if median_rtt < best_median_rtt {
+                            best_median_rtt = median_rtt;
+                            best_sp = peer_key_ptr as usize;
+                        }
+                    }
+
+                    // tcp connection scheduled for shutdown?
+                    let tcp_shutdown_scheduled = super_peer.tcp_shutdown_scheduled.load(SeqCst);
+                    if tcp_shutdown_scheduled {
+                        super_peer
+                            .shutdown_tcp_connection()
+                            .await
+                            .map_err(NodeError::TcpShutdownError)?;
+                    }
+
+                    // tcp connection required?
+                    if super_peer.do_tcp_fallback(time, inner.opts.hello_timeout) {
+                        // get tcp socketaddr
+                        let tcp_addr = super_peer.resolved_tcp_addr();
+                        let tcp_inner = inner.clone();
+                        let tx_key = super_peer.tx_key();
+
+                        super_peer.set_tcp_handle(tokio::spawn(async move {
+                            if let Ok(stream) = TcpStream::connect(tcp_addr).await {
+                                if let Err(e) = Self::handle_tcp_stream(
+                                    peer_key, time, tcp_addr, &tcp_inner, tx_key, stream,
+                                )
+                                .await
+                                {
+                                    error!("Failed to handle TCP stream: {}", e);
+                                }
+                            }
+                        }));
+                    }
+
+                    // send HELLO
+                    if let Some(resolved_addr) =
+                        SuperPeer::resolve_addr(self.udp_socket_addr, super_peer.addr())
+                    {
+                        super_peer.set_resolved_addr(resolved_addr);
+                    }
+
+                    if log_enabled!(Level::Trace) {
+                        trace!("Send HELLO to super peer {}", bytes_to_hex(&peer_key));
+                    }
+
+                    let hello = HelloMessageSigned::build(
+                        &inner.opts.network_id,
+                        &inner.opts.id.pk,
+                        &inner.opts.id.pow,
+                        super_peer.tx_key().as_ref(),
+                        &peer_key,
+                        time,
+                        &endpoints,
+                    )?;
+
+                    // First try TCP if available
+                    if let Some(stream) = super_peer.tcp_stream() {
+                        self.send_super_peer_tcp(&stream, &hello, &peer_key).await?;
+                        super_peer.hello_tx(time);
+                    } else {
+                        // Fallback to UDP
+                        // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                        hello_queue.push((hello, *super_peer.resolved_addr()));
+                        super_peer.hello_tx(time);
+                    };
+                }
+                (peer_key, Peer::NodePeer(node_peer)) => {
+                    // remove stale endpoints
+                    node_peer.remove_stale_endpoints(time, inner.opts.hello_timeout);
+
+                    let mut hello_sent = false;
+                    let tx_key = node_peer.tx_key();
+                    for (endpoint_addr, candidate) in &node_peer.endpoint_candidates() {
+                        trace!(
+                            "Contact peer via endpoint to test reachability/maintain link: {}",
+                            endpoint_addr
+                        );
+                        let time = inner.current_time();
+                        let hello = HelloMessageUnsigned::build(
+                            &inner.opts.network_id,
+                            &inner.opts.id.pk,
+                            &inner.opts.id.pow,
+                            tx_key.as_ref(),
+                            &peer_key,
+                            time,
+                        )?;
+
+                        // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                        hello_queue.push((hello, *endpoint_addr));
+
+                        candidate.hello_tx(time);
+                        hello_sent = true;
+                    }
+                    if hello_sent {
+                        let time = inner.cached_time();
+                        node_peer.hello_tx(time);
+                    }
+                }
+            }
+        }
+
+        self.peers_list.default_route_ptr.store(
+            best_sp as *const [u8; ED25519_PUBLICKEYBYTES] as *mut [u8; ED25519_PUBLICKEYBYTES],
+            SeqCst,
+        );
+
+        // process HELLO queue
+        for (msg, dst) in hello_queue {
+            if let Err(e) = inner.udp_socket.send_to(&msg, dst).await {
+                debug!("Failed to send HELLO to udp://{}: {}", dst, e);
+                continue;
+            } else if log_enabled!(Level::Trace) {
+                trace!("Sent HELLO to udp://{}.", dst);
+            }
+        }
+
+        info!("\n{}", self.peers_list);
+
+        Ok(())
+    }
+
+    async fn send_super_peer_tcp(
+        &self,
+        stream: &Arc<Mutex<OwnedWriteHalf>>,
+        msg: &[u8],
+        peer_key: &[u8; ED25519_PUBLICKEYBYTES],
+    ) -> Result<TransportProt, NodeError> {
+        if (stream.lock().await.write_all(msg).await).is_err() {
+            if let Err(e) = stream.lock().await.shutdown().await {
+                error!("Error shutting down connection: {}", e);
+            }
+        }
+
+        if log_enabled!(Level::Trace) {
+            trace!("Sent to super peer {} via TCP.", bytes_to_hex(peer_key));
+        }
+        Ok(TCP)
+    }
+
+    async fn handle_tcp_stream(
+        peer_key: [u8; ED25519_PUBLICKEYBYTES],
+        time: u64,
+        tcp_addr: SocketAddr,
+        inner: &Arc<NodeInner>,
+        tx_key: Option<[u8; SESSIONKEYBYTES]>,
+        stream: TcpStream,
+    ) -> Result<(), NodeError> {
+        trace!("New TCP connection to {}", tcp_addr);
+        let src = stream.peer_addr().map_err(NodeError::TcpPeerAddrError)?;
+        let (mut read_half, mut write_half) = stream.into_split();
+
+        // immediately after connection establishment send HELLO
+        // get local addresses
+        let my_ips = get_addrs().map_err(NodeError::GetAddrsFailed)?;
+
+        // endpoints
+        let endpoints: Vec<u8> =
+            inner.my_endpoint_candidates(&inner.opts.hello_endpoints, &my_ips)?;
+
+        let hello = HelloMessageSigned::build(
+            &inner.opts.network_id,
+            &inner.opts.id.pk,
+            &inner.opts.id.pow,
+            tx_key.as_ref(),
+            &peer_key,
+            time,
+            &endpoints,
+        )
+        .map_err(NodeError::MessageError)?;
+
+        write_half
+            .write_all(&hello)
+            .await
+            .map_err(|e| NodeError::SendFailed(TCP, e))?;
+
+        if log_enabled!(Level::Trace) {
+            trace!(
+                "Sent HELLO to node peer {} via tcp://{}.",
+                bytes_to_hex(&peer_key),
+                tcp_addr
+            );
+        }
+
+        if let Some(Peer::SuperPeer(super_peer)) = inner.peers_list.peers.pin().get(&peer_key) {
+            super_peer.hello_tx(time);
+            super_peer.set_tcp_stream(write_half);
+        }
+
+        let tcp_inner = inner.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; tcp_inner.opts.mtu];
+            let mut response_buf = vec![0u8; tcp_inner.opts.mtu];
+            loop {
+                // read segment
+                let size = match read_half.read(&mut buf).await {
+                    Ok(0) => {
+                        trace!("TCP connection closed by peer {}", src);
+                        if let Some(Peer::SuperPeer(super_peer)) =
+                            tcp_inner.peers_list.peers.pin().get(&peer_key)
+                        {
+                            super_peer.reset_tcp_state();
+                        }
+                        break;
+                    }
+                    Ok(result) => result,
+                    Err(e) => {
+                        error!("Error receiving segment: {}", e);
+                        if let Some(Peer::SuperPeer(super_peer)) =
+                            tcp_inner.peers_list.peers.pin().get(&peer_key)
+                        {
+                            super_peer.reset_tcp_state();
+                        }
+                        break;
+                    }
+                };
+
+                // process segment
+                if let Err(e) = tcp_inner
+                    .on_tcp_segment(src, &mut buf[..size], &mut response_buf)
+                    .await
+                {
+                    error!("Error processing segment: {}", e);
+                    if let Some(Peer::SuperPeer(super_peer)) =
+                        tcp_inner.peers_list.peers.pin_owned().get(&peer_key)
+                    {
+                        if let Some(stream) = super_peer.tcp_stream() {
+                            if let Err(e) = stream.lock().await.shutdown().await {
+                                error!("Error shutting down connection: {}", e);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    fn my_endpoint_candidates(
+        &self,
+        hello_endpoints: &str,
+        my_ips: &[IpAddr],
+    ) -> Result<Vec<u8>, NodeError> {
+        Ok(if hello_endpoints.is_empty() {
+            let endpoints = listening_addrs(&self.udp_socket_addr.ip(), my_ips)
+                .iter()
+                .take(HELLO_MAX_ENDPOINTS)
+                .map(|ip| SocketAddr::new(*ip, self.udp_socket_addr.port()))
+                .collect::<HashSet<_>>();
+            <EndpointsList as Into<Vec<u8>>>::into(EndpointsList(endpoints))
+        } else {
+            let endpoints: HashSet<SocketAddr> = hello_endpoints
+                .split_whitespace()
+                .map(|endpoint_str| {
+                    endpoint_str
+                        .parse()
+                        .map_err(|_| NodeError::HelloEndpointInvalid(endpoint_str.to_string()))
+                })
+                .collect::<Result<HashSet<_>, _>>()?;
+            <EndpointsList as Into<Vec<u8>>>::into(EndpointsList(endpoints.clone()))
+        })
+    }
+
+    pub(in crate::node) fn clock() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    }
+}
+
+const MIN_DERIVED_PORT: u16 = 22528;
+
+pub struct Node {
+    inner: Arc<NodeInner>,
+    #[allow(clippy::type_complexity)]
+    recv_buf_rx: Arc<Mutex<Receiver<([u8; ED25519_PUBLICKEYBYTES], Vec<u8>)>>>,
+}
+
+impl Node {
+    pub async fn bind(opts: NodeOpts) -> Result<Node, NodeError> {
+        // generate agreement keys
+        let (agreement_sk, agreement_pk) = if opts.arm_messages {
+            (
+                Some(convert_ed25519_sk_to_curve25519_sk(&opts.id.sk)?),
+                Some(convert_ed25519_pk_to_curve22519_pk(&opts.id.pk)?),
+            )
+        } else {
+            (None, None)
+        };
+
+        // start udp server
+        let udp_socket = UdpSocket::bind(Self::derive_udp_port(&opts.udp_listen, &opts.id.pk))
+            .await
+            .map_err(NodeError::BindError)?;
+        let udp_socket_addr = udp_socket
+            .local_addr()
+            .map_err(NodeError::UdpLocalAddrError)?;
+        info!("Bound UDP server to {}", udp_socket_addr);
+
+        // peers
+        let peers = HashMap::builder()
+            .capacity(opts.max_peers as usize)
+            .hasher(RandomState::new())
+            .build();
+        for (peer_pk, (addr, tcp_port)) in SuperPeerUrl::parse_list(opts.super_peers.as_str()) {
+            peers.pin().insert(
+                peer_pk,
+                Peer::SuperPeer(SuperPeer::new(
+                    opts.arm_messages,
+                    &peer_pk,
+                    agreement_sk.as_ref(),
+                    agreement_pk.as_ref(),
+                    addr,
+                    tcp_port,
+                    udp_socket_addr,
+                )?),
+            );
+        }
+
+        if opts.super_peers.is_empty() {
+            return Err(NodeError::NoSuperPeers);
+        }
+
+        // make first peer default route
+        let default_key = peers.pin().keys().next().unwrap() as *const [u8; ED25519_PUBLICKEYBYTES]
+            as *mut [u8; ED25519_PUBLICKEYBYTES];
+        let default_route = AtomicPtr::new(default_key);
+
+        let (recv_buf_tx, recv_buf_rx) = mpsc::channel(opts.recv_buf_cap);
+        let inner = Arc::new(NodeInner::new(
+            opts,
+            peers,
+            agreement_sk,
+            agreement_pk,
+            default_route,
+            udp_socket,
+            udp_socket_addr,
+            recv_buf_tx,
+        ));
+
+        // housekeeping task
+        let housekeeping_inner = inner.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = housekeeping_inner.housekeeping(&housekeeping_inner).await {
+                    error!("Error in housekeeping: {}", e);
+                }
+                tokio::time::sleep(Duration::from_millis(
+                    housekeeping_inner.opts.housekeeping_delay,
+                ))
+                .await;
+            }
+        });
+
+        // udp server
+        let udp_inner = inner.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; udp_inner.opts.mtu];
+            let mut response_buf = vec![0u8; udp_inner.opts.mtu];
+            loop {
+                // read datagram
+                let (size, src) = match udp_inner.udp_socket.recv_from(&mut buf).await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        error!("Error receiving datagram: {}", e);
+                        continue;
+                    }
+                };
+
+                // process datagram
+                if let Err(e) = udp_inner
+                    .on_udp_datagram(src, &mut buf[..size], &mut response_buf)
+                    .await
+                {
+                    error!("Error processing packet: {}", e);
+                    continue;
+                }
+            }
+        });
+
+        Ok(Self {
+            inner,
+            recv_buf_rx: Arc::new(Mutex::new(recv_buf_rx)),
+        })
+    }
+
+    pub async fn recv_buf_len(&self) -> usize {
+        // FIXME: Instead of locking on every call, we might be able to share a lock between multiple calls to improve performance.
+        self.recv_buf_rx.lock().await.len()
+    }
+
+    pub async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> Result<(usize, [u8; ED25519_PUBLICKEYBYTES]), NodeError> {
+        // FIXME: Instead of locking on every call, we might be able to share a lock between multiple calls to improve performance.
+        match self.recv_buf_rx.lock().await.recv().await {
+            Some((sender, message)) => {
+                let len = message.len().min(buf.len());
+                buf[..len].copy_from_slice(&message[..len]);
+                Ok((len, sender))
+            }
+            None => Err(NodeError::RecvBufClosed),
+        }
+    }
+
+    pub async fn send_to<'a>(
+        &self,
+        recipient: &'a [u8; ED25519_PUBLICKEYBYTES],
+        bytes: &'a [u8],
+    ) -> Result<(), NodeError> {
+        if log_enabled!(Level::Debug) {
+            debug!("Send APP to {}", bytes_to_hex(recipient));
+        }
+
+        if let Some((best_addr, app)) = {
+            let peers = self.inner.peers_list.peers.pin();
+            let peer = if let Some(peer) = peers.get(recipient) {
+                peer
+            } else {
+                if peers.len() >= self.inner.opts.max_peers as usize {
+                    return Err(NodeError::PeersListCapacityExceeded(
+                        self.inner.opts.max_peers,
+                    ));
+                }
+
+                peers.get_or_insert(
+                    *recipient,
+                    Peer::NodePeer(NodePeer::new(
+                        None,
+                        recipient,
+                        self.inner.opts.min_pow_difficulty,
+                        self.inner.opts.arm_messages,
+                        self.inner.peers_list.agreement_sk,
+                        self.inner.peers_list.agreement_pk,
+                    )?),
+                )
+            };
+
+            if let Peer::NodePeer(node_peer) = peer {
+                let tx_key = node_peer.tx_key();
+                let app = AppMessage::build(
+                    &self.inner.opts.network_id,
+                    &self.inner.opts.id.pk,
+                    &self.inner.opts.id.pow,
+                    tx_key.as_ref(),
+                    recipient,
+                    bytes,
+                )?;
+
+                if app.len() > self.inner.opts.mtu {
+                    return Err(NodeError::AppLenInvalid(app.len(), self.inner.opts.mtu));
+                }
+
+                let time = self.inner.cached_time();
+                node_peer.app_tx(time);
+
+                // FIXME: check if we can avoid this copy process
+                Some((node_peer.best_addr().copied(), app))
+            } else {
+                None
+            }
+        } {
+            // direct link?
+            if let Some(my_addr) = best_addr {
+                self.inner
+                    .udp_socket
+                    .send_to(&app, my_addr)
+                    .await
+                    .map_err(|e| NodeError::UdpSendToError(e, my_addr))?;
+
+                if log_enabled!(Level::Debug) {
+                    debug!(
+                        "Sent APP to node peer {} via udp://{}.",
+                        bytes_to_hex(recipient),
+                        my_addr
+                    );
+                }
+
+                return Ok(());
+            }
+
+            // forward
+            // get best super peer
+            let default_route = self.inner.peers_list.default_route();
+
+            if let Peer::SuperPeer(super_peer) = self
+                .inner
+                .peers_list
+                .peers
+                .pin()
+                .get(default_route)
+                .ok_or(NodeError::PeerNotPresent)?
+            {
+                // First try TCP if available
+                let prot = if let Some(stream) = super_peer.tcp_stream() {
+                    self.inner
+                        .send_super_peer_tcp(&stream, &app, default_route)
+                        .await?;
+                    TCP
+                } else {
+                    let resolved_addr = *super_peer.resolved_addr();
+
+                    // Fallback to UDP
+                    self.inner
+                        .udp_socket
+                        .send_to(&app, resolved_addr)
+                        .await
+                        .map_err(|e| NodeError::UdpSendToError(e, resolved_addr))?;
+
+                    UDP
+                };
+
+                if log_enabled!(Level::Debug) {
+                    debug!(
+                        "Sent APP to node peer {} via super peer {} via {}.",
+                        bytes_to_hex(recipient),
+                        bytes_to_hex(default_route),
+                        prot,
+                    );
+                }
+
+                return Ok(());
+            }
+        }
+
+        Err(NodeError::RecipientUnreachable)
+    }
+
+    fn derive_udp_port(udp_listen: &str, id_pk: &[u8; ED25519_PUBLICKEYBYTES]) -> String {
+        let mut parts = udp_listen.rsplitn(2, ':');
+
+        match (parts.next(), parts.next()) {
+            (Some(port_str), Some(addr)) => {
+                match port_str.parse::<i32>() {
+                    Ok(-1) => {
+                        // derive a port in the range between MIN_DERIVED_PORT and {MAX_PORT_NUMBER from its
+                        // own identity. this is done because we also expose this port via
+                        // UPnP-IGD/NAT-PMP/PCP and some NAT devices behave unexpectedly when multiple nodes
+                        // in the local network try to expose the same local port.
+                        // a completely random port would have the disadvantage that every time the node is
+                        // started it would use a new port and this would make discovery more difficult
+                        let identity_hash = murmur3_32(&mut Cursor::new(id_pk), 0).unwrap().to_be();
+                        let identity_port = MIN_DERIVED_PORT
+                            + (identity_hash % (u16::MAX - MIN_DERIVED_PORT) as u32) as u16;
+                        format!("{addr}:{identity_port}")
+                    }
+                    _ => udp_listen.to_owned(),
+                }
+            }
+            _ => udp_listen.to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum SuperPeerUrlError {
+    #[error("So public key")]
+    NoPublicKey,
+
+    #[error("No address")]
+    NoAddr,
+
+    #[error("Invalid url")]
+    InvalidUrl,
+}
+
+struct SuperPeerUrl {
+    addr: String,
+    tcp_port: u16,
+    pk: [u8; ED25519_PUBLICKEYBYTES],
+}
+
+impl SuperPeerUrl {
+    pub fn parse_list(peers_str: &str) -> StdHashMap<[u8; ED25519_PUBLICKEYBYTES], (String, u16)> {
+        let mut peers = StdHashMap::new();
+
+        peers_str.split_whitespace().for_each(|url_str| {
+            if let Ok(url) = SuperPeerUrl::from_str(url_str) {
+                peers.insert(url.pk, (url.addr, url.tcp_port));
+            }
+        });
+
+        peers
+    }
+}
+
+impl FromStr for SuperPeerUrl {
+    type Err = SuperPeerUrlError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Format: udp://host:port?publicKey=hex&tcpPort=port
+        if let Some(url_str) = s.strip_prefix("udp://") {
+            // Trenne Host:Port von Query Parametern
+            if let Some((addr, query)) = url_str.split_once('?') {
+                let mut public_key = None;
+                let mut tcp_port = 443;
+
+                // Parse Query Parameter für Public Key und TCP Port
+                for param in query.split('&') {
+                    if let Some((key, value)) = param.split_once('=') {
+                        match key {
+                            "publicKey" => {
+                                public_key = Some(hex_to_bytes::<ED25519_PUBLICKEYBYTES>(value));
+                            }
+                            "tcpPort" => {
+                                if let Ok(port) = value.parse::<u16>() {
+                                    tcp_port = port;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let Some(pk) = public_key {
+                    Ok(SuperPeerUrl {
+                        addr: addr.to_string(),
+                        pk,
+                        tcp_port,
+                    })
+                } else {
+                    Err(SuperPeerUrlError::NoPublicKey)
+                }
+            } else {
+                Err(SuperPeerUrlError::NoAddr)
+            }
+        } else {
+            Err(SuperPeerUrlError::InvalidUrl)
+        }
+    }
+}
