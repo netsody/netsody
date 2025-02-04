@@ -5,6 +5,7 @@ use log::debug;
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::identity::validate_proof_of_work;
 
 #[derive(Debug)]
 pub enum PeersManagerError {
@@ -145,23 +146,7 @@ impl PeersManager {
             }
         }
 
-        // calculate proof of work difficulty
-        let public_key_hex: String = public_key.iter().map(|b| format!("{:02x}", b)).collect();
-        let input = format!("{}{}", public_key_hex, i32::from_be_bytes(*pow));
-        let hash = crypto::sha256(input.as_bytes()).unwrap();
-
-        // count leading zero bits
-        let mut leading_zeros: u8 = 0;
-        for &byte in hash.iter() {
-            if byte == 0 {
-                leading_zeros += 8;
-            } else {
-                leading_zeros += byte.leading_zeros() as u8;
-                break;
-            }
-        }
-
-        let is_valid = leading_zeros >= *crate::MIN_POW_DIFFICULTY;
+        let is_valid = validate_proof_of_work(public_key, pow);
 
         // save result
         if let Some(mut peer) = self.peers.get_mut(public_key) {
@@ -332,7 +317,7 @@ mod tests {
         let invalid_pow = 0x7FFFFFFFu32.to_be_bytes(); // Fängt mit 7F an
 
         assert!(
-            peers.valid_pow(&public_key, &valid_pow, 0),
+            peers.valid_pow(&public_key, &valid_pow, 0).unwrap(),
             "POW sollte gültig sein"
         );
 

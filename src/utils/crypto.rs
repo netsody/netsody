@@ -1,4 +1,6 @@
 use libsodium_sys as sodium;
+use ring::digest;
+use std::fmt;
 
 pub const SHA256_BYTES: usize = 32;
 pub const ED25519_PUBLICKEYBYTES: usize = 32;
@@ -14,7 +16,7 @@ pub fn random_bytes(buf: &mut [u8]) {
     unsafe {
         sodium::randombytes_buf(
             buf.as_mut_ptr() as *mut _,
-            buf.len()
+            buf.len(),
         );
     }
 }
@@ -25,6 +27,15 @@ pub enum CryptoError {
     LibsodiumError,
 }
 
+impl fmt::Display for CryptoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CryptoError::SessionKeysIdentical => write!(f, "Generated session keys are identical"),
+            CryptoError::LibsodiumError => write!(f, "A Libsodium cryptographic error occurred"),
+        }
+    }
+}
+
 fn compare_keys(k1: &[u8; CURVE25519_PUBLICKEYBYTES], k2: &[u8; CURVE25519_PUBLICKEYBYTES]) -> i32 {
     for i in 0..CURVE25519_PUBLICKEYBYTES {
         if k1[i] != k2[i] {
@@ -32,6 +43,23 @@ fn compare_keys(k1: &[u8; CURVE25519_PUBLICKEYBYTES], k2: &[u8; CURVE25519_PUBLI
         }
     }
     0
+}
+
+pub fn generate_long_time_key_pair() -> Result<([u8; ED25519_PUBLICKEYBYTES], [u8; ED25519_SECRETKEYBYTES]), CryptoError> {
+    let mut pk_key = [0u8; ED25519_PUBLICKEYBYTES];
+    let mut sk_key = [0u8; ED25519_SECRETKEYBYTES];
+
+    let result = unsafe {
+        sodium::crypto_sign_keypair(
+            pk_key.as_mut_ptr(),
+            sk_key.as_mut_ptr())
+    };
+
+    if result != 0 {
+        return Err(CryptoError::LibsodiumError);
+    }
+
+    Ok((pk_key, sk_key))
 }
 
 pub fn generate_session_key_pair(
@@ -176,7 +204,7 @@ pub fn convert_identity_secret_key_to_key_agreement_secret_key(
     Ok(agreement_key)
 }
 
-pub fn sha256(input: &[u8]) -> Result<[u8; SHA256_BYTES], CryptoError> {
+/*pub fn sha256(input: &[u8]) -> Result<[u8; SHA256_BYTES], CryptoError> {
     let mut hash = [0u8; SHA256_BYTES];
     let result = unsafe {
         sodium::crypto_hash_sha256(hash.as_mut_ptr(), input.as_ptr(), input.len() as u64)
@@ -186,6 +214,19 @@ pub fn sha256(input: &[u8]) -> Result<[u8; SHA256_BYTES], CryptoError> {
     }
 
     Ok(hash)
+}*/
+
+pub fn sha256(input: &[u8]) -> [u8; SHA256_BYTES] {
+    let digest = digest::digest(&digest::SHA256, input);
+
+    // `digest.as_ref()` gibt eine Slice-Referenz auf die Hash-Daten zurück.
+    let hash_slice = digest.as_ref();
+
+    // Konvertiere das Slice in ein Array [u8; 32]
+    let mut hash = [0u8; SHA256_BYTES];
+    hash.copy_from_slice(hash_slice);
+
+    hash
 }
 
 #[cfg(test)]
@@ -215,6 +256,21 @@ mod tests {
         let key2 =
             hex_to_bytes::<32>("18cdb282be8d1293f5040cd620a91aca86a475682e4ddc397deabe300aad9127");
         assert_eq!(compare_keys(&key1, &key2), 0);
+    }
+
+    #[test]
+    fn test_generate_long_time_key_pair() {
+        match generate_long_time_key_pair() {
+            Ok((pk, sk)) => {
+                assert_eq!(pk.len(), ED25519_PUBLICKEYBYTES);
+                assert_eq!(sk.len(), ED25519_SECRETKEYBYTES);
+
+                // Überprüfen, dass die Schlüssel nicht nur aus Nullen bestehen
+                assert!(pk.iter().any(|&b| b != 0), "Public key consists only of zeros!");
+                assert!(sk.iter().any(|&b| b != 0), "Secret key consists only of zeros!");
+            }
+            Err(_) => panic!("Long Time Key Generation Error")
+        }
     }
 
     #[test]

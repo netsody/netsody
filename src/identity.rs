@@ -1,7 +1,8 @@
 use crate::utils::crypto;
+use crate::utils::crypto::{generate_long_time_key_pair, CryptoError};
 use crate::utils::hex::hex_to_bytes;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 
 pub const fn derive_public_key(secret_key: &[u8; crypto::ED25519_SECRETKEYBYTES]) -> [u8; crypto::ED25519_PUBLICKEYBYTES] {
     let mut public_key = [0u8; crypto::ED25519_PUBLICKEYBYTES];
@@ -11,6 +12,60 @@ pub const fn derive_public_key(secret_key: &[u8; crypto::ED25519_SECRETKEYBYTES]
         i += 1;
     }
     public_key
+}
+
+pub fn generate_identity() -> Result<([u8; crypto::ED25519_SECRETKEYBYTES], [u8; 4]), IdentityError> {
+    let (pk, sk) = generate_long_time_key_pair().map_err(|e| IdentityError::GenerationFailed(e))?;
+    let pow = generate_proof_of_work(&pk)?;
+
+    Ok((sk, pow))
+}
+
+pub fn save_identity(path: &str, secret_key: &[u8; crypto::ED25519_SECRETKEYBYTES], pow: &[u8; 4]) -> io::Result<()> {
+    let secret_key_hex: String = secret_key.iter().map(|b| format!("{:02x}", b)).collect();
+    let pow_int = i32::from_le_bytes(*pow);
+
+    let mut file = File::create(path)?;
+
+    writeln!(file, "[Identity]")?;
+    writeln!(file, "SecretKey = {}", secret_key_hex)?;
+    writeln!(file, "ProofOfWork = {}", pow_int)?;
+
+    Ok(())
+}
+
+pub fn generate_proof_of_work(
+    public_key: &[u8; crypto::ED25519_PUBLICKEYBYTES],
+) -> Result<[u8; 4], IdentityError> {
+    for candidate in i32::MIN..i32::MAX {
+        let candidate_bytes = candidate.to_le_bytes();
+        if validate_proof_of_work(public_key, &candidate_bytes) {
+            return Ok(candidate_bytes);
+        }
+    }
+    Err(IdentityError::PowNotFound)
+}
+
+pub fn validate_proof_of_work(public_key: &[u8; crypto::ED25519_PUBLICKEYBYTES], pow: &[u8; 4]) -> bool {
+    // calculate proof of work difficulty
+    let public_key_hex: String = public_key.iter().map(|b| format!("{:02x}", b)).collect();
+    let input = format!("{}{}", public_key_hex, i32::from_be_bytes(*pow));
+    let hash = crypto::sha256(input.as_bytes());
+
+    // count leading zero bits
+    let mut leading_zeros: u8 = 0;
+    for &byte in hash.iter() {
+        if byte == 0 {
+            leading_zeros += 8;
+        } else {
+            leading_zeros += byte.leading_zeros() as u8;
+            break;
+        }
+    }
+
+    let is_valid = leading_zeros >= *crate::MIN_POW_DIFFICULTY;
+
+    is_valid
 }
 
 pub fn load_identity(path: &str) -> io::Result<([u8; crypto::ED25519_SECRETKEYBYTES], [u8; 4])> {
@@ -42,6 +97,23 @@ pub fn load_identity(path: &str) -> io::Result<([u8; crypto::ED25519_SECRETKEYBY
         )),
     }
 }
+
+#[derive(Debug)]
+pub enum IdentityError {
+    PowNotFound,
+    GenerationFailed(CryptoError),
+}
+
+impl std::fmt::Display for IdentityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IdentityError::PowNotFound => write!(f, "Proof of Work could not be found"),
+            IdentityError::GenerationFailed(e) => write!(f, "Identity generation failed: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for IdentityError {}
 
 #[cfg(test)]
 mod tests {

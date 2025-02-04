@@ -1,7 +1,7 @@
 use crate::peers::PeersManager;
 use std::net::UdpSocket;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::identity::derive_public_key;
+use crate::identity::{derive_public_key, IdentityError};
 use crate::utils::{crypto, hex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use log::info;
@@ -10,6 +10,7 @@ use crate::{identity, IDENTITY_FILE, NETWORK_ID, SERVER_LISTEN};
 
 #[derive(Debug)]
 pub enum NodeError {
+    IdentityGenerationFailed(IdentityError),
     IdentityFileError(io::Error),
     BindError(io::Error),
 }
@@ -17,6 +18,9 @@ pub enum NodeError {
 impl fmt::Display for NodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            NodeError::IdentityGenerationFailed(e) => {
+                write!(f, "Identity generation error: {}", e)
+            }
             NodeError::IdentityFileError(e) => {
                 write!(f, "Identity file error: {}", e)
             }
@@ -40,30 +44,38 @@ pub struct Node {
 
 impl Node {
     pub fn new() -> Result<Node, NodeError> {
-        match identity::load_identity(&IDENTITY_FILE) {
-            Ok((secret_key, pow)) => {
-                let public_key = derive_public_key(&secret_key);
-                info!("I'm node {}", hex::bytes_to_hex(&public_key));
-
-                match UdpSocket::bind(&SERVER_LISTEN.to_string()) {
-                    Ok(socket) => {
-                        info!("UDP socket bound to {}", socket.local_addr().unwrap());
-
-                        Ok(Node {
-                            network_id: *NETWORK_ID,
-                            secret_key,
-                            public_key: public_key,
-                            pow,
-                            socket,
-                            peers: PeersManager::new(),
-                            now: AtomicU64::new(Self::clock()),
-                        })
-                    }
-                    Err(e) => Err(NodeError::BindError(e))
-                }
+        let (secret_key, pow) = match identity::load_identity(&IDENTITY_FILE) {
+            Ok(id) => {
+                info!("Loaded identity from file.");
+                id
             }
-            Err(e) => Err(NodeError::IdentityFileError(e))
-        }
+            Err(e) => {
+                info!("Could not load identity ({}). Generate new one...", e);
+                let (secret_key, pow) =
+                    identity::generate_identity().map_err(NodeError::IdentityGenerationFailed)?;
+                identity::save_identity(&IDENTITY_FILE, &secret_key, &pow)
+                    .map_err(NodeError::IdentityFileError)?;
+                (secret_key, pow)
+            }
+        };
+
+        let public_key = derive_public_key(&secret_key);
+        info!("I'm node {}", hex::bytes_to_hex(&public_key));
+
+        // UDP-Socket binden
+        let socket = UdpSocket::bind(&SERVER_LISTEN.to_string())
+            .map_err(NodeError::BindError)?;
+        info!("UDP socket bound to {}", socket.local_addr().unwrap());
+
+        Ok(Node {
+            network_id: *NETWORK_ID,
+            secret_key,
+            public_key,
+            pow,
+            socket,
+            peers: PeersManager::new(),
+            now: AtomicU64::new(Self::clock()),
+        })
     }
 
     pub fn housekeeping(&self) {
