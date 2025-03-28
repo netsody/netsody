@@ -23,11 +23,10 @@ impl From<NodeError> for c_int {
             NodeError::PowInvalid => -8,
             NodeError::MessageUnarmed => -9,
             NodeError::MessageArmed => -10,
-            NodeError::PrivateHeaderInvalid => -11,
             NodeError::MessageTypeUnexpected(_) => -12,
             NodeError::NoSuperPeers => -13,
             NodeError::MessageInvalidRecipient => -14,
-            NodeError::HelloTimeDiffTooLarge(_) => -15,
+            NodeError::HelloTooOld(_) => -15,
             NodeError::AckTimeIsInFuture => -16,
             NodeError::AckTooOld(_) => -17,
             NodeError::RecvBufClosed => -18,
@@ -41,8 +40,14 @@ impl From<NodeError> for c_int {
             NodeError::HousekeepingFailed(_) => -26,
             NodeError::HelloEndpointInvalid(_) => -27,
             NodeError::AppLenInvalid(_, _) => -28,
-            NodeError::TcpShutdownError(_) => -29,
-            NodeError::PeersListCapacityExceeded(_) => -30,
+            NodeError::TcpShutdownError(_) => -32,
+            NodeError::PeersListCapacityExceeded(_) => -33,
+            NodeError::HelloAddressInvalid(_) => -34,
+            NodeError::SuperPeerResolveFailed(_) => -35,
+            NodeError::SuperPeerResolveTimeout(_) => -36,
+            NodeError::SuperPeerResolveEmpty => -37,
+            NodeError::SuperPeerResolveWrongFamily => -38,
+            NodeError::SendHandleAlreadyCreated => -39,
         }
     }
 }
@@ -406,13 +411,12 @@ pub extern "C" fn drasyl_node_recv_from(
         )
     };
 
-    match bind
-        .runtime
-        .block_on(async { bind.node.recv_from(buf).await })
-    {
-        Ok((size, my_sender)) => {
+    match bind.runtime.block_on(async { bind.node.recv_from().await }) {
+        Ok((my_buf, my_sender)) => {
+            let len = my_buf.len();
+            buf[..len].copy_from_slice(&my_buf);
             sender.copy_from_slice(&my_sender);
-            size as c_int
+            len as c_int
         }
         Err(e) => e.into(),
     }

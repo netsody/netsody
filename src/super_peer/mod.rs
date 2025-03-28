@@ -2,9 +2,8 @@ mod peers;
 
 use crate::identity::Identity;
 use crate::messages::{
-    AckMessage, HelloMessageSigned, MessageError, MessageType, PRIVATE_HEADER_ARMED_LEN,
-    PRIVATE_HEADER_UNARMED_LEN, PUBLIC_HEADER_NETWORK_ID_LEN, PrivateHeader, PublicHeader,
-    UniteMessage,
+    AckMessage, HelloSuperPeerMessage, LONG_HEADER_NETWORK_ID_LEN, LongHeader, MessageError,
+    MessageType, UniteMessage,
 };
 use crate::super_peer::peers::{PeersError, PeersList, TransportProt};
 use crate::utils::crypto::{
@@ -76,19 +75,16 @@ pub enum SuperPeerError {
     Tcp6BindError(io::Error),
 
     #[error("Message from other network: {}", i32::from_be_bytes(*.0))]
-    NetworkIdInvalid([u8; PUBLIC_HEADER_NETWORK_ID_LEN]),
+    NetworkIdInvalid([u8; LONG_HEADER_NETWORK_ID_LEN]),
 
     #[error("Invalid proof of work")]
     PowInvalid,
 
-    #[error("Unarmed message")]
+    #[error("Received an unarmed message where an armed message was expected")]
     MessageUnarmed,
 
-    #[error("Armed message")]
+    #[error("Received an armed message where an unarmed message was expected")]
     MessageArmed,
-
-    #[error("Packet too short to contain a private header")]
-    PrivateHeaderInvalid,
 
     #[error("Unexpected message type {0}")]
     MessageTypeUnexpected(MessageType),
@@ -132,7 +128,7 @@ impl TcpConnection {
     }
 
     fn is_inactive(&self, time: u64, hello_timeout: u64) -> bool {
-        time - self.last_activity.load(SeqCst) > hello_timeout
+        time - self.last_activity.load(SeqCst) > (hello_timeout * 1_000)
     }
 }
 
@@ -232,39 +228,31 @@ impl SuperPeerInner {
     ) -> Result<(), SuperPeerError> {
         trace!("Got packet from src {}://{}", prot, src);
 
-        // public header
-        let (public_header, private_header_and_body_slice) = PublicHeader::parse(buf)?;
-        trace!("{}", public_header);
+        // long header
+        let (long_header, body_slice) = LongHeader::parse(buf)?;
+        trace!("< {}", long_header);
 
         // network id
-        if public_header.network_id != self.opts.network_id {
-            return Err(SuperPeerError::NetworkIdInvalid(public_header.network_id));
+        if long_header.network_id != self.opts.network_id {
+            return Err(SuperPeerError::NetworkIdInvalid(long_header.network_id));
         }
 
         // recipient
-        if public_header.recipient == self.opts.id.pk {
-            let private_header_len = if public_header.is_armed() {
-                if !self.opts.arm_messages {
-                    return Err(SuperPeerError::MessageArmed);
-                }
-                PRIVATE_HEADER_ARMED_LEN
-            } else {
-                if self.opts.arm_messages {
-                    return Err(SuperPeerError::MessageUnarmed);
-                }
-                PRIVATE_HEADER_UNARMED_LEN
-            };
-
-            if private_header_and_body_slice.len() < private_header_len {
-                return Err(SuperPeerError::PrivateHeaderInvalid);
+        if long_header.recipient == self.opts.id.pk {
+            if long_header.is_armed() ^ self.opts.arm_messages {
+                return Err(if self.opts.arm_messages {
+                    SuperPeerError::MessageUnarmed
+                } else {
+                    SuperPeerError::MessageArmed
+                });
             }
 
             // the guard makes it necessary to but the following in a separate scope
             let ack_len = {
                 let guard = self.peers_list.peers_guard();
                 let peer = self.peers_list.get_or_insert_peer(
-                    &public_header.sender,
-                    &public_header.pow,
+                    &long_header.sender,
+                    &long_header.pow,
                     self,
                     &guard,
                 )?;
@@ -274,42 +262,25 @@ impl SuperPeerInner {
                     return Err(SuperPeerError::PowInvalid);
                 }
 
-                // private header
-                let (private_header, body_slice) = PrivateHeader::parse(
-                    private_header_and_body_slice,
-                    public_header,
-                    peer.rx_key(),
-                )?;
-                trace!("{}", private_header);
-
                 // only HELLO is allowed
-                if private_header.message_type != MessageType::HELLO.into() {
+                if long_header.message_type != MessageType::HELLO.into() {
                     return Err(SuperPeerError::MessageTypeUnexpected(
-                        private_header.message_type.try_into()?,
+                        long_header.message_type.try_into()?,
                     ));
                 }
 
                 // HELLO body
-                let hello = HelloMessageSigned::parse(
-                    body_slice,
-                    public_header,
-                    private_header,
-                    peer.rx_key(),
-                )?;
+                let hello = HelloSuperPeerMessage::parse(body_slice, long_header, peer.rx_key())?;
 
                 // process HELLO
-                trace!("{}", hello);
+                trace!("< {}", hello);
 
                 // time
                 let time = self.current_time();
 
                 let hello_time = hello.time.get();
-                let time_diff = if time > hello_time {
-                    time - hello_time
-                } else {
-                    hello_time - time
-                };
-                if time_diff > self.opts.hello_max_age {
+                let time_diff = time.saturating_sub(hello_time);
+                if time_diff > (self.opts.hello_max_age * 1_000) {
                     return Err(SuperPeerError::HelloTimeInvalid(time_diff));
                 }
 
@@ -317,19 +288,18 @@ impl SuperPeerInner {
                 peer.hello_tx(time, src, prot, &hello.endpoints);
 
                 // reply with ACK
-
                 AckMessage::build(
                     response_buf,
                     &self.opts.network_id,
                     &self.opts.id.pk,
                     &self.opts.id.pow,
                     peer.tx_key(),
-                    &public_header.sender,
+                    &long_header.sender,
                     hello_time,
                 )?
             };
 
-            self.send(public_header.sender, prot, src, &response_buf[..ack_len])
+            self.send(long_header.sender, prot, src, &response_buf[..ack_len])
                 .await?;
 
             Ok(())
@@ -338,31 +308,31 @@ impl SuperPeerInner {
             trace!("Not for us, try forwarding.");
 
             // sender wants to forward to themselves :)
-            if public_header.recipient == public_header.sender {
+            if long_header.recipient == long_header.sender {
                 return Err(SuperPeerError::LoopbackForwarding);
             }
 
             // verify if hop count is exceeded
-            if public_header.hop_count() > MAX_HOP_COUNT {
+            if long_header.hop_count > MAX_HOP_COUNT {
                 if log_enabled!(Level::Debug) {
                     debug!(
                         "Forwarding failed as hop count limit exceeded from peer {} to {}.",
-                        bytes_to_hex(&public_header.sender),
-                        bytes_to_hex(&public_header.recipient)
+                        bytes_to_hex(&long_header.sender),
+                        bytes_to_hex(&long_header.recipient)
                     );
                 }
                 return Ok(());
             }
 
-            let sender_key = public_header.sender;
-            let recipient_key = public_header.recipient;
+            let sender_key = long_header.sender;
+            let recipient_key = long_header.recipient;
 
             // the guard makes it necessary to but the following in a separate scope
             let result = {
                 // search recipient
                 let guard = self.peers_list.peers_guard();
                 if let Some(recipient) = self.peers_list.get_peer(&recipient_key, &guard) {
-                    public_header.increment_hop_count();
+                    long_header.hop_count += 1;
 
                     // forward message
                     if let Some((prot, addr)) = recipient.endpoint() {
@@ -604,7 +574,7 @@ impl SuperPeerInner {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64
+            .as_micros() as u64
     }
 }
 
@@ -851,9 +821,9 @@ impl SuperPeer {
                 {
                     match e {
                         SuperPeerError::MessageError(MessageError::MagicNumberInvalid(_))
-                        | SuperPeerError::MessageError(
-                            MessageError::PublicHeaderConversionFailed(_),
-                        ) => {
+                        | SuperPeerError::MessageError(MessageError::LongHeaderConversionFailed(
+                            _,
+                        )) => {
                             let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
                             if let Err(e) = reader_write_half
                                 .lock()

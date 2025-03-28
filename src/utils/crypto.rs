@@ -1,5 +1,10 @@
 use libsodium_sys as sodium;
+use log::error;
+use rand::RngCore;
+use rand_chacha::ChaCha20Rng;
+use rand_chacha::rand_core::SeedableRng;
 use ring::digest;
+use std::cell::RefCell;
 use thiserror::Error;
 
 pub const SHA256_BYTES: usize = 32;
@@ -7,15 +12,19 @@ pub const ED25519_PUBLICKEYBYTES: usize = 32;
 pub const ED25519_SECRETKEYBYTES: usize = 64;
 pub const CURVE25519_PUBLICKEYBYTES: usize = 32;
 pub const CURVE25519_SECRETKEYBYTES: usize = 32;
-pub const SESSIONKEYBYTES: usize = 32;
 pub const XCHACHA20POLY1305_IETF_ABYTES: usize = 16;
-pub const XCHACHA20POLY1305_IETF_NPUBBYTES: usize = 24;
 pub const SIGN_BYTES: usize = 64;
+pub const AEGIS_KEYBYTES: usize = 32;
+pub const AEGIS_NBYTES: usize = 32;
+pub const AEGIS_ABYTES: usize = 16;
 
+thread_local! {
+    static RNG: RefCell<ChaCha20Rng> = RefCell::new(ChaCha20Rng::from_os_rng());
+}
 pub fn random_bytes(buf: &mut [u8]) {
-    unsafe {
-        sodium::randombytes_buf(buf.as_mut_ptr() as *mut _, buf.len());
-    }
+    RNG.with(|rng| {
+        rng.borrow_mut().fill_bytes(buf);
+    });
 }
 
 #[derive(Debug, Error)]
@@ -25,6 +34,12 @@ pub enum CryptoError {
 
     #[error("A Libsodium cryptographic error occurred")]
     LibsodiumError,
+
+    #[error("An AEGIS cryptographic error occurred")]
+    DecryptFailed,
+
+    #[error("An AEGIS conversion error occurred")]
+    AEGISConversionError,
 }
 
 fn compare_keys(k1: &[u8; CURVE25519_PUBLICKEYBYTES], k2: &[u8; CURVE25519_PUBLICKEYBYTES]) -> i32 {
@@ -54,10 +69,9 @@ pub fn compute_kx_session_keys(
     my_pk: &[u8; CURVE25519_PUBLICKEYBYTES],
     my_sk: &[u8; CURVE25519_SECRETKEYBYTES],
     peer_pk: &[u8; CURVE25519_PUBLICKEYBYTES],
-) -> Result<([u8; SESSIONKEYBYTES], [u8; SESSIONKEYBYTES]), CryptoError> {
-    // (rx_key, tx_key)
-    let mut rx_key = [0u8; SESSIONKEYBYTES];
-    let mut tx_key = [0u8; SESSIONKEYBYTES];
+) -> Result<([u8; AEGIS_KEYBYTES], [u8; AEGIS_KEYBYTES]), CryptoError> {
+    let mut rx_key = [0u8; AEGIS_KEYBYTES];
+    let mut tx_key = [0u8; AEGIS_KEYBYTES];
 
     match compare_keys(my_pk, peer_pk) {
         -1 => {
@@ -94,64 +108,6 @@ pub fn compute_kx_session_keys(
         }
         _ => Err(CryptoError::SessionKeysIdentical),
     }
-}
-
-pub fn decrypt(
-    cipher: &[u8],
-    auth_tag: &[u8],
-    nonce: &[u8; XCHACHA20POLY1305_IETF_NPUBBYTES],
-    rx_key: &[u8; SESSIONKEYBYTES],
-) -> Result<Vec<u8>, CryptoError> {
-    let mut message = vec![0u8; cipher.len() - XCHACHA20POLY1305_IETF_ABYTES];
-    unsafe {
-        let mut message_len: u64 = 0;
-
-        let result = sodium::crypto_aead_xchacha20poly1305_ietf_decrypt(
-            message.as_mut_ptr(),
-            &mut message_len,
-            std::ptr::null_mut(),
-            cipher.as_ptr(),
-            cipher.len() as u64,
-            auth_tag.as_ptr(),
-            auth_tag.len() as u64,
-            nonce.as_ptr(),
-            rx_key.as_ptr(),
-        );
-        if result != 0 {
-            return Err(CryptoError::LibsodiumError);
-        }
-    }
-
-    Ok(message)
-}
-
-pub fn encrypt(
-    message: &[u8],
-    auth_tag: &[u8],
-    nonce: &[u8; XCHACHA20POLY1305_IETF_NPUBBYTES],
-    tx_key: &[u8; SESSIONKEYBYTES],
-) -> Result<Vec<u8>, CryptoError> {
-    let mut cipher = vec![0u8; message.len() + XCHACHA20POLY1305_IETF_ABYTES];
-    unsafe {
-        let mut cipher_len: u64 = 0;
-
-        let result = sodium::crypto_aead_xchacha20poly1305_ietf_encrypt(
-            cipher.as_mut_ptr(),
-            &mut cipher_len,
-            message.as_ptr(),
-            message.len() as u64,
-            auth_tag.as_ptr(),
-            auth_tag.len() as u64,
-            std::ptr::null(),
-            nonce.as_ptr(),
-            tx_key.as_ptr(),
-        );
-        if result != 0 {
-            return Err(CryptoError::LibsodiumError);
-        }
-    }
-
-    Ok(cipher)
 }
 
 pub fn convert_ed25519_pk_to_curve22519_pk(
@@ -313,38 +269,6 @@ mod tests {
         assert_eq!(
             agreement_key, expected_agreement_key,
             "Converted key does not match expected key"
-        );
-    }
-
-    #[test]
-    fn test_decrypt() {
-        // Known test values
-        let cipher = hex_to_bytes::<19>("1685d1a2238c1feda14461e1acee45809d7636");
-        let auth_tag = hex_to_bytes::<97>(
-            "10000000004411282d731a283e6fb788935d82f3ef99625160d6502818622d860a23517b0e20e59d8a481db4da2c89649c979d7318bc4ef19828f4663e18cdb282be8d1293f5040cd620a91aca86a475682e4ddc397deabe300aad912783de129d",
-        );
-        let nonce = hex_to_bytes("4411282d731a283e6fb788935d82f3ef99625160d6502818");
-        let rx_key =
-            hex_to_bytes("bf5f0ed0e33c08072e5267f2bb0751630ff55b7282afb6867a3cb251325bc117");
-
-        // Expected decrypted message
-        let expected_decrypted = hex_to_bytes::<3>("010000");
-
-        match decrypt(&cipher, &auth_tag, &nonce, &rx_key) {
-            Ok(decrypted) => {
-                assert_eq!(
-                    decrypted, expected_decrypted,
-                    "Decrypted message does not match expected message"
-                );
-            }
-            Err(_) => panic!("Decryption failed"),
-        }
-
-        // Test for failed decryption (wrong key)
-        let wrong_rx_key = [0u8; SESSIONKEYBYTES];
-        assert!(
-            decrypt(&cipher, &auth_tag, &nonce, &wrong_rx_key).is_err(),
-            "Decryption should have failed with wrong key"
         );
     }
 

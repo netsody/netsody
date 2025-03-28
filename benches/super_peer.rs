@@ -1,6 +1,6 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use drasyl::identity::Identity;
-use drasyl::messages::{AppMessage, HelloMessageSigned};
+use drasyl::messages::{AppMessage, HelloSuperPeerMessage};
 use drasyl::super_peer::{MTU_DEFAULT, SuperPeerInner, SuperPeerOptsBuilder};
 use drasyl::utils::crypto::ED25519_PUBLICKEYBYTES;
 use drasyl::utils::hex::hex_to_bytes;
@@ -46,7 +46,8 @@ fn create_hello(
         .unwrap()
         .as_millis() as u64;
     let endpoints = [0u8; 18];
-    HelloMessageSigned::build(network_id, sender, pow, None, recipient, time, &endpoints).unwrap()
+    HelloSuperPeerMessage::build(network_id, sender, pow, None, recipient, time, &endpoints)
+        .unwrap()
 }
 
 fn benchmark_on_packet(c: &mut Criterion) {

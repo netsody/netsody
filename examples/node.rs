@@ -59,10 +59,9 @@ async fn main() {
     // recv task
     let recv_node = node.clone();
     tokio::spawn(async move {
-        let mut buf = vec![0u8; 1472];
         loop {
             // read message
-            let (size, src) = match recv_node.recv_from(&mut buf).await {
+            let (buf, src) = match recv_node.recv_from().await {
                 Ok(result) => result,
                 Err(e) => {
                     error!("Error receiving message: {}", e);
@@ -71,8 +70,8 @@ async fn main() {
             };
 
             // process message
-            let buf_str = String::from_utf8_lossy(&buf[..size]);
-            println!("{}: {} ({} bytes)", bytes_to_hex(&src), buf_str, size);
+            let buf_str = String::from_utf8_lossy(&buf);
+            println!("{}: {} ({} bytes)", bytes_to_hex(&src), buf_str, buf.len());
         }
     });
 

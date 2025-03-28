@@ -7,6 +7,7 @@ use drasyl::utils::system;
 use log::info;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tun_rs::DeviceBuilder;
 
 #[tokio::main]
@@ -40,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let hello_endpoints = system::get_env("HELLO_ENDPOINTS", String::new());
     let hello_addresses_excluded = system::get_env("HELLO_ADDRESSES_EXCLUDED", ip.to_string());
     let housekeeping_delay = system::get_env("HOUSEKEEPING_DELAY", 5 * 1000); // milliseconds
+    let channel_cap = system::get_env("CHANNEL_CAP", 256);
 
     // identity
     let id = Identity::load_or_generate(&identity_file, min_pow_difficulty)
@@ -80,34 +82,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         .build_async()?;
     let dev = Arc::new(dev);
 
-    // recv task
-    let recv_node = node.clone();
-    let recv_dev = dev.clone();
-    tokio::spawn(async move {
-        loop {
-            // read message
-            let (buf, _) = match recv_node.recv_from().await {
-                Ok(buf) => buf,
-                Err(e) => {
-                    eprintln!("Error receiving message from drasyl: {e}");
-                    continue;
-                }
-            };
+    let (tun_tx, mut drasyl_rx) = mpsc::channel::<Vec<u8>>(channel_cap);
+    let (drasyl_tx, mut tun_rx) = mpsc::channel::<Vec<u8>>(channel_cap);
 
-            // process message
-            if let Err(e) = recv_dev.send(&buf).await {
+    // tun -> channel
+    let dev_clone = dev.clone();
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; tun_mtu as usize];
+        while let Ok(size) = dev_clone.recv(&mut buf).await {
+            tun_tx
+                .send(buf[..size].to_vec())
+                .await
+                .expect("Error sending message to tun_tx");
+        }
+    });
+
+    // channel -> tun
+    let dev_clone = dev.clone();
+    tokio::spawn(async move {
+        while let Some(buf) = tun_rx.recv().await {
+            if let Err(e) = dev_clone.send(&buf).await {
                 eprintln!("Error sending message to tun: {e}");
             }
         }
     });
 
-    let send_handle = node.send_handle(&peer)?;
-    loop {
-        let mut buf = vec![0u8; tun_mtu as usize];
-        while let Ok(size) = dev.recv(&mut buf).await {
-            if let Err(e) = send_handle.send(&buf[..size]).await {
-                eprintln!("Error sending message to drasyl: {e}");
-            }
+    // drasyl -> channel
+    let node_clone = node.clone();
+    tokio::spawn(async move {
+        while let Ok((buf, _)) = node_clone.recv_from().await {
+            drasyl_tx
+                .send(buf)
+                .await
+                .expect("Error sending message to drasyl_tx");
         }
+    });
+
+    // channel -> drasyl
+    let send_handle = node.send_handle(&peer).expect("Error creating send handle");
+    while let Some(buf) = drasyl_rx.recv().await {
+        send_handle
+            .send(&buf)
+            .await
+            .expect("Error sending message to drasyl");
     }
+
+    Ok(())
 }

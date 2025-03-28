@@ -104,8 +104,11 @@ async fn main() -> Result<(), SuperPeerError> {
         };
         for listening_addr in listening_addrs(&ip, &my_addrs) {
             info!(
-                "  udp://{}:{}?publicKey={}&networkId={}{}",
-                listening_addr, port, public_key, network_id_str, tcp_port_str
+                "  udp://{}?publicKey={}&networkId={}{}",
+                SocketAddr::new(listening_addr, port),
+                public_key,
+                network_id_str,
+                tcp_port_str
             );
         }
     }

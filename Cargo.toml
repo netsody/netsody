@@ -21,6 +21,10 @@ arc-swap = "1.7.1"
 ahash = "0.8.11"
 faster-hex = "0.10.0"
 tun-rs = { version = "2", features = ["async"] }
+aegis = "0.9.0"
+xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
+rand_chacha = "0.9.0"
+lz4_flex = { version = "0.11" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }

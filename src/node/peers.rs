@@ -1,22 +1,23 @@
 use crate::identity::validate_proof_of_work;
 use crate::node::peers::TransportProt::{TCP, UDP};
-use crate::node::{DIRECT_LINK_TIMEOUT, DNS_LOOKUP_TIMEOUT, NodeInner, RTT_WINDOW_SIZE};
+use crate::node::{DIRECT_LINK_TIMEOUT, DNS_LOOKUP_TIMEOUT, NodeError, NodeInner, RTT_WINDOW_SIZE};
 use crate::utils::crypto::{
-    CURVE25519_PUBLICKEYBYTES, CURVE25519_SECRETKEYBYTES, CryptoError, ED25519_PUBLICKEYBYTES,
-    SESSIONKEYBYTES, compute_kx_session_keys, convert_ed25519_pk_to_curve22519_pk,
+    AEGIS_KEYBYTES, CURVE25519_PUBLICKEYBYTES, CURVE25519_SECRETKEYBYTES, CryptoError,
+    ED25519_PUBLICKEYBYTES, compute_kx_session_keys, convert_ed25519_pk_to_curve22519_pk,
+    random_bytes,
 };
 use crate::utils::hex::bytes_to_hex;
 use crate::utils::net;
 use ahash::RandomState;
 use arc_swap::ArcSwap;
 use core::sync::atomic::Ordering::SeqCst;
-use log::{error, warn};
+use log::error;
 use net::IPV6_MAPPED_IPV4;
 use papaya::{HashMap, HashMapRef, OwnedGuard};
 use std::collections::VecDeque;
 use std::net::{SocketAddr, SocketAddrV6};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU64};
 use std::time::Duration;
 use std::{fmt, ptr};
 use thiserror::Error;
@@ -42,12 +43,12 @@ pub enum PeersError {
 
 #[derive(Debug)]
 struct SessionKeys {
-    tx: [u8; SESSIONKEYBYTES],
-    rx: [u8; SESSIONKEYBYTES],
+    tx: [u8; AEGIS_KEYBYTES],
+    rx: [u8; AEGIS_KEYBYTES],
 }
 
 impl SessionKeys {
-    pub(in crate::node) fn new(keys: ([u8; SESSIONKEYBYTES], [u8; SESSIONKEYBYTES])) -> Self {
+    pub(in crate::node) fn new(keys: ([u8; AEGIS_KEYBYTES], [u8; AEGIS_KEYBYTES])) -> Self {
         Self {
             tx: keys.1,
             rx: keys.0,
@@ -66,15 +67,6 @@ struct LastAck {
 pub enum Peer {
     SuperPeer(SuperPeer),
     NodePeer(NodePeer),
-}
-
-impl Peer {
-    pub(in crate::node) fn is_stale(&self, time: u64, hello_timeout: u64) -> bool {
-        match self {
-            Peer::SuperPeer(_) => false,
-            Peer::NodePeer(node_peer) => node_peer.is_stale(time, hello_timeout),
-        }
-    }
 }
 
 impl PartialEq for Peer {
@@ -127,7 +119,7 @@ impl fmt::Display for PowStatus {
 
 #[derive(Debug)]
 pub(in crate::node) struct EndpointCandidate {
-    rtts_val: ArcSwap<VecDeque<u64>>,
+    latencies_val: ArcSwap<VecDeque<u64>>,
     unanswered_hello_since: AtomicU64,
     ack_time: AtomicU64,
 }
@@ -135,7 +127,7 @@ pub(in crate::node) struct EndpointCandidate {
 impl EndpointCandidate {
     pub(in crate::node) fn new() -> Self {
         Self {
-            rtts_val: ArcSwap::from_pointee(VecDeque::with_capacity(RTT_WINDOW_SIZE)),
+            latencies_val: ArcSwap::from_pointee(VecDeque::with_capacity(RTT_WINDOW_SIZE)),
             unanswered_hello_since: AtomicU64::new(0),
             ack_time: AtomicU64::new(0),
         }
@@ -150,53 +142,58 @@ impl EndpointCandidate {
     fn ack_rx(&self, time: u64, hello_time: u64) {
         self.unanswered_hello_since.store(0, SeqCst);
         self.ack_time.store(time, SeqCst);
-        let rtt = time - hello_time;
-        self.add_rtt_sample(rtt);
+        let lat = time - hello_time;
+        self.add_lat_sample(lat);
     }
 
-    pub(in crate::node) fn add_rtt_sample(&self, rtt: u64) {
-        let mut rtts = self.rtts().as_ref().clone();
-        if rtts.len() == RTT_WINDOW_SIZE {
-            rtts.pop_back();
+    pub(in crate::node) fn add_lat_sample(&self, lat: u64) {
+        let mut latencies = self.latencies().as_ref().clone();
+        if latencies.len() == RTT_WINDOW_SIZE {
+            latencies.pop_back();
         }
-        rtts.push_front(rtt);
-        self.set_rtts(rtts);
+        latencies.push_front(lat);
+        self.set_latencies(latencies);
     }
 
-    pub(in crate::node) fn rtts(&self) -> arc_swap::Guard<Arc<VecDeque<u64>>> {
-        self.rtts_val.load()
+    pub(in crate::node) fn latencies(&self) -> arc_swap::Guard<Arc<VecDeque<u64>>> {
+        self.latencies_val.load()
     }
 
-    pub(in crate::node) fn set_rtts(&self, new_rtts: VecDeque<u64>) {
-        self.rtts_val.swap(Arc::new(new_rtts));
+    pub(in crate::node) fn set_latencies(&self, new_latencies: VecDeque<u64>) {
+        self.latencies_val.swap(Arc::new(new_latencies));
     }
 
-    fn median_rtt(&self) -> Option<u64> {
-        let rtts = self.rtts();
-        if rtts.is_empty() {
+    fn median_lat(&self) -> Option<u64> {
+        let latencies = self.latencies();
+        if latencies.is_empty() {
             return None;
         }
 
-        let mut sorted_rtts: Vec<u64> = rtts.iter().copied().collect();
-        sorted_rtts.sort_unstable();
+        let mut sorted_latencies: Vec<u64> = latencies.iter().copied().collect();
+        sorted_latencies.sort_unstable();
 
-        let mid = sorted_rtts.len() / 2;
-        if sorted_rtts.len() % 2 == 0 {
-            Some((sorted_rtts[mid - 1] + sorted_rtts[mid]) / 2)
+        let mid = sorted_latencies.len() / 2;
+        if sorted_latencies.len() % 2 == 0 {
+            Some((sorted_latencies[mid - 1] + sorted_latencies[mid]) / 2)
         } else {
-            Some(sorted_rtts[mid])
+            Some(sorted_latencies[mid])
         }
     }
 
     pub(in crate::node) fn is_stale(&self, time: u64, hello_timeout: u64) -> bool {
         let unanswered_hello_since = self.unanswered_hello_since.load(SeqCst);
         let elapsed_time = time.saturating_sub(unanswered_hello_since);
-        unanswered_hello_since != 0 && elapsed_time > hello_timeout
+        unanswered_hello_since != 0 && elapsed_time > (hello_timeout * 1_000)
     }
 
     pub(in crate::node) fn ack_age(&self, time: u64) -> Option<u64> {
-        let ack_time = self.ack_time.load(SeqCst);
+        let mut ack_time = self.ack_time.load(SeqCst);
         if ack_time > 0 {
+            if time < ack_time {
+                // TODO: This can be removed once we've switched to a monotonically increasing time source.
+                ack_time = time;
+            }
+
             Some(time - ack_time)
         } else {
             None
@@ -209,10 +206,12 @@ pub struct NodePeer {
     pow_ptr: AtomicU8,
     session_keys: Option<SessionKeys>,
     created_at: u64,
-    app_tx: AtomicU64,
+    pub(in crate::node) app_tx: Arc<AtomicU64>,
     app_rx: AtomicU64,
     best_addr_ptr: AtomicPtr<SocketAddr>,
     endpoint_candidates: HashMap<SocketAddr, EndpointCandidate>,
+    rx_short_id: AtomicI32,
+    tx_short_id: AtomicI32,
 }
 
 impl NodePeer {
@@ -254,10 +253,14 @@ impl NodePeer {
             None
         };
 
+        let mut short_id = [0u8; 4];
+        random_bytes(&mut short_id);
+
         Ok(Self {
             pow_ptr: AtomicU8::new(pow.into()),
             session_keys,
             created_at: time,
+            rx_short_id: AtomicI32::new(i32::from_be_bytes(short_id)),
             ..Default::default()
         })
     }
@@ -284,10 +287,6 @@ impl NodePeer {
         }
     }
 
-    pub(in crate::node) fn app_tx(&self, time: u64) {
-        self.app_tx.store(time, SeqCst);
-    }
-
     pub(in crate::node) fn app_rx(&self, time: u64) {
         self.app_rx.store(time, SeqCst);
     }
@@ -300,8 +299,8 @@ impl NodePeer {
                 .endpoint_candidates
                 .pin()
                 .iter()
-                .filter_map(|(addr, candidate)| candidate.median_rtt().map(|rtt| (addr, rtt)))
-                .min_by_key(|&(_, rtt)| rtt)
+                .filter_map(|(addr, candidate)| candidate.median_lat().map(|lat| (addr, lat)))
+                .min_by_key(|&(_, lat)| lat)
                 .map(|(addr, _)| addr)
             {
                 self.best_addr_ptr
@@ -310,11 +309,11 @@ impl NodePeer {
         }
     }
 
-    pub(in crate::node) fn tx_key(&self) -> Option<[u8; SESSIONKEYBYTES]> {
+    pub(in crate::node) fn tx_key(&self) -> Option<[u8; AEGIS_KEYBYTES]> {
         self.session_keys.as_ref().map(|keys| keys.tx)
     }
 
-    pub(in crate::node) fn rx_key(&self) -> Option<[u8; SESSIONKEYBYTES]> {
+    pub(in crate::node) fn rx_key(&self) -> Option<[u8; AEGIS_KEYBYTES]> {
         self.session_keys.as_ref().map(|keys| keys.rx)
     }
 
@@ -331,30 +330,23 @@ impl NodePeer {
         }
     }
 
-    pub(in crate::node) fn is_stale(&self, time: u64, hello_timeout: u64) -> bool {
-        // new
-        let is_new = time - self.created_at < hello_timeout;
-        if is_new {
-            return false;
-        }
+    pub(in crate::node) fn is_reachable(&self) -> bool {
+        !self.endpoint_candidates.pin().is_empty()
+    }
 
-        // unreachable
-        let unreachable = self.endpoint_candidates.pin().is_empty();
-
-        if unreachable {
-            return true;
-        }
-
-        // no APP traffic
-        let has_app_traffic = self.has_app_traffic(time);
-        !has_app_traffic
+    pub(in crate::node) fn is_new(&self, time: u64, hello_timeout: u64) -> bool {
+        time - self.created_at < (hello_timeout * 1_000)
     }
 
     pub(in crate::node) fn has_app_traffic(&self, time: u64) -> bool {
-        let no_app_since = std::cmp::max(self.app_tx.load(SeqCst), self.app_rx.load(SeqCst));
+        let mut no_app_since = std::cmp::max(self.app_tx.load(SeqCst), self.app_rx.load(SeqCst));
+        if time < no_app_since {
+            // TODO: This can be removed once we've switched to a monotonically increasing time source.
+            no_app_since = time;
+        }
         let no_app_time = time - no_app_since;
 
-        no_app_time < DIRECT_LINK_TIMEOUT
+        no_app_time < (DIRECT_LINK_TIMEOUT * 1_000)
     }
 
     pub(in crate::node) fn best_addr(&self) -> Option<&SocketAddr> {
@@ -378,6 +370,29 @@ impl NodePeer {
 
     fn pow(&self) -> PowStatus {
         PowStatus::try_from(self.pow_ptr.load(SeqCst)).unwrap()
+    }
+
+    pub(in crate::node) fn set_rx_short_id(&self, new_short_id: [u8; 4]) {
+        self.rx_short_id
+            .store(i32::from_be_bytes(new_short_id), SeqCst);
+    }
+
+    pub(in crate::node) fn rx_short_id(&self) -> [u8; 4] {
+        self.rx_short_id.load(SeqCst).to_be_bytes()
+    }
+
+    pub(in crate::node) fn set_tx_short_id(&self, new_short_id: [u8; 4]) {
+        self.tx_short_id
+            .store(i32::from_be_bytes(new_short_id), SeqCst);
+    }
+
+    pub(in crate::node) fn tx_short_id(&self) -> Option<[u8; 4]> {
+        let short_id = self.tx_short_id.load(SeqCst);
+        if short_id == 0 {
+            None
+        } else {
+            Some(short_id.to_be_bytes())
+        }
     }
 }
 
@@ -415,23 +430,19 @@ impl fmt::Display for TransportProt {
 
 pub(in crate::node) struct PeersList {
     pub(in crate::node) peers: HashMap<[u8; ED25519_PUBLICKEYBYTES], Peer, RandomState>,
-    pub(in crate::node) agreement_sk: Option<[u8; CURVE25519_SECRETKEYBYTES]>,
-    pub(in crate::node) agreement_pk: Option<[u8; CURVE25519_PUBLICKEYBYTES]>,
     pub(in crate::node) default_route_ptr: AtomicPtr<[u8; ED25519_PUBLICKEYBYTES]>,
+    pub(in crate::node) rx_short_ids: HashMap<[u8; 4], [u8; ED25519_PUBLICKEYBYTES], RandomState>,
 }
 
 impl PeersList {
     pub(in crate::node) fn new(
-        peers: HashMap<[u8; 32], Peer, RandomState>,
-        agreement_sk: Option<[u8; CURVE25519_SECRETKEYBYTES]>,
-        agreement_pk: Option<[u8; CURVE25519_PUBLICKEYBYTES]>,
+        peers: HashMap<[u8; ED25519_PUBLICKEYBYTES], Peer, RandomState>,
         default_route_ptr: AtomicPtr<[u8; ED25519_PUBLICKEYBYTES]>,
     ) -> Self {
         PeersList {
             peers,
-            agreement_sk,
-            agreement_pk,
             default_route_ptr,
+            rx_short_ids: Default::default(),
         }
     }
 
@@ -448,20 +459,25 @@ impl fmt::Display for PeersList {
         writeln!(
             f,
             "{:<64} {:<3} {:<4} {:<6} {:<7} {:<7} {:<7} Endpoint",
-            "Peer", "PoW", "Role", "MedRTT", "AckRx", "AppTx", "AppRx",
+            "Peer", "PoW", "Role", "MedLat", "AckRx", "AppTx", "AppRx",
         )?;
 
         let guard = self.peers.guard();
         for (key, value) in self.peers.iter(&guard) {
             match (key, value) {
                 (super_peer_pk, Peer::SuperPeer(super_peer)) => {
-                    let default_route = self.default_route_ptr.load(SeqCst)
-                        == super_peer_pk as *const [u8; ED25519_PUBLICKEYBYTES]
-                            as *mut [u8; ED25519_PUBLICKEYBYTES];
+                    let default_route = self.default_route() == super_peer_pk;
 
                     let (ack_time, endpoint) =
-                        if let Some((ack_time, ack_src, prot)) = super_peer.last_ack() {
-                            ((now - ack_time).to_string(), format!("{prot}://{ack_src}"))
+                        if let Some((mut ack_time, ack_src, prot)) = super_peer.last_ack() {
+                            if now < ack_time {
+                                // TODO: This can be removed once we've switched to a monotonically increasing time source.
+                                ack_time = now;
+                            }
+                            (
+                                ((now - ack_time) / 1000).to_string(),
+                                format!("{prot}://{ack_src}"),
+                            )
                         } else {
                             (String::new(), String::new())
                         };
@@ -472,8 +488,8 @@ impl fmt::Display for PeersList {
                         bytes_to_hex(super_peer_pk),
                         "ign",
                         if default_route { "S*" } else { "S" },
-                        if let Some(median_rtt) = super_peer.median_rtt() {
-                            median_rtt.to_string()
+                        if let Some(median_lat) = super_peer.median_lat() {
+                            format!("{:<6.1}", median_lat as f64 / 1000.0)
                         } else {
                             String::new()
                         },
@@ -495,24 +511,35 @@ impl fmt::Display for PeersList {
                         &node_peer.pow().to_string(),
                         "C",
                         best_endpoint
-                            .and_then(EndpointCandidate::median_rtt)
-                            .map_or_else(String::new, |median_rtt| median_rtt.to_string()),
+                            .and_then(EndpointCandidate::median_lat)
+                            .map_or_else(String::new, |median_lat| format!(
+                                "{:<6.1}",
+                                median_lat as f64 / 1_000.0
+                            )),
                         best_endpoint
                             .map(|candidate| candidate.ack_age(now))
                             .map_or_else(String::new, |ack_age| ack_age
-                                .map_or_else(String::new, |ack_age| ack_age.to_string())),
+                                .map_or_else(String::new, |ack_age| (ack_age / 1000).to_string())),
                         {
-                            let app_tx = node_peer.app_tx.load(SeqCst);
-                            if app_tx != 0 && now >= app_tx {
-                                (now - app_tx).to_string()
+                            let mut app_tx = node_peer.app_tx.load(SeqCst);
+                            if app_tx != 0 {
+                                if now < app_tx {
+                                    // TODO: This can be removed once we've switched to a monotonically increasing time source.
+                                    app_tx = now;
+                                }
+                                ((now - app_tx) / 1_000).to_string()
                             } else {
                                 String::new()
                             }
                         },
                         {
-                            let app_rx = node_peer.app_rx.load(SeqCst);
-                            if app_rx != 0 && now >= app_rx {
-                                (now - app_rx).to_string()
+                            let mut app_rx = node_peer.app_rx.load(SeqCst);
+                            if app_rx != 0 {
+                                if now < app_rx {
+                                    // TODO: This can be removed once we've switched to a monotonically increasing time source.
+                                    app_rx = now;
+                                }
+                                ((now - app_rx) / 1_000).to_string()
                             } else {
                                 String::new()
                             }
@@ -531,12 +558,14 @@ impl fmt::Display for PeersList {
                                 "",
                                 "",
                                 "",
-                                candidate
-                                    .median_rtt()
-                                    .map_or_else(String::new, |ack_age| ack_age.to_string()),
+                                candidate.median_lat().map_or_else(
+                                    String::new,
+                                    |median_lat| format!("{:<6.1}", median_lat as f64 / 1_000.0)
+                                ),
                                 candidate
                                     .ack_age(now)
-                                    .map_or_else(String::new, |ack_age| ack_age.to_string()),
+                                    .map_or_else(String::new, |ack_age| (ack_age / 1_000)
+                                        .to_string()),
                                 "",
                                 "",
                             )?;
@@ -571,7 +600,7 @@ pub struct SuperPeer {
     session_keys: Option<SessionKeys>,
     resolved_addr_val: ArcSwap<SocketAddr>,
     udp_state_val: ArcSwap<SuperPeerUdpState>,
-    rtts_val: ArcSwap<VecDeque<u64>>,
+    latencies_val: ArcSwap<VecDeque<u64>>,
 }
 
 impl SuperPeer {
@@ -598,7 +627,7 @@ impl SuperPeer {
             session_keys,
             resolved_addr_val: ArcSwap::from_pointee(resolved_addr),
             udp_state_val: ArcSwap::from_pointee(SuperPeerUdpState::default()),
-            rtts_val: ArcSwap::from_pointee(VecDeque::with_capacity(RTT_WINDOW_SIZE)),
+            latencies_val: ArcSwap::from_pointee(VecDeque::with_capacity(RTT_WINDOW_SIZE)),
         })
     }
 
@@ -638,7 +667,7 @@ impl SuperPeer {
                 last_ack: Some(LastAck { time, src }),
             });
         }
-        self.add_rtt_sample(time - ack_time);
+        self.add_lat_sample(time - ack_time);
         if prot == UDP {
             self.schedule_tcp_connection_shutdown();
         }
@@ -648,11 +677,11 @@ impl SuperPeer {
         SocketAddr::new(self.resolved_addr().ip(), self.tcp_port)
     }
 
-    pub(in crate::node) fn tx_key(&self) -> Option<[u8; SESSIONKEYBYTES]> {
+    pub(in crate::node) fn tx_key(&self) -> Option<[u8; AEGIS_KEYBYTES]> {
         self.session_keys.as_ref().map(|keys| keys.tx)
     }
 
-    pub(in crate::node) fn rx_key(&self) -> Option<[u8; SESSIONKEYBYTES]> {
+    pub(in crate::node) fn rx_key(&self) -> Option<[u8; AEGIS_KEYBYTES]> {
         self.session_keys.as_ref().map(|keys| keys.rx)
     }
 
@@ -668,7 +697,7 @@ impl SuperPeer {
         let unanswered_since = self.udp_state().unanswered_hello_since;
         let tcp_state = self.tcp_state();
         unanswered_since != 0
-            && time - unanswered_since > hello_timeout
+            && time - unanswered_since > (hello_timeout * 1_000)
             && tcp_state.handle.is_none()
             && self.tcp_state().stream.is_none()
     }
@@ -687,70 +716,67 @@ impl SuperPeer {
     pub(in crate::node) async fn resolve_addr(
         listen_addr: SocketAddr,
         addr: &str,
-    ) -> Option<SocketAddr> {
+    ) -> Result<SocketAddr, NodeError> {
         // resolve hostname
         let addrs: Vec<SocketAddr> =
             match timeout(Duration::from_millis(DNS_LOOKUP_TIMEOUT), lookup_host(addr)).await {
                 Ok(Ok(addrs)) => addrs.collect(),
-                Ok(Err(e)) => {
-                    warn!("Failed to lookup super peer host {}: {:?}", addr, e);
-                    return None;
-                }
-                Err(_) => {
-                    warn!(
-                        "Timeout of {} ms exceeded while attempting to resolve super peer host {}.",
-                        DNS_LOOKUP_TIMEOUT, addr
-                    );
-                    return None;
-                }
+                Ok(Err(e)) => return Err(NodeError::SuperPeerResolveFailed(e.to_string())),
+                Err(_) => return Err(NodeError::SuperPeerResolveTimeout(DNS_LOOKUP_TIMEOUT)),
             };
 
         if addrs.is_empty() {
             // do nothing. keep previous (if present)
-            return None;
+            return Err(NodeError::SuperPeerResolveEmpty);
         }
 
         match listen_addr {
-            SocketAddr::V4(_) => addrs.iter().find(|addr| addr.is_ipv4()).copied(),
+            SocketAddr::V4(_) => addrs
+                .iter()
+                .find(|addr| addr.is_ipv4())
+                .copied()
+                .ok_or(NodeError::SuperPeerResolveWrongFamily),
             SocketAddr::V6(_) => {
                 if IPV6_MAPPED_IPV4 {
                     if let Some(addr) = addrs.iter().find(|addr| addr.is_ipv6()) {
-                        Some(*addr)
-                    } else if let Some(addr) = addrs.iter().find(|addr| addr.is_ipv4()) {
-                        let v4_addr = match addr {
-                            SocketAddr::V4(v4) => v4,
-                            _ => unreachable!(),
-                        };
-                        Some(SocketAddr::V6(SocketAddrV6::new(
-                            v4_addr.ip().to_ipv6_mapped(),
-                            v4_addr.port(),
+                        Ok(*addr)
+                    } else if let Some(SocketAddr::V4(addr)) =
+                        addrs.iter().find(|addr| addr.is_ipv4())
+                    {
+                        Ok(SocketAddr::V6(SocketAddrV6::new(
+                            addr.ip().to_ipv6_mapped(),
+                            addr.port(),
                             0,
                             0,
                         )))
                     } else {
-                        None
+                        Err(NodeError::SuperPeerResolveWrongFamily)
                     }
                 } else {
-                    addrs.iter().find(|addr| addr.is_ipv6()).copied()
+                    addrs
+                        .iter()
+                        .find(|addr| addr.is_ipv6())
+                        .copied()
+                        .ok_or(NodeError::SuperPeerResolveWrongFamily)
                 }
             }
         }
     }
 
-    pub(in crate::node) fn median_rtt(&self) -> Option<u64> {
-        let rtts = self.rtts();
-        if rtts.is_empty() {
+    pub(in crate::node) fn median_lat(&self) -> Option<u64> {
+        let latencies = self.latencies();
+        if latencies.is_empty() {
             return None;
         }
 
-        let mut sorted_rtts: Vec<u64> = rtts.iter().copied().collect();
-        sorted_rtts.sort_unstable();
+        let mut sorted_latencies: Vec<u64> = latencies.iter().copied().collect();
+        sorted_latencies.sort_unstable();
 
-        let mid = sorted_rtts.len() / 2;
-        if sorted_rtts.len() % 2 == 0 {
-            Some((sorted_rtts[mid - 1] + sorted_rtts[mid]) / 2)
+        let mid = sorted_latencies.len() / 2;
+        if sorted_latencies.len() % 2 == 0 {
+            Some((sorted_latencies[mid - 1] + sorted_latencies[mid]) / 2)
         } else {
-            Some(sorted_rtts[mid])
+            Some(sorted_latencies[mid])
         }
     }
 
@@ -796,21 +822,21 @@ impl SuperPeer {
         });
     }
 
-    pub(in crate::node) fn add_rtt_sample(&self, rtt: u64) {
-        let mut rtts = self.rtts().as_ref().clone();
-        if rtts.len() == RTT_WINDOW_SIZE {
-            rtts.pop_back();
+    pub(in crate::node) fn add_lat_sample(&self, lat: u64) {
+        let mut latencies = self.latencies().as_ref().clone();
+        if latencies.len() == RTT_WINDOW_SIZE {
+            latencies.pop_back();
         }
-        rtts.push_front(rtt);
-        self.set_rtts(rtts);
+        latencies.push_front(lat);
+        self.set_latencies(latencies);
     }
 
-    pub(in crate::node) fn rtts(&self) -> arc_swap::Guard<Arc<VecDeque<u64>>> {
-        self.rtts_val.load()
+    pub(in crate::node) fn latencies(&self) -> arc_swap::Guard<Arc<VecDeque<u64>>> {
+        self.latencies_val.load()
     }
 
-    pub(in crate::node) fn set_rtts(&self, new_rtts: VecDeque<u64>) {
-        self.rtts_val.swap(Arc::new(new_rtts));
+    pub(in crate::node) fn set_latencies(&self, new_latencies: VecDeque<u64>) {
+        self.latencies_val.swap(Arc::new(new_latencies));
     }
 
     pub(in crate::node) async fn shutdown_tcp_connection(&self) -> io::Result<()> {

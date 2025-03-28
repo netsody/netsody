@@ -1,12 +1,10 @@
 use crate::utils::crypto::{
-    CryptoError, ED25519_PUBLICKEYBYTES, SESSIONKEYBYTES, SIGN_BYTES,
-    XCHACHA20POLY1305_IETF_ABYTES, XCHACHA20POLY1305_IETF_NPUBBYTES, decrypt, encrypt,
-    random_bytes,
+    AEGIS_ABYTES, AEGIS_KEYBYTES, AEGIS_NBYTES, ED25519_PUBLICKEYBYTES, random_bytes,
 };
 use crate::utils::hex::bytes_to_hex;
 use crate::utils::net::{IPV4_LENGTH, IPV6_LENGTH};
-use crate::utils::rand::pseudorandom_bytes;
-use log::trace;
+use aegis::aegis256x2::Aegis256X2;
+use log::{error, trace};
 use std::array::TryFromSliceError;
 use std::collections::HashSet;
 use std::fmt;
@@ -15,35 +13,28 @@ use thiserror::Error;
 use zerocopy::big_endian::{U16, U64};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, TryFromBytes};
 
-// public header
-pub(crate) const PUBLIC_HEADER_MAGIC_NUMBER_LEN: usize = 4;
-const PUBLIC_HEADER_FLAGS_LEN: usize = 1;
-pub(crate) const PUBLIC_HEADER_NETWORK_ID_LEN: usize = 4;
-pub const PUBLIC_HEADER_NONCE_LEN: usize = XCHACHA20POLY1305_IETF_NPUBBYTES;
-const PUBLIC_HEADER_RECIPIENT_LEN: usize = ED25519_PUBLICKEYBYTES;
-const PUBLIC_HEADER_SENDER_LEN: usize = ED25519_PUBLICKEYBYTES;
-const PUBLIC_HEADER_POW_LEN: usize = 4;
-pub(crate) const PUBLIC_HEADER_LEN: usize = PUBLIC_HEADER_MAGIC_NUMBER_LEN
-    + PUBLIC_HEADER_FLAGS_LEN
-    + PUBLIC_HEADER_NETWORK_ID_LEN
-    + PUBLIC_HEADER_NONCE_LEN
-    + PUBLIC_HEADER_RECIPIENT_LEN
-    + PUBLIC_HEADER_SENDER_LEN
-    + PUBLIC_HEADER_POW_LEN;
+// long header
+pub(crate) const LONG_HEADER_MAGIC_NUMBER_LEN: usize = 4;
+pub(crate) const LONG_HEADER_HOP_COUNT_LEN: usize = 1;
+const LONG_HEADER_FLAGS_LEN: usize = 1;
+pub(crate) const LONG_HEADER_NETWORK_ID_LEN: usize = 4;
+const LONG_HEADER_RECIPIENT_LEN: usize = ED25519_PUBLICKEYBYTES;
+const LONG_HEADER_SENDER_LEN: usize = ED25519_PUBLICKEYBYTES;
+const LONG_HEADER_POW_LEN: usize = 4;
+const LONG_HEADER_MESSAGE_TYPE_LEN: usize = 1;
+pub(crate) const LONG_HEADER_LEN: usize = LONG_HEADER_MAGIC_NUMBER_LEN
+    + LONG_HEADER_HOP_COUNT_LEN
+    + LONG_HEADER_FLAGS_LEN
+    + LONG_HEADER_NETWORK_ID_LEN
+    + LONG_HEADER_RECIPIENT_LEN
+    + LONG_HEADER_SENDER_LEN
+    + LONG_HEADER_POW_LEN
+    + LONG_HEADER_MESSAGE_TYPE_LEN;
 
-const PUBLIC_HEADER_MAGIC_NUMBER: [u8; PUBLIC_HEADER_MAGIC_NUMBER_LEN] =
+pub(crate) const LONG_HEADER_MAGIC_NUMBER: [u8; LONG_HEADER_MAGIC_NUMBER_LEN] =
     22527u32.pow(2).to_be_bytes();
-const PUBLIC_HEADER_NONCE_ZERO_HOP_COUNT_ARMED_FLAGS: u8 = 0x10u8;
-const PUBLIC_HEADER_NONCE_ZERO_HOP_COUNT_UNARMED_FLAGS: u8 = 0x00u8;
-
-// private header
-const PRIVATE_HEADER_MESSAGE_TYPE_LEN: usize = 1;
-const PRIVATE_HEADER_ARMED_LENGTH_LEN: usize = 2;
-const PRIVATE_HEADER_AUTHENTICATION_HEADER_LEN: usize = XCHACHA20POLY1305_IETF_ABYTES;
-pub(crate) const PRIVATE_HEADER_UNARMED_LEN: usize =
-    PRIVATE_HEADER_MESSAGE_TYPE_LEN + PRIVATE_HEADER_ARMED_LENGTH_LEN;
-pub(crate) const PRIVATE_HEADER_ARMED_LEN: usize =
-    PRIVATE_HEADER_UNARMED_LEN + PRIVATE_HEADER_AUTHENTICATION_HEADER_LEN;
+const LONG_HEADER_FLAGS_ARMED: u8 = 0x10u8;
+const LONG_HEADER_FLAGS_UNARMED: u8 = 0x00u8;
 
 // ACK body
 const ACK_TIME_LEN: usize = 8;
@@ -52,10 +43,10 @@ const ACK_LEN: usize = ACK_TIME_LEN;
 // HELLO body
 const HELLO_TIME_LEN: usize = 8;
 const HELLO_CHILD_TIME_LEN: usize = 8;
-const HELLO_SIGNATURE_LEN: usize = SIGN_BYTES;
+const HELLO_SHORT_ID_LEN: usize = 4;
 pub(crate) const HELLO_ENDPOINT_LEN: usize = 2 + IPV6_LENGTH;
-const HELLO_UNSIGNED_LEN: usize = HELLO_TIME_LEN + HELLO_CHILD_TIME_LEN;
-const HELLO_SIGNED_MIN_LEN: usize = HELLO_UNSIGNED_LEN + HELLO_SIGNATURE_LEN;
+const HELLO_NODE_PEER_LEN: usize = HELLO_TIME_LEN + HELLO_SHORT_ID_LEN;
+const HELLO_SUPER_PEER_MIN_LEN: usize = HELLO_TIME_LEN + HELLO_CHILD_TIME_LEN;
 const HELLO_CHILD_TIME_SUPER_PEER: u64 = 1u64; // actual time not used; any non-zero value is accepted by super peers
 pub(crate) const HELLO_MAX_ENDPOINTS: usize = 15;
 
@@ -65,37 +56,40 @@ const UNITE_ENDPOINT_LEN: usize = 2 + IPV6_LENGTH;
 const UNITE_MIN_LEN: usize = UNITE_ADDRESS_LEN + UNITE_ENDPOINT_LEN;
 pub(crate) const UNITE_MAX_ENDPOINTS: usize = HELLO_MAX_ENDPOINTS + 1;
 
+// short header
+pub(crate) const SHORT_HEADER_ID_LEN: usize = 4;
+pub(crate) const SHORT_ID_NONE: [u8; 4] = [0u8; 4];
+
+pub const ARM_HEADER_LEN: usize = AEGIS_NBYTES + AEGIS_ABYTES;
+
 #[derive(Debug, Error)]
 pub enum MessageError {
-    #[error("Packet too short to contain an ACK")]
-    AckMessageInvalid,
+    #[error("Packet too short to contain an APP: {0}")]
+    AppMessageInvalid(String),
 
-    #[error("Packet too short to contain an APP")]
-    AppMessageInvalid,
+    #[error("Packet too short to contain a HELLO: {0}")]
+    HelloMessageInvalid(String),
 
-    #[error("Packet too short to contain a HELLO")]
-    HelloMessageInvalid,
-
-    #[error("Packet too short to contain a UNITE")]
-    UniteMessageInvalid,
+    #[error("Packet too short to contain a UNITE: {0}")]
+    UniteMessageInvalid(String),
 
     #[error("Packet too short to contain an armed message")]
     ArmedMessageInvalid,
 
     #[error("Invalid magic number: {0:?}")]
-    MagicNumberInvalid([u8; PUBLIC_HEADER_MAGIC_NUMBER_LEN]),
+    MagicNumberInvalid([u8; LONG_HEADER_MAGIC_NUMBER_LEN]),
 
     #[error("Invalid message type: {0}")]
     MessageTypeInvalid(u8),
 
-    #[error("Decryption failed: {0}")]
-    DecryptionFailed(#[from] CryptoError),
+    #[error("Disarming failed: body too short ({0} < {1} bytes)")]
+    DisarmFailedTooShort(usize, usize),
 
     #[error("Time diff too large: {0} ms")]
     TimeDiffTooLarge(u64),
 
-    #[error("Encryption failed: {0}")]
-    EncryptionFailed(CryptoError),
+    #[error("Arming failed: body too short ({0} < {1} bytes)")]
+    ArmFailedTooShort(usize, usize),
 
     #[error("Armed length invalid")]
     ArmedLengthInvalid,
@@ -110,22 +104,22 @@ pub enum MessageError {
     EndpointAddrInvalid(IpAddr),
 
     #[error("Public header conversion failed: {0}")]
-    PublicHeaderConversionFailed(String),
+    LongHeaderConversionFailed(String),
 
-    #[error("Private header conversion failed: {0}")]
-    PrivateHeaderConversionFailed(String),
+    #[error("Short header conversion failed: {0}")]
+    ShortHeaderConversionFailed(String),
 
-    #[error("Build ACK message failed")]
-    BuildAckMessageFailed,
+    #[error("Build ACK message failed: {0}")]
+    BuildAckMessageFailed(String),
 
-    #[error("Build public header failed")]
-    BuildPublicHeaderFailed,
+    #[error("Build long header failed: {0}")]
+    WriteLongHeaderFailed(String),
 
-    #[error("Build private header failed")]
-    BuildPrivateHeaderFailed,
+    #[error("Build UNITE message failed: {0}")]
+    BuildUniteMessageFailed(String),
 
-    #[error("Build UNITE message failed")]
-    BuildUniteMessageFailed,
+    #[error("Write APP message failed: {0}")]
+    WriteAppMessageFailed(String),
 
     #[error("Rx key for disarming not present")]
     RxKeyNotPresent,
@@ -142,8 +136,11 @@ pub enum MessageError {
     #[error("HELLO message conversion failed: {0}")]
     HelloMessageConversionFailed(String),
 
-    #[error("Build HELLO message failed")]
-    BuildHelloMessageFailed,
+    #[error("Build HELLO_SUPER_PEER message failed")]
+    BuildHelloSuperPeerMessageFailed,
+
+    #[error("Write HELLO_NODE_PEER message failed: {0}")]
+    WriteHelloNodePeerMessageFailed(String),
 
     #[error("Endpoint port conversion failed: {0}")]
     EndpointPortConversionFailed(String),
@@ -153,34 +150,98 @@ pub enum MessageError {
 
     #[error("Endpoint addr try from slice failed: {0}")]
     EndpointAddrTryFromSliceFailed(TryFromSliceError),
+
+    #[error("Decrypt failed: {0}")]
+    DecryptFailed(String),
+
+    #[error("Encrypt failed: {0}")]
+    EncryptFailed(String),
+
+    #[error("Invalid child time in hello message")]
+    HelloMessageInvalidChildTime,
+
+    #[error("Invalid endpoints in hello message")]
+    HelloMessageInvalidEndpoints,
+
+    #[error("AEGISConversionError")]
+    AEGISConversionError,
+}
+
+#[repr(C, packed)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
+pub struct ShortHeader {
+    pub magic_number: [u8; LONG_HEADER_MAGIC_NUMBER_LEN],
+    pub payload: [u8],
+}
+
+impl ShortHeader {
+    pub(crate) fn parse<'a>(
+        buf: &'a mut [u8],
+        rx_key: Option<&[u8; AEGIS_KEYBYTES]>,
+    ) -> Result<&'a [u8], MessageError> {
+        if let Some(rx_key) = rx_key {
+            let (ad, buf) = buf.split_at_mut(SHORT_HEADER_ID_LEN);
+            disarm_message_body(buf, ad, rx_key)?;
+            Ok(&buf[ARM_HEADER_LEN..])
+        } else {
+            Ok(&buf[SHORT_HEADER_ID_LEN..])
+        }
+    }
+
+    pub fn build(
+        short_id: [u8; 4],
+        tx_key: Option<&[u8; AEGIS_KEYBYTES]>,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, MessageError> {
+        // buffer
+        let buf_len =
+            SHORT_HEADER_ID_LEN + payload.len() + tx_key.is_some() as usize * ARM_HEADER_LEN;
+        let mut buf = Vec::with_capacity(buf_len);
+        unsafe { buf.set_len(buf.capacity()) };
+
+        buf[..SHORT_HEADER_ID_LEN].copy_from_slice(&short_id);
+        if tx_key.is_some() {
+            buf[SHORT_HEADER_ID_LEN + ARM_HEADER_LEN..].copy_from_slice(payload);
+        } else {
+            buf[SHORT_HEADER_ID_LEN..].copy_from_slice(payload);
+        }
+
+        if let Some(tx_key) = tx_key {
+            let (ad, buf2) = buf.split_at_mut(SHORT_HEADER_ID_LEN);
+            arm_message_body(buf2, ad, tx_key)?;
+        }
+
+        Ok(buf)
+    }
 }
 
 #[repr(C, packed)]
 #[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable)]
-pub struct PublicHeader {
-    pub magic_number: [u8; PUBLIC_HEADER_MAGIC_NUMBER_LEN],
+pub struct LongHeader {
+    pub magic_number: [u8; LONG_HEADER_MAGIC_NUMBER_LEN],
+    pub hop_count: u8,
     pub flags: u8,
-    pub network_id: [u8; PUBLIC_HEADER_NETWORK_ID_LEN],
-    pub nonce: [u8; PUBLIC_HEADER_NONCE_LEN],
-    pub recipient: [u8; PUBLIC_HEADER_RECIPIENT_LEN],
-    pub sender: [u8; PUBLIC_HEADER_SENDER_LEN],
-    pub pow: [u8; PUBLIC_HEADER_POW_LEN],
+    pub network_id: [u8; LONG_HEADER_NETWORK_ID_LEN],
+    pub recipient: [u8; LONG_HEADER_RECIPIENT_LEN],
+    pub sender: [u8; LONG_HEADER_SENDER_LEN],
+    pub pow: [u8; LONG_HEADER_POW_LEN],
+    pub message_type: u8,
 }
 
-impl fmt::Display for PublicHeader {
+impl fmt::Display for LongHeader {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "Public header:")?;
+        writeln!(f, "Long header:")?;
         writeln!(
             f,
             "├─ Magic number  : {}",
             u32::from_be_bytes(self.magic_number)
         )?;
+        writeln!(f, "├─ Hop count     : {}", self.hop_count)?;
         writeln!(
             f,
             "├─ Flags         : {:08b} ({:#04x})",
             self.flags, self.flags
         )?;
-        writeln!(f, "│  ├─ Hop count  : {}", self.hop_count())?;
         writeln!(f, "│  ├─ Armed      : {}", self.is_armed())?;
         writeln!(f, "│  └─ Reserved   : {:04b}", self.flags & 0b1111)?;
         writeln!(
@@ -188,22 +249,37 @@ impl fmt::Display for PublicHeader {
             "├─ Network id    : {}",
             u32::from_be_bytes(self.network_id)
         )?;
-        writeln!(f, "├─ Nonce         : {}", bytes_to_hex(&self.nonce))?;
         writeln!(f, "├─ Recipient     : {}", bytes_to_hex(&self.recipient))?;
         writeln!(f, "├─ Sender        : {}", bytes_to_hex(&self.sender))?;
-        write!(f, "└─ PoW           : {}", i32::from_be_bytes(self.pow))?;
+        writeln!(f, "├─ PoW           : {}", i32::from_be_bytes(self.pow))?;
+        write!(
+            f,
+            "└─ Message type  : {}",
+            match self.message_type.try_into() {
+                Ok(MessageType::ACK) => "ACK",
+                Ok(MessageType::APP) => "APP",
+                Ok(MessageType::HELLO) => "HELLO",
+                Ok(MessageType::UNITE) => "UNITE",
+                Err(_) => "ERROR",
+            }
+        )?;
         Ok(())
     }
 }
 
-impl PublicHeader {
+impl LongHeader {
     pub(crate) fn parse(buf: &mut [u8]) -> Result<(&mut Self, &mut [u8]), MessageError> {
         match Self::mut_from_prefix(buf) {
-            Ok((public_header, _)) if public_header.magic_number != PUBLIC_HEADER_MAGIC_NUMBER => {
-                Err(MessageError::MagicNumberInvalid(public_header.magic_number))
+            Ok((long_header, _)) if long_header.magic_number != LONG_HEADER_MAGIC_NUMBER => {
+                Err(MessageError::MagicNumberInvalid(long_header.magic_number))
             }
-            Ok((public_header, remainder)) => Ok((public_header, remainder)),
-            Err(e) => Err(MessageError::PublicHeaderConversionFailed(e.to_string())),
+            Ok((long_header, remainder)) => {
+                match <MessageType>::try_from(long_header.message_type) {
+                    Ok(_) => Ok((long_header, remainder)),
+                    Err(_) => Err(MessageError::MessageTypeInvalid(long_header.message_type)),
+                }
+            }
+            Err(e) => Err(MessageError::LongHeaderConversionFailed(e.to_string())),
         }
     }
 
@@ -211,42 +287,55 @@ impl PublicHeader {
         (self.flags & (1 << 4)) != 0 // Bit 4
     }
 
-    pub fn hop_count(&self) -> u8 {
-        (self.flags >> 5) & 0b111 // Most significant bits (5-7)
-    }
-
-    pub(crate) fn increment_hop_count(&mut self) {
-        let incremented_hop_count = self.hop_count() + 1u8;
-        self.flags = (self.flags & 0b00011111) | (incremented_hop_count << 5);
+    fn new(
+        arm: bool,
+        network_id: &[u8; LONG_HEADER_NETWORK_ID_LEN],
+        my_pk: &[u8; ED25519_PUBLICKEYBYTES],
+        my_pow: &[u8; LONG_HEADER_POW_LEN],
+        recipient: &[u8; ED25519_PUBLICKEYBYTES],
+        message_type: MessageType,
+    ) -> Self {
+        Self {
+            magic_number: LONG_HEADER_MAGIC_NUMBER,
+            hop_count: 0,
+            flags: if arm {
+                LONG_HEADER_FLAGS_ARMED
+            } else {
+                LONG_HEADER_FLAGS_UNARMED
+            },
+            network_id: *network_id,
+            recipient: *recipient,
+            sender: *my_pk,
+            pow: *my_pow,
+            message_type: message_type as u8,
+        }
     }
 
     fn write_bytes<'a>(
         buf: &'a mut [u8],
         arm: bool,
-        network_id: &[u8; PUBLIC_HEADER_NETWORK_ID_LEN],
+        network_id: &[u8; LONG_HEADER_NETWORK_ID_LEN],
         my_pk: &[u8; ED25519_PUBLICKEYBYTES],
-        my_pow: &[u8; PUBLIC_HEADER_POW_LEN],
+        my_pow: &[u8; LONG_HEADER_POW_LEN],
         recipient: &[u8; ED25519_PUBLICKEYBYTES],
+        message_type: MessageType,
     ) -> Result<(&'a Self, &'a mut [u8]), MessageError> {
-        let (public_header, remainder) = PublicHeader::mut_from_prefix(buf)
-            .map_err(|_| MessageError::BuildPublicHeaderFailed)?;
-        public_header.magic_number = PUBLIC_HEADER_MAGIC_NUMBER;
-        public_header.flags = if arm {
-            PUBLIC_HEADER_NONCE_ZERO_HOP_COUNT_ARMED_FLAGS
+        let (long_header, remainder) = LongHeader::mut_from_prefix(buf)
+            .map_err(|e| MessageError::WriteLongHeaderFailed(e.to_string()))?;
+        long_header.magic_number = LONG_HEADER_MAGIC_NUMBER;
+        long_header.hop_count = 0;
+        long_header.flags = if arm {
+            LONG_HEADER_FLAGS_ARMED
         } else {
-            PUBLIC_HEADER_NONCE_ZERO_HOP_COUNT_UNARMED_FLAGS
+            LONG_HEADER_FLAGS_UNARMED
         };
-        public_header.network_id = *network_id;
-        if arm {
-            random_bytes(public_header.nonce.as_mut());
-        } else {
-            pseudorandom_bytes(public_header.nonce.as_mut());
-        }
-        public_header.recipient = *recipient;
-        public_header.sender = *my_pk;
-        public_header.pow = *my_pow;
+        long_header.network_id = *network_id;
+        long_header.recipient = *recipient;
+        long_header.sender = *my_pk;
+        long_header.pow = *my_pow;
+        long_header.message_type = message_type as u8;
 
-        Ok((public_header, remainder))
+        Ok((long_header, remainder))
     }
 }
 
@@ -301,159 +390,6 @@ impl fmt::Display for MessageType {
 
 #[repr(C, packed)]
 #[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable)]
-pub struct PrivateHeader {
-    pub message_type: u8,
-    pub armed_len: U16,
-}
-
-impl fmt::Display for PrivateHeader {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "Private header:")?;
-        writeln!(
-            f,
-            "├─ Message type : {}",
-            match self.message_type.try_into() {
-                Ok(MessageType::ACK) => "ACK",
-                Ok(MessageType::APP) => "APP",
-                Ok(MessageType::HELLO) => "HELLO",
-                Ok(MessageType::UNITE) => "UNITE",
-                Err(_) => "ERROR",
-            }
-        )?;
-        let armed_len = self.armed_len;
-        write!(f, "└─ Armed length : {armed_len} bytes")
-    }
-}
-
-impl PrivateHeader {
-    pub(crate) fn parse<'a>(
-        buf: &'a mut [u8],
-        public_header: &'a PublicHeader,
-        rx_key: Option<&[u8; SESSIONKEYBYTES]>,
-    ) -> Result<(&'a Self, &'a mut [u8]), MessageError> {
-        let is_armed = public_header.is_armed();
-        if is_armed {
-            // disarm private header
-            if let Some(rx_key) = rx_key {
-                Self::disarm(buf, public_header, rx_key)?;
-            } else {
-                return Err(MessageError::RxKeyNotPresent);
-            }
-        }
-
-        match Self::mut_from_prefix(buf) {
-            Ok((private_header, remainder)) => {
-                match <MessageType>::try_from(private_header.message_type) {
-                    Ok(_) => {
-                        if is_armed {
-                            let armed_len = private_header.armed_len.get() as usize;
-                            if armed_len > remainder.len() {
-                                return Err(MessageError::ArmedLengthInvalid);
-                            }
-                        }
-
-                        Ok((
-                            private_header,
-                            if is_armed {
-                                &mut remainder[PRIVATE_HEADER_AUTHENTICATION_HEADER_LEN..]
-                            } else {
-                                remainder
-                            },
-                        ))
-                    }
-                    Err(_) => Err(MessageError::MessageTypeInvalid(
-                        private_header.message_type,
-                    )),
-                }
-            }
-            Err(e) => Err(MessageError::PrivateHeaderConversionFailed(e.to_string())),
-        }
-    }
-
-    fn disarm(
-        buf: &mut [u8],
-        public_header: &PublicHeader,
-        rx_key: &[u8; SESSIONKEYBYTES],
-    ) -> Result<(), MessageError> {
-        if buf.len() < PRIVATE_HEADER_ARMED_LEN {
-            return Err(MessageError::ArmedMessageInvalid);
-        }
-
-        let auth_tag = if public_header.flags == PUBLIC_HEADER_NONCE_ZERO_HOP_COUNT_ARMED_FLAGS {
-            // no need to build auth tag
-            &public_header.as_bytes()[PUBLIC_HEADER_MAGIC_NUMBER_LEN..]
-        } else {
-            &build_auth_tag(
-                public_header
-                    .as_bytes()
-                    .try_into()
-                    .map_err(MessageError::BuildAuthTagFailed)?,
-            )
-        };
-
-        let private_header_slice = &mut buf[..PRIVATE_HEADER_ARMED_LEN];
-
-        let decrypted_header =
-            decrypt(private_header_slice, auth_tag, &public_header.nonce, rx_key)
-                .map_err(MessageError::DecryptionFailed)?;
-
-        // Overwrite the encrypted header with the decrypted header
-        private_header_slice[..PRIVATE_HEADER_UNARMED_LEN].copy_from_slice(&decrypted_header);
-
-        Ok(())
-    }
-
-    fn write_bytes<'a>(
-        buf: &'a mut [u8],
-        message_type: MessageType,
-        armed_len: u16,
-        public_header: &'a PublicHeader,
-        tx_key: Option<&[u8; SESSIONKEYBYTES]>,
-    ) -> Result<&'a mut [u8], MessageError> {
-        let (private_header, _) = PrivateHeader::mut_from_prefix(buf)
-            .map_err(|_| MessageError::BuildPrivateHeaderFailed)?;
-        private_header.message_type = message_type as u8;
-        private_header.armed_len = armed_len.into();
-        trace!("{}", private_header);
-
-        if public_header.is_armed() {
-            // arm private header
-            if let Some(tx_key) = tx_key {
-                PrivateHeader::arm(buf, public_header, tx_key)?;
-            } else {
-                return Err(MessageError::TxKeyNotPresent);
-            }
-
-            Ok(&mut buf[PRIVATE_HEADER_ARMED_LEN..])
-        } else {
-            Ok(&mut buf[PRIVATE_HEADER_UNARMED_LEN..])
-        }
-    }
-
-    fn arm(
-        buf: &mut [u8],
-        public_header: &PublicHeader,
-        tx_key: &[u8; SESSIONKEYBYTES],
-    ) -> Result<(), MessageError> {
-        let auth_tag = &public_header.as_bytes()[PUBLIC_HEADER_MAGIC_NUMBER_LEN..];
-
-        let encrypted_header = encrypt(
-            &buf[..PRIVATE_HEADER_UNARMED_LEN],
-            auth_tag,
-            &public_header.nonce,
-            tx_key,
-        )
-        .map_err(MessageError::EncryptionFailed)?;
-
-        // Overwrite the unencrypted header with the encrypted header
-        buf[..PRIVATE_HEADER_ARMED_LEN].copy_from_slice(&encrypted_header);
-
-        Ok(())
-    }
-}
-
-#[repr(C, packed)]
-#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable)]
 pub struct AckMessage {
     pub time: U64,
 }
@@ -461,22 +397,26 @@ pub struct AckMessage {
 impl fmt::Display for AckMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "ACK:")?;
-        write!(f, "└─ Time : {} ms", self.time)
+        write!(f, "└─ Time : {} ms", self.time / 1000)
     }
 }
 
 impl AckMessage {
     pub(crate) fn parse<'a>(
         buf: &'a mut [u8],
-        public_header: &'a PublicHeader,
-        private_header: &'a PrivateHeader,
-        rx_key: Option<&[u8; SESSIONKEYBYTES]>,
+        long_header: &'a LongHeader,
+        rx_key: Option<&[u8; AEGIS_KEYBYTES]>,
     ) -> Result<&'a Self, MessageError> {
-        let buf = if private_header.armed_len > 0 && rx_key.is_some() {
+        let buf = if long_header.is_armed() && rx_key.is_some() {
             // disarm body
             if let Some(rx_key) = rx_key {
-                disarm_message_body(buf, public_header, rx_key)?;
-                &buf[..buf.len() - XCHACHA20POLY1305_IETF_ABYTES]
+                disarm_message_body(
+                    buf,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    rx_key,
+                )?;
+                &buf[ARM_HEADER_LEN..]
             } else {
                 return Err(MessageError::RxKeyNotPresent);
             }
@@ -492,56 +432,57 @@ impl AckMessage {
 
     pub fn build(
         buf: &mut [u8],
-        network_id: &[u8; PUBLIC_HEADER_NETWORK_ID_LEN],
+        network_id: &[u8; LONG_HEADER_NETWORK_ID_LEN],
         my_pk: &[u8; ED25519_PUBLICKEYBYTES],
-        my_pow: &[u8; PUBLIC_HEADER_POW_LEN],
-        tx_key: Option<&[u8; SESSIONKEYBYTES]>,
+        my_pow: &[u8; LONG_HEADER_POW_LEN],
+        tx_key: Option<&[u8; AEGIS_KEYBYTES]>,
         recipient: &[u8; ED25519_PUBLICKEYBYTES],
         time: u64,
     ) -> Result<usize, MessageError> {
         // buffer
-        let len = if tx_key.is_some() {
-            PUBLIC_HEADER_LEN + PRIVATE_HEADER_ARMED_LEN + ACK_LEN + XCHACHA20POLY1305_IETF_ABYTES
-        } else {
-            PUBLIC_HEADER_LEN + PRIVATE_HEADER_UNARMED_LEN + ACK_LEN
-        };
-        let buf = &mut buf[..len];
+        let buf_len = LONG_HEADER_LEN + ACK_LEN + tx_key.is_some() as usize * ARM_HEADER_LEN;
+        let buf = &mut buf[..buf_len];
 
-        // public header
-        let (public_header, private_header_and_body_slice) =
-            PublicHeader::write_bytes(buf, tx_key.is_some(), network_id, my_pk, my_pow, recipient)?;
-        trace!("{}", public_header);
-
-        // private header
-        let armed_len = if public_header.is_armed() {
-            ACK_LEN as u16
-        } else {
-            0
-        };
-        let body_slice = PrivateHeader::write_bytes(
-            private_header_and_body_slice,
+        // long header
+        let long_header = LongHeader::new(
+            tx_key.is_some(),
+            network_id,
+            my_pk,
+            my_pow,
+            recipient,
             MessageType::ACK,
-            armed_len,
-            public_header,
-            tx_key,
-        )?;
+        );
+        trace!("> {}", long_header);
+        long_header
+            .write_to_prefix(buf)
+            .map_err(|e| MessageError::WriteLongHeaderFailed(e.to_string()))?;
+        let body_slice = &mut buf[LONG_HEADER_LEN..];
 
         // body
-        let (ack, _) =
-            Self::mut_from_prefix(body_slice).map_err(|_| MessageError::BuildAckMessageFailed)?;
+        let ack = Self::mut_from_bytes(if tx_key.is_some() {
+            &mut body_slice[ARM_HEADER_LEN..]
+        } else {
+            body_slice
+        })
+        .map_err(|e| MessageError::BuildAckMessageFailed(e.to_string()))?;
         ack.time = time.into();
-        trace!("{}", ack);
+        trace!("> {}", ack);
 
-        if public_header.is_armed() {
+        if tx_key.is_some() {
             // arm body
             if let Some(tx_key) = tx_key {
-                arm_message_body(body_slice, public_header, tx_key)?;
+                arm_message_body(
+                    body_slice,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    tx_key,
+                )?;
             } else {
                 return Err(MessageError::TxKeyNotPresent);
             }
         }
 
-        Ok(len)
+        Ok(buf_len)
     }
 }
 
@@ -561,15 +502,19 @@ impl fmt::Display for AppMessage {
 impl AppMessage {
     pub(crate) fn parse<'a>(
         buf: &'a mut [u8],
-        public_header: &'a PublicHeader,
-        private_header: &'a PrivateHeader,
-        rx_key: Option<&[u8; SESSIONKEYBYTES]>,
+        long_header: &'a LongHeader,
+        rx_key: Option<&[u8; AEGIS_KEYBYTES]>,
     ) -> Result<Ref<&'a [u8], Self>, MessageError> {
-        let buf = if private_header.armed_len > 0 && rx_key.is_some() {
+        let buf = if long_header.is_armed() && rx_key.is_some() {
             // disarm body
             if let Some(rx_key) = rx_key {
-                disarm_message_body(buf, public_header, rx_key)?;
-                &buf[..buf.len() - XCHACHA20POLY1305_IETF_ABYTES]
+                disarm_message_body(
+                    buf,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    rx_key,
+                )?;
+                &buf[ARM_HEADER_LEN..]
             } else {
                 return Err(MessageError::RxKeyNotPresent);
             }
@@ -578,77 +523,60 @@ impl AppMessage {
         };
 
         let app: Ref<&'a [u8], Self> =
-            Ref::from_bytes(buf).map_err(|_| MessageError::AppMessageInvalid)?;
+            Ref::from_bytes(buf).map_err(|e| MessageError::AppMessageInvalid(e.to_string()))?;
 
         Ok(app)
     }
 
     pub fn build(
-        network_id: &[u8; PUBLIC_HEADER_NETWORK_ID_LEN],
+        network_id: &[u8; LONG_HEADER_NETWORK_ID_LEN],
         my_pk: &[u8; ED25519_PUBLICKEYBYTES],
-        my_pow: &[u8; PUBLIC_HEADER_POW_LEN],
-        tx_key: Option<&[u8; SESSIONKEYBYTES]>,
-        recipient: &[u8; PUBLIC_HEADER_RECIPIENT_LEN],
+        my_pow: &[u8; LONG_HEADER_POW_LEN],
+        tx_key: Option<&[u8; AEGIS_KEYBYTES]>,
+        recipient: &[u8; LONG_HEADER_RECIPIENT_LEN],
         payload: &[u8],
     ) -> Result<Vec<u8>, MessageError> {
         // buffer
-        let body_len = payload.len();
-        // TODO: kann man hier nicht einen hot buffer nehmen anstelle immer wieder einen neuen zu erstellen?
-        let mut buf = if tx_key.is_some() {
-            Vec::with_capacity(
-                PUBLIC_HEADER_LEN
-                    + PRIVATE_HEADER_ARMED_LEN
-                    + body_len
-                    + if body_len > 0 {
-                        XCHACHA20POLY1305_IETF_ABYTES
-                    } else {
-                        0
-                    },
-            )
-        } else {
-            Vec::with_capacity(PUBLIC_HEADER_LEN + PRIVATE_HEADER_UNARMED_LEN + body_len)
-        };
+        let buf_len = LONG_HEADER_LEN + payload.len() + tx_key.is_some() as usize * ARM_HEADER_LEN;
+        let mut buf = Vec::with_capacity(buf_len);
         unsafe { buf.set_len(buf.capacity()) };
 
-        // public header
-        let (public_header, private_header_and_body_slice) = PublicHeader::write_bytes(
-            &mut buf,
+        // long header
+        let long_header = LongHeader::new(
             tx_key.is_some(),
             network_id,
             my_pk,
             my_pow,
             recipient,
-        )?;
-        trace!("{}", public_header);
-
-        // private header
-        let armed_len = if public_header.is_armed() {
-            body_len as u16
-        } else {
-            0
-        };
-        let body_slice = PrivateHeader::write_bytes(
-            private_header_and_body_slice,
             MessageType::APP,
-            armed_len,
-            public_header,
-            tx_key,
-        )?;
+        );
+        trace!("> {}", long_header);
+        long_header
+            .write_to_prefix(&mut buf)
+            .map_err(|e| MessageError::WriteLongHeaderFailed(e.to_string()))?;
+        let body_slice = &mut buf[LONG_HEADER_LEN..];
 
-        if body_len != 0 {
-            // body
-            let (app, _) = Self::mut_from_prefix(body_slice)
-                .map_err(|_| MessageError::BuildUniteMessageFailed)?;
-            app.payload[..payload.len()].copy_from_slice(payload);
-            trace!("{}", app);
+        // body
+        let app = Self::mut_from_bytes(if tx_key.is_some() {
+            &mut body_slice[ARM_HEADER_LEN..]
+        } else {
+            body_slice
+        })
+        .map_err(|e| MessageError::WriteAppMessageFailed(e.to_string()))?;
+        app.payload[..payload.len()].copy_from_slice(payload);
+        trace!("> {}", app);
 
-            if public_header.is_armed() {
-                // arm body
-                if let Some(tx_key) = tx_key {
-                    arm_message_body(body_slice, public_header, tx_key)?;
-                } else {
-                    return Err(MessageError::TxKeyNotPresent);
-                }
+        if tx_key.is_some() {
+            // arm body
+            if let Some(tx_key) = tx_key {
+                arm_message_body(
+                    body_slice,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    tx_key,
+                )?;
+            } else {
+                return Err(MessageError::TxKeyNotPresent);
             }
         }
 
@@ -813,19 +741,17 @@ impl From<Endpoint> for SocketAddr {
 
 #[repr(C, packed)]
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
-pub struct HelloMessageSigned {
+pub struct HelloSuperPeerMessage {
     pub time: U64,
     pub child_time: U64,
-    pub signature: [u8; SIGN_BYTES],
     pub endpoints: [u8],
 }
 
-impl fmt::Display for HelloMessageSigned {
+impl fmt::Display for HelloSuperPeerMessage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "HELLO:")?;
-        writeln!(f, "├─ Time       : {} ms", self.time)?;
-        writeln!(f, "├─ Child time : {} ms", self.child_time)?;
-        writeln!(f, "├─ Signature  : {}", bytes_to_hex(&self.signature))?;
+        writeln!(f, "HELLO_SUPER_PEER:")?;
+        writeln!(f, "├─ Time       : {} ms", self.time / 1000)?;
+        writeln!(f, "├─ Child time : {} ms", self.child_time / 1000)?;
         writeln!(f, "└─ Endpoints  :")?;
         let endpoints: HashSet<SocketAddr> =
             <&[u8] as Into<EndpointsList>>::into(&self.endpoints).0;
@@ -841,18 +767,22 @@ impl fmt::Display for HelloMessageSigned {
     }
 }
 
-impl HelloMessageSigned {
+impl HelloSuperPeerMessage {
     pub(crate) fn parse<'a>(
         buf: &'a mut [u8],
-        public_header: &'a PublicHeader,
-        private_header: &'a PrivateHeader,
-        rx_key: Option<&[u8; SESSIONKEYBYTES]>,
+        long_header: &'a LongHeader,
+        rx_key: Option<&[u8; AEGIS_KEYBYTES]>,
     ) -> Result<Ref<&'a [u8], Self>, MessageError> {
-        let buf = if private_header.armed_len > 0 && rx_key.is_some() {
+        let buf = if long_header.is_armed() && rx_key.is_some() {
             // disarm body
             if let Some(rx_key) = rx_key {
-                disarm_message_body(buf, public_header, rx_key)?;
-                &buf[..buf.len() - XCHACHA20POLY1305_IETF_ABYTES]
+                disarm_message_body(
+                    buf,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    rx_key,
+                )?;
+                &buf[ARM_HEADER_LEN..]
             } else {
                 return Err(MessageError::RxKeyNotPresent);
             }
@@ -862,92 +792,80 @@ impl HelloMessageSigned {
 
         // rust implementation has a limit for endpoints. To not break compatibility with Java
         // implementation, we just take the first N endpoints instead of discarding the HELLO
-        let buf = if buf.len() > HELLO_SIGNED_MIN_LEN + HELLO_ENDPOINT_LEN * HELLO_MAX_ENDPOINTS {
-            &buf[..HELLO_SIGNED_MIN_LEN + HELLO_ENDPOINT_LEN * HELLO_MAX_ENDPOINTS]
+        let buf = if buf.len() > HELLO_SUPER_PEER_MIN_LEN + HELLO_ENDPOINT_LEN * HELLO_MAX_ENDPOINTS
+        {
+            &buf[..HELLO_SUPER_PEER_MIN_LEN + HELLO_ENDPOINT_LEN * HELLO_MAX_ENDPOINTS]
         } else {
             buf
         };
 
         let hello: Ref<&'a [u8], Self> =
-            Ref::from_bytes(buf).map_err(|_| MessageError::HelloMessageInvalid)?;
+            Ref::from_bytes(buf).map_err(|e| MessageError::HelloMessageInvalid(e.to_string()))?;
 
         if hello.child_time == 0 {
-            return Err(MessageError::HelloMessageInvalid);
+            return Err(MessageError::HelloMessageInvalidChildTime);
         }
 
         if (hello.endpoints.len() % HELLO_ENDPOINT_LEN) != 0 {
-            return Err(MessageError::HelloMessageInvalid);
+            return Err(MessageError::HelloMessageInvalidEndpoints);
         }
 
         Ok(hello)
     }
 
     pub fn build(
-        network_id: &[u8; PUBLIC_HEADER_NETWORK_ID_LEN],
+        network_id: &[u8; LONG_HEADER_NETWORK_ID_LEN],
         my_pk: &[u8; ED25519_PUBLICKEYBYTES],
-        my_pow: &[u8; PUBLIC_HEADER_POW_LEN],
-        tx_key: Option<&[u8; SESSIONKEYBYTES]>,
+        my_pow: &[u8; LONG_HEADER_POW_LEN],
+        tx_key: Option<&[u8; AEGIS_KEYBYTES]>,
         recipient: &[u8; ED25519_PUBLICKEYBYTES],
         time: u64,
         endpoints: &[u8],
     ) -> Result<Vec<u8>, MessageError> {
         // buffer
-        let body_len = HELLO_SIGNED_MIN_LEN + endpoints.len();
-        let mut buf = if tx_key.is_some() {
-            Vec::with_capacity(
-                PUBLIC_HEADER_LEN
-                    + PRIVATE_HEADER_ARMED_LEN
-                    + body_len
-                    + XCHACHA20POLY1305_IETF_ABYTES,
-            )
-        } else {
-            Vec::with_capacity(PUBLIC_HEADER_LEN + PRIVATE_HEADER_UNARMED_LEN + body_len)
-        };
+        let buf_len = LONG_HEADER_LEN
+            + HELLO_SUPER_PEER_MIN_LEN
+            + endpoints.len()
+            + tx_key.is_some() as usize * ARM_HEADER_LEN;
+        let mut buf = Vec::with_capacity(buf_len);
         unsafe { buf.set_len(buf.capacity()) };
 
-        // public header
-        let (public_header, private_header_and_body_slice) = PublicHeader::write_bytes(
-            &mut buf,
+        // long header
+        let long_header = LongHeader::new(
             tx_key.is_some(),
             network_id,
             my_pk,
             my_pow,
             recipient,
-        )?;
-        trace!("{}", public_header);
-
-        // private header
-        let armed_len = if public_header.is_armed() {
-            body_len as u16
-        } else {
-            0
-        };
-        let body_slice = PrivateHeader::write_bytes(
-            private_header_and_body_slice,
             MessageType::HELLO,
-            armed_len,
-            public_header,
-            tx_key,
-        )?;
+        );
+        trace!("> {}", long_header);
+        long_header
+            .write_to_prefix(&mut buf)
+            .map_err(|e| MessageError::WriteLongHeaderFailed(e.to_string()))?;
+        let body_slice = &mut buf[LONG_HEADER_LEN..];
 
         // body
-        let hello =
-            Self::mut_from_bytes(body_slice).map_err(|_| MessageError::BuildHelloMessageFailed)?;
+        let hello = Self::mut_from_bytes(if tx_key.is_some() {
+            &mut body_slice[ARM_HEADER_LEN..]
+        } else {
+            body_slice
+        })
+        .map_err(|_| MessageError::BuildHelloSuperPeerMessageFailed)?;
         hello.time = time.into();
         hello.child_time = HELLO_CHILD_TIME_SUPER_PEER.into();
-        if public_header.is_armed() {
-            let endpoints_len = hello.endpoints.len();
-            hello.endpoints[..endpoints_len - XCHACHA20POLY1305_IETF_ABYTES]
-                .copy_from_slice(endpoints);
-        } else {
-            hello.endpoints.copy_from_slice(endpoints);
-        }
-        trace!("{}", hello);
+        hello.endpoints.copy_from_slice(endpoints);
+        trace!("> {}", hello);
 
-        if public_header.is_armed() {
+        if tx_key.is_some() {
             // arm body
             if let Some(tx_key) = tx_key {
-                arm_message_body(body_slice, public_header, tx_key)?;
+                arm_message_body(
+                    body_slice,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    tx_key,
+                )?;
             } else {
                 return Err(MessageError::TxKeyNotPresent);
             }
@@ -959,30 +877,43 @@ impl HelloMessageSigned {
 
 #[repr(C, packed)]
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
-pub struct HelloMessageUnsigned {
+pub struct HelloNodePeerMessage {
     pub time: U64,
+    pub short_id: [u8; 4],
 }
 
-impl fmt::Display for HelloMessageUnsigned {
+impl fmt::Display for HelloNodePeerMessage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "HELLO:")?;
-        writeln!(f, "└─ Time       : {} ms", self.time)?;
+        writeln!(f, "HELLO_NODE_PEER:")?;
+        writeln!(f, "└─ Time       : {} ms", self.time / 1000)?;
+        writeln!(f, "└─ Short id   : {:?}", self.short_id)?;
         Ok(())
     }
 }
 
-impl HelloMessageUnsigned {
+impl HelloNodePeerMessage {
+    fn new(time: u64, short_id: [u8; 4]) -> Self {
+        Self {
+            time: time.into(),
+            short_id,
+        }
+    }
+
     pub(crate) fn parse<'a>(
         buf: &'a mut [u8],
-        public_header: &'a PublicHeader,
-        private_header: &'a PrivateHeader,
-        rx_key: Option<&[u8; SESSIONKEYBYTES]>,
-    ) -> Result<&'a HelloMessageUnsigned, MessageError> {
-        let buf = if private_header.armed_len > 0 && rx_key.is_some() {
+        long_header: &'a LongHeader,
+        rx_key: Option<&[u8; AEGIS_KEYBYTES]>,
+    ) -> Result<&'a HelloNodePeerMessage, MessageError> {
+        let buf = if long_header.is_armed() && rx_key.is_some() {
             // disarm body
             if let Some(rx_key) = rx_key {
-                disarm_message_body(buf, public_header, rx_key)?;
-                &buf[..buf.len() - XCHACHA20POLY1305_IETF_ABYTES]
+                disarm_message_body(
+                    buf,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    rx_key,
+                )?;
+                &buf[ARM_HEADER_LEN..]
             } else {
                 return Err(MessageError::RxKeyNotPresent);
             }
@@ -997,61 +928,51 @@ impl HelloMessageUnsigned {
     }
 
     pub fn build(
-        network_id: &[u8; PUBLIC_HEADER_NETWORK_ID_LEN],
+        network_id: &[u8; LONG_HEADER_NETWORK_ID_LEN],
         my_pk: &[u8; ED25519_PUBLICKEYBYTES],
-        my_pow: &[u8; PUBLIC_HEADER_POW_LEN],
-        tx_key: Option<&[u8; SESSIONKEYBYTES]>,
+        my_pow: &[u8; LONG_HEADER_POW_LEN],
+        tx_key: Option<&[u8; AEGIS_KEYBYTES]>,
         recipient: &[u8; ED25519_PUBLICKEYBYTES],
         time: u64,
+        short_id: [u8; 4],
     ) -> Result<Vec<u8>, MessageError> {
         // buffer
-        let mut buf = if tx_key.is_some() {
-            Vec::with_capacity(
-                PUBLIC_HEADER_LEN
-                    + PRIVATE_HEADER_ARMED_LEN
-                    + HELLO_UNSIGNED_LEN
-                    + XCHACHA20POLY1305_IETF_ABYTES,
-            )
-        } else {
-            Vec::with_capacity(PUBLIC_HEADER_LEN + PRIVATE_HEADER_UNARMED_LEN + HELLO_UNSIGNED_LEN)
-        };
+        let buf_len =
+            LONG_HEADER_LEN + HELLO_NODE_PEER_LEN + tx_key.is_some() as usize * ARM_HEADER_LEN;
+        let mut buf = Vec::with_capacity(buf_len);
         unsafe { buf.set_len(buf.capacity()) };
 
-        // public header
-        let (public_header, private_header_and_body_slice) = PublicHeader::write_bytes(
-            &mut buf,
+        // long header
+        let long_header = LongHeader::new(
             tx_key.is_some(),
             network_id,
             my_pk,
             my_pow,
             recipient,
-        )?;
-        trace!("{}", public_header);
-
-        // private header
-        let armed_len = if public_header.is_armed() {
-            HELLO_UNSIGNED_LEN as u16
-        } else {
-            0
-        };
-        let body_slice = PrivateHeader::write_bytes(
-            private_header_and_body_slice,
             MessageType::HELLO,
-            armed_len,
-            public_header,
-            tx_key,
-        )?;
+        );
+        trace!("> {}", long_header);
+        long_header
+            .write_to_prefix(&mut buf)
+            .map_err(|e| MessageError::WriteLongHeaderFailed(e.to_string()))?;
+        let body_slice = &mut buf[LONG_HEADER_LEN..];
 
         // body
-        let (hello, _) =
-            Self::mut_from_prefix(body_slice).map_err(|_| MessageError::BuildHelloMessageFailed)?;
-        hello.time = time.into();
-        trace!("{}", hello);
+        let hello = Self::new(time, short_id);
+        trace!("> {}", hello);
+        hello
+            .write_to_suffix(body_slice)
+            .map_err(|e| MessageError::WriteHelloNodePeerMessageFailed(e.to_string()))?;
 
-        if public_header.is_armed() {
+        if tx_key.is_some() {
             // arm body
             if let Some(tx_key) = tx_key {
-                arm_message_body(body_slice, public_header, tx_key)?;
+                arm_message_body(
+                    body_slice,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    tx_key,
+                )?;
             } else {
                 return Err(MessageError::TxKeyNotPresent);
             }
@@ -1090,15 +1011,19 @@ impl fmt::Display for UniteMessage {
 impl UniteMessage {
     pub(crate) fn parse<'a>(
         buf: &'a mut [u8],
-        public_header: &'a PublicHeader,
-        private_header: &'a PrivateHeader,
-        rx_key: Option<&[u8; SESSIONKEYBYTES]>,
+        long_header: &'a LongHeader,
+        rx_key: Option<&[u8; AEGIS_KEYBYTES]>,
     ) -> Result<Ref<&'a [u8], Self>, MessageError> {
-        let buf = if private_header.armed_len > 0 && rx_key.is_some() {
+        let buf = if long_header.is_armed() && rx_key.is_some() {
             // disarm body
             if let Some(rx_key) = rx_key {
-                disarm_message_body(buf, public_header, rx_key)?;
-                &buf[..buf.len() - XCHACHA20POLY1305_IETF_ABYTES]
+                disarm_message_body(
+                    buf,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    rx_key,
+                )?;
+                &buf[ARM_HEADER_LEN..]
             } else {
                 return Err(MessageError::RxKeyNotPresent);
             }
@@ -1114,77 +1039,59 @@ impl UniteMessage {
             buf
         };
 
-        let hello: Ref<&'a [u8], Self> =
-            Ref::from_bytes(buf).map_err(|_| MessageError::UniteMessageInvalid)?;
+        let unite: Ref<&'a [u8], Self> =
+            Ref::from_bytes(buf).map_err(|e| MessageError::UniteMessageInvalid(e.to_string()))?;
 
-        Ok(hello)
+        Ok(unite)
     }
 
     pub fn build(
-        network_id: &[u8; PUBLIC_HEADER_NETWORK_ID_LEN],
+        network_id: &[u8; LONG_HEADER_NETWORK_ID_LEN],
         my_pk: &[u8; ED25519_PUBLICKEYBYTES],
-        my_pow: &[u8; PUBLIC_HEADER_POW_LEN],
-        tx_key: Option<&[u8; SESSIONKEYBYTES]>,
-        recipient: &[u8; PUBLIC_HEADER_RECIPIENT_LEN],
+        my_pow: &[u8; LONG_HEADER_POW_LEN],
+        tx_key: Option<&[u8; AEGIS_KEYBYTES]>,
+        recipient: &[u8; LONG_HEADER_RECIPIENT_LEN],
         address: &[u8; UNITE_ADDRESS_LEN],
         endpoints: &[u8],
     ) -> Result<Vec<u8>, MessageError> {
         // buffer
-        let body_len = UNITE_MIN_LEN + endpoints.len() - UNITE_ENDPOINT_LEN;
-        let mut buf = if tx_key.is_some() {
-            Vec::with_capacity(
-                PUBLIC_HEADER_LEN
-                    + PRIVATE_HEADER_ARMED_LEN
-                    + body_len
-                    + XCHACHA20POLY1305_IETF_ABYTES,
-            )
-        } else {
-            Vec::with_capacity(PUBLIC_HEADER_LEN + PRIVATE_HEADER_UNARMED_LEN + body_len)
-        };
+        let buf_len = LONG_HEADER_LEN + UNITE_MIN_LEN + endpoints.len() - UNITE_ENDPOINT_LEN
+            + tx_key.is_some() as usize * ARM_HEADER_LEN;
+        let mut buf = Vec::with_capacity(buf_len);
         unsafe { buf.set_len(buf.capacity()) };
 
-        // public header
-        let (public_header, private_header_and_body_slice) = PublicHeader::write_bytes(
+        // long header
+        let (long_header, body_slice) = LongHeader::write_bytes(
             &mut buf,
             tx_key.is_some(),
             network_id,
             my_pk,
             my_pow,
             recipient,
-        )?;
-        trace!("{}", public_header);
-
-        // private header
-        let armed_len = if public_header.is_armed() {
-            body_len as u16
-        } else {
-            0
-        };
-        let body_slice = PrivateHeader::write_bytes(
-            private_header_and_body_slice,
             MessageType::UNITE,
-            armed_len,
-            public_header,
-            tx_key,
         )?;
+        trace!("> {}", long_header);
 
         // body
-        let (unite, _) =
-            Self::mut_from_prefix(body_slice).map_err(|_| MessageError::BuildUniteMessageFailed)?;
-        unite.address = *address;
-        if public_header.is_armed() {
-            let endpoints_len = unite.endpoints.len();
-            unite.endpoints[..endpoints_len - XCHACHA20POLY1305_IETF_ABYTES]
-                .copy_from_slice(endpoints);
+        let unite = Self::mut_from_bytes(if tx_key.is_some() {
+            &mut body_slice[ARM_HEADER_LEN..]
         } else {
-            unite.endpoints.copy_from_slice(endpoints);
-        }
-        trace!("{}", unite);
+            body_slice
+        })
+        .map_err(|e| MessageError::BuildUniteMessageFailed(e.to_string()))?;
+        unite.address = *address;
+        unite.endpoints.copy_from_slice(endpoints);
+        trace!("> {}", unite);
 
-        if public_header.is_armed() {
+        if tx_key.is_some() {
             // arm body
             if let Some(tx_key) = tx_key {
-                arm_message_body(body_slice, public_header, tx_key)?;
+                arm_message_body(
+                    body_slice,
+                    &long_header.as_bytes()
+                        [LONG_HEADER_MAGIC_NUMBER_LEN + LONG_HEADER_HOP_COUNT_LEN..],
+                    tx_key,
+                )?;
             } else {
                 return Err(MessageError::TxKeyNotPresent);
             }
@@ -1194,50 +1101,52 @@ impl UniteMessage {
     }
 }
 
-fn build_auth_tag(
-    public_header: &[u8; PUBLIC_HEADER_LEN],
-) -> [u8; PUBLIC_HEADER_LEN - PUBLIC_HEADER_MAGIC_NUMBER_LEN] {
-    let mut auth_bytes = [0u8; PUBLIC_HEADER_LEN - PUBLIC_HEADER_MAGIC_NUMBER_LEN];
-
-    // do not include magic number
-
-    // "empty" flags
-    auth_bytes[0] = PUBLIC_HEADER_NONCE_ZERO_HOP_COUNT_ARMED_FLAGS;
-
-    // remaining fields
-    auth_bytes[PUBLIC_HEADER_FLAGS_LEN..].copy_from_slice(
-        &public_header[PUBLIC_HEADER_FLAGS_LEN + PUBLIC_HEADER_MAGIC_NUMBER_LEN..],
-    );
-
-    auth_bytes
-}
-
-fn disarm_message_body(
+pub(crate) fn arm_message_body(
     buf: &mut [u8],
-    public_header: &PublicHeader,
-    rx_key: &[u8; SESSIONKEYBYTES],
+    ad: &[u8],
+    tx_key: &[u8; AEGIS_KEYBYTES],
 ) -> Result<(), MessageError> {
-    let decrypted_body =
-        decrypt(buf, &[], &public_header.nonce, rx_key).map_err(MessageError::DecryptionFailed)?;
-    let unarmed_buf_len = buf.len() - XCHACHA20POLY1305_IETF_ABYTES;
-    buf[..unarmed_buf_len].copy_from_slice(&decrypted_body);
+    let min_len = ARM_HEADER_LEN;
+    if buf.len() < min_len {
+        return Err(MessageError::ArmFailedTooShort(buf.len(), min_len));
+    }
+
+    // split buf
+    let (nonce, remainder) = buf.split_at_mut(AEGIS_NBYTES);
+    let (tag_slice, mc) = remainder.split_at_mut(AEGIS_ABYTES);
+    let nonce: &mut [u8; AEGIS_NBYTES] = nonce.try_into().unwrap();
+    let tag_slice: &mut [u8; AEGIS_ABYTES] = tag_slice.try_into().unwrap();
+
+    // nonce
+    random_bytes(nonce);
+
+    let state = Aegis256X2::<AEGIS_ABYTES>::new(nonce, tx_key);
+    let tag = state.encrypt_in_place(mc, ad);
+    tag_slice.copy_from_slice(&tag);
 
     Ok(())
 }
 
-fn arm_message_body(
+pub(crate) fn disarm_message_body(
     buf: &mut [u8],
-    public_header: &PublicHeader,
-    tx_key: &[u8; SESSIONKEYBYTES],
+    ad: &[u8],
+    rx_key: &[u8; AEGIS_KEYBYTES],
 ) -> Result<(), MessageError> {
-    let encrypted_body = encrypt(
-        &buf[..buf.len() - XCHACHA20POLY1305_IETF_ABYTES],
-        &[],
-        &public_header.nonce,
-        tx_key,
-    )
-    .map_err(MessageError::EncryptionFailed)?;
-    buf.copy_from_slice(&encrypted_body);
+    let min_len = ARM_HEADER_LEN;
+    if buf.len() < min_len {
+        return Err(MessageError::DisarmFailedTooShort(buf.len(), min_len));
+    }
+
+    // split buf
+    let (nonce, remainder) = buf.split_at_mut(AEGIS_NBYTES);
+    let (tag_slice, mc) = remainder.split_at_mut(AEGIS_ABYTES);
+    let nonce: &mut [u8; AEGIS_NBYTES] = nonce.try_into().unwrap();
+    let tag: &mut [u8; AEGIS_ABYTES] = tag_slice.try_into().unwrap();
+
+    let state = Aegis256X2::<AEGIS_ABYTES>::new(nonce, rx_key);
+    state
+        .decrypt_in_place(mc, tag, ad)
+        .map_err(|e| MessageError::DecryptFailed(e.to_string()))?;
 
     Ok(())
 }

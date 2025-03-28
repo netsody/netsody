@@ -2,7 +2,7 @@ use crate::identity::validate_proof_of_work;
 use crate::messages::{Endpoint, HELLO_ENDPOINT_LEN};
 use crate::super_peer::SuperPeerInner;
 use crate::utils::crypto::{
-    CryptoError, ED25519_PUBLICKEYBYTES, SESSIONKEYBYTES, compute_kx_session_keys,
+    AEGIS_KEYBYTES, CryptoError, ED25519_PUBLICKEYBYTES, compute_kx_session_keys,
     convert_ed25519_pk_to_curve22519_pk,
 };
 use crate::utils::hex::bytes_to_hex;
@@ -31,12 +31,12 @@ pub enum PeersError {
 
 #[derive(Debug)]
 struct SessionKeys {
-    tx: [u8; SESSIONKEYBYTES],
-    rx: [u8; SESSIONKEYBYTES],
+    tx: [u8; AEGIS_KEYBYTES],
+    rx: [u8; AEGIS_KEYBYTES],
 }
 
 impl SessionKeys {
-    fn new(keys: ([u8; SESSIONKEYBYTES], [u8; SESSIONKEYBYTES])) -> SessionKeys {
+    fn new(keys: ([u8; AEGIS_KEYBYTES], [u8; AEGIS_KEYBYTES])) -> SessionKeys {
         SessionKeys {
             tx: keys.1,
             rx: keys.0,
@@ -79,9 +79,9 @@ impl Peer {
         })));
     }
 
-    pub(in crate::super_peer) fn is_stale(&self, time: u64, hello_online_timeout: u64) -> bool {
+    pub(in crate::super_peer) fn is_stale(&self, time: u64, hello_timeout: u64) -> bool {
         let age = time - self.last_hello().as_ref().map_or(0, |h| h.time);
-        age > hello_online_timeout
+        age > (hello_timeout * 1_000)
     }
 
     pub(in crate::super_peer) fn contact_candidates(&self) -> Vec<u8> {
@@ -111,11 +111,11 @@ impl Peer {
             .map(|last_hello| (last_hello.prot, last_hello.src))
     }
 
-    pub(in crate::super_peer) fn tx_key(&self) -> Option<&[u8; SESSIONKEYBYTES]> {
+    pub(in crate::super_peer) fn tx_key(&self) -> Option<&[u8; AEGIS_KEYBYTES]> {
         self.session_keys.as_ref().map(|keys| &keys.tx)
     }
 
-    pub(in crate::super_peer) fn rx_key(&self) -> Option<&[u8; SESSIONKEYBYTES]> {
+    pub(in crate::super_peer) fn rx_key(&self) -> Option<&[u8; AEGIS_KEYBYTES]> {
         self.session_keys.as_ref().map(|keys| &keys.rx)
     }
 }
@@ -175,7 +175,7 @@ impl PeersList {
                 &unite_guard,
             );
 
-            if inner.opts.send_unites as u64 > inner.opts.hello_timeout {
+            if inner.opts.send_unites as u64 > (inner.opts.hello_timeout * 1_000) {
                 self.unite_attempts.retain(
                     |(key1, _), _| self.peers.contains_key(key1, &peers_guard),
                     &unite_guard,
@@ -276,7 +276,7 @@ impl fmt::Display for PeersList {
         let guard = self.peers.guard();
         for (key, peer) in self.peers.iter(&guard) {
             // Format endpoints list
-            let src = if let Some((src, prot)) = &peer.endpoint() {
+            let src = if let Some((prot, src)) = &peer.endpoint() {
                 format!("{prot}://{src}")
             } else {
                 String::new()
@@ -288,7 +288,7 @@ impl fmt::Display for PeersList {
                 bytes_to_hex(key),
                 if peer.valid_pow { "ok" } else { "nok" },
                 if let Some(last_hello) = peer.last_hello().as_ref() {
-                    (now - last_hello.time).to_string()
+                    ((now - last_hello.time) / 1_000).to_string()
                 } else {
                     String::new()
                 },
