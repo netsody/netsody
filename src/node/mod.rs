@@ -134,9 +134,6 @@ pub enum NodeError {
     #[error("TCP shutdown error: {0}")]
     TcpShutdownError(io::Error),
 
-    #[error("Recipient unreachable")]
-    RecipientUnreachable,
-
     #[error("Housekeeping failed: {0}")]
     HousekeepingFailed(#[from] JoinError),
 
@@ -729,7 +726,7 @@ impl NodeInner {
 
                     // First try TCP if available
                     if let Some(stream) = super_peer.tcp_stream() {
-                        self.send_super_peer_tcp(&stream, &hello, &peer_key).await?;
+                        self.send_super_peer_tcp(&stream, &hello).await?;
                         super_peer.hello_tx(time);
                     } else {
                         // Fallback to UDP
@@ -826,6 +823,14 @@ impl NodeInner {
 
         // update send handles
         let peers = self.peers_list.peers.pin();
+
+        let default_route = self.peers_list.default_route();
+        let Peer::SuperPeer(super_peer) = peers.get(default_route).unwrap() else {
+            unreachable!()
+        };
+        let sp_tcp_stream = super_peer.tcp_stream();
+        let sp_resolved_addr = *super_peer.resolved_addr();
+
         for (peer_key, handle) in &inner.send_handles.pin_owned() {
             let peer = peers.get(peer_key);
             if let Some(Peer::NodePeer(node_peer)) = peer {
@@ -834,6 +839,8 @@ impl NodeInner {
                     app_tx: node_peer.app_tx.clone(),
                     tx_key: node_peer.tx_key(),
                     short_id: node_peer.tx_short_id(),
+                    sp_tcp_stream: sp_tcp_stream.clone(),
+                    sp_resolved_addr,
                 });
             } else {
                 handle.update_state(SendHandleState {
@@ -841,6 +848,8 @@ impl NodeInner {
                     app_tx: Default::default(),
                     tx_key: None,
                     short_id: None,
+                    sp_tcp_stream: sp_tcp_stream.clone(),
+                    sp_resolved_addr,
                 });
             }
         }
@@ -852,7 +861,6 @@ impl NodeInner {
         &self,
         stream: &Arc<Mutex<OwnedWriteHalf>>,
         msg: &[u8],
-        peer_key: &[u8; ED25519_PUBLICKEYBYTES],
     ) -> Result<TransportProt, NodeError> {
         if (stream.lock().await.write_all(msg).await).is_err() {
             if let Err(e) = stream.lock().await.shutdown().await {
@@ -861,7 +869,7 @@ impl NodeInner {
         }
 
         if log_enabled!(Level::Trace) {
-            trace!("Sent to super peer {} via TCP.", bytes_to_hex(peer_key));
+            trace!("Sent to super peer via TCP.");
         }
         Ok(TCP)
     }
@@ -1021,6 +1029,8 @@ struct SendHandleState {
     app_tx: Arc<AtomicU64>,
     tx_key: Option<[u8; AEGIS_KEYBYTES]>,
     short_id: Option<[u8; 4]>,
+    sp_tcp_stream: Option<Arc<Mutex<OwnedWriteHalf>>>,
+    sp_resolved_addr: SocketAddr,
 }
 
 pub struct SendHandleGuard(Arc<SendHandle>);
@@ -1076,6 +1086,13 @@ impl SendHandle {
             peers.get_or_insert(recipient, Peer::NodePeer(node_peer))
         };
 
+        let default_route = inner.peers_list.default_route();
+        let Peer::SuperPeer(super_peer) = peers.get(default_route).unwrap() else {
+            unreachable!()
+        };
+        let sp_tcp_stream = super_peer.tcp_stream();
+        let sp_resolved_addr = *super_peer.resolved_addr();
+
         if let Peer::NodePeer(node_peer) = peer {
             Ok(Self {
                 inner: inner.clone(),
@@ -1085,6 +1102,8 @@ impl SendHandle {
                     app_tx: node_peer.app_tx.clone(),
                     tx_key: node_peer.tx_key(),
                     short_id: node_peer.tx_short_id(),
+                    sp_tcp_stream,
+                    sp_resolved_addr,
                 }),
             })
         } else {
@@ -1114,6 +1133,9 @@ impl SendHandle {
         let state = self.state();
         let best_addr = state.best_addr;
         let short_id = state.short_id;
+        let sp_tcp_stream = &state.sp_tcp_stream;
+        let sp_resolved_addr = state.sp_resolved_addr;
+
         // TODO: Consider using a buffer pool to avoid repeated allocations.
         let app = if best_addr.is_none() || short_id.is_none() {
             AppMessage::build(
@@ -1160,46 +1182,31 @@ impl SendHandle {
         // get best super peer
         let default_route = self.inner.peers_list.default_route();
 
-        if let Peer::SuperPeer(super_peer) = self
-            .inner
-            .peers_list
-            .peers
-            .pin()
-            .get(default_route)
-            .ok_or(NodeError::PeerNotPresent)?
-        {
-            // First try TCP if available
-            let prot = if let Some(stream) = super_peer.tcp_stream() {
-                self.inner
-                    .send_super_peer_tcp(&stream, &app, default_route)
-                    .await?;
-                TCP
-            } else {
-                let resolved_addr = *super_peer.resolved_addr();
+        // First try TCP if available
+        let prot = if let Some(stream) = sp_tcp_stream {
+            self.inner.send_super_peer_tcp(stream, &app).await?;
+            TCP
+        } else {
+            // Fallback to UDP
+            self.inner
+                .udp_socket
+                .send_to(&app, sp_resolved_addr)
+                .await
+                .map_err(|e| NodeError::UdpSendToError(e, sp_resolved_addr))?;
 
-                // Fallback to UDP
-                self.inner
-                    .udp_socket
-                    .send_to(&app, resolved_addr)
-                    .await
-                    .map_err(|e| NodeError::UdpSendToError(e, resolved_addr))?;
+            UDP
+        };
 
-                UDP
-            };
-
-            if log_enabled!(Level::Debug) {
-                debug!(
-                    "Sent APP to node peer {} via super peer {} via {}.",
-                    bytes_to_hex(&self.recipient),
-                    bytes_to_hex(default_route),
-                    prot,
-                );
-            }
-
-            return Ok(());
+        if log_enabled!(Level::Debug) {
+            debug!(
+                "Sent APP to node peer {} via super peer {} via {}.",
+                bytes_to_hex(&self.recipient),
+                bytes_to_hex(default_route),
+                prot,
+            );
         }
 
-        Err(NodeError::RecipientUnreachable)
+        Ok(())
     }
 }
 
