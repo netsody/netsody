@@ -6,13 +6,12 @@ use drasyl::node::{Node, NodeInner, NodeOptsBuilder};
 use drasyl::super_peer::MTU_DEFAULT;
 use drasyl::utils::crypto::ED25519_PUBLICKEYBYTES;
 use drasyl::utils::hex::hex_to_bytes;
+use flume::Receiver;
 use papaya::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicPtr;
 use tokio::net::UdpSocket;
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
 
 #[allow(clippy::type_complexity)]
 fn create_test_node_rx(
@@ -31,7 +30,7 @@ fn create_test_node_rx(
         let udp_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let udp_socket_addr = udp_socket.local_addr().unwrap();
 
-        let (recv_buf_tx, recv_buf_rx) = mpsc::channel(opts.recv_buf_cap);
+        let (recv_buf_tx, recv_buf_rx) = flume::bounded(opts.recv_buf_cap);
         let peers = HashMap::builder()
             .capacity(opts.max_peers as usize)
             .hasher(RandomState::new())

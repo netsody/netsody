@@ -35,12 +35,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let hello_timeout = system::get_env("HELLO_TIMEOUT", 30 * 1000); // milliseconds
     let hello_max_age = system::get_env("HELLO_MAX_AGE", 60_000); // milliseconds
     let super_peers = system::get_env("SUPER_PEERS", "udp://sp-fkb1.drasyl.org:22527?publicKey=c0900bcfabc493d062ecd293265f571edb70b85313ba4cdda96c9f77163ba62d&networkId=1 udp://sp-rjl1.drasyl.org:22527?publicKey=5b4578909bf0ad3565bb5faf843a9f68b325dd87451f6cb747e49d82f6ce5f4c&networkId=1 udp://sp-nyc1.drasyl.org:22527?publicKey=bf3572dba7ebb6c5ccd037f3a978707b5d7c5a9b9b01b56b4b9bf059af56a4e0&networkId=1 udp://sp-sgp1.drasyl.org:22527?publicKey=ab7a1654d463f9986530bed00569cc895697827b802153b8ef1598579713045f&networkId=1".to_string());
-    let recv_buf_cap = system::get_env("RECV_BUF_CAP", 64); // messages
+    let recv_buf_cap = system::get_env("RECV_BUF_CAP", 512); // messages
     let process_unites = system::get_env("PROCESS_UNITES", true);
     let hello_endpoints = system::get_env("HELLO_ENDPOINTS", String::new());
     let hello_addresses_excluded = system::get_env("HELLO_ADDRESSES_EXCLUDED", ip.to_string());
     let housekeeping_delay = system::get_env("HOUSEKEEPING_DELAY", 5 * 1000); // milliseconds
     let channel_cap = system::get_env("CHANNEL_CAP", 512);
+    let num_threads = system::get_env("NUM_THREADS", 3);
 
     // identity
     let id = Identity::load_or_generate(&identity_file, min_pow_difficulty)
@@ -69,19 +70,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     // bind node
     let node = Node::bind(opts).await.expect("Failed to bind node");
 
-    let num_threads = 2;
-
     let tun_mtu = if arm_messages {
-        1472 - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */
+        1472 - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
     } else {
         1472 - 4 /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
     } as u16;
-    let dev = Arc::new(
-        DeviceBuilder::new()
-            .ipv4(ip, 24, None)
-            .mtu(tun_mtu)
-            .build_async()?,
-    );
+    let dev_builder = DeviceBuilder::new().ipv4(ip, 24, None).mtu(tun_mtu);
+    #[cfg(target_os = "linux")]
+    let dev = Arc::new(dev_builder.multi_queue(true).build_async()?);
+    #[cfg(not(target_os = "linux"))]
+    let dev = Arc::new(dev_builder.build_async()?);
+
     let send_handle = node.send_handle(&peer).expect("Error creating send handle");
 
     let (tun_tx, drasyl_rx) = flume::bounded::<Vec<u8>>(channel_cap);
@@ -96,55 +95,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
     let mut handles = Vec::new();
 
-    // tun -> channel
     for _ in 0..num_threads {
+        // tun -> channel
+        #[cfg(target_os = "linux")]
+        let dev = Arc::new(dev.try_clone().unwrap());
         let dev_clone = dev.clone();
-        let tun_tx_clone = tun_tx.clone();
+
+        let tun_tx = tun_tx.clone();
         handles.push(tokio::spawn(async move {
             let mut buf = vec![0u8; tun_mtu as usize];
             while let Ok(size) = dev_clone.recv(&mut buf).await {
-                tun_tx_clone
+                tun_tx
                     .send_async(buf[..size].to_vec())
                     .await
                     .expect("Error sending message to tun_tx");
             }
         }));
-    }
 
-    // channel -> tun
-    for _ in 0..num_threads {
+        // channel -> tun
         let dev_clone = dev.clone();
-        let tun_rx_clone = tun_rx.clone();
+        let tun_rx = tun_rx.clone();
         handles.push(tokio::spawn(async move {
-            while let Ok(buf) = tun_rx_clone.recv_async().await {
+            while let Ok(buf) = tun_rx.recv_async().await {
                 if let Err(e) = dev_clone.send(&buf).await {
                     eprintln!("Error sending message to tun: {e}");
                 }
             }
         }));
-    }
 
-    // drasyl -> channel
-    for _1 in 0..num_threads {
-        let node_clone = node.clone();
-        let drasyl_tx_clone = drasyl_tx.clone();
+        // drasyl -> channel
+        let node = node.clone();
+        let drasyl_tx = drasyl_tx.clone();
         handles.push(tokio::spawn(async move {
-            while let Ok((buf, _)) = node_clone.recv_from().await {
-                drasyl_tx_clone
+            while let Ok((buf, _)) = node.recv_from().await {
+                drasyl_tx
                     .send_async(buf)
                     .await
                     .expect("Error sending message to drasyl_tx");
             }
         }));
-    }
 
-    // channel -> drasyl
-    for _ in 0..num_threads {
-        let drasyl_rx_clone = drasyl_rx.clone();
-        let send_handle_clone = send_handle.clone();
+        // channel -> drasyl
+        let drasyl_rx = drasyl_rx.clone();
+        let send_handle = send_handle.clone();
         handles.push(tokio::spawn(async move {
-            while let Ok(buf) = drasyl_rx_clone.recv_async().await {
-                send_handle_clone
+            while let Ok(buf) = drasyl_rx.recv_async().await {
+                send_handle
                     .send(&buf)
                     .await
                     .expect("Error sending message to drasyl");

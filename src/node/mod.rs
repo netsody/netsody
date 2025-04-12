@@ -23,6 +23,7 @@ use ahash::RandomState;
 use arc_swap::{ArcSwap, Guard};
 use core::sync::atomic::Ordering::SeqCst;
 use derive_builder::Builder;
+use flume::{Receiver, Sender, TrySendError};
 use log::{Level, debug, error, info, log_enabled, trace, warn};
 use lz4_flex::block::{compress_prepend_size, decompress_size_prepended};
 use murmur3::murmur3_32;
@@ -42,9 +43,7 @@ use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio::task::JoinError;
 
 pub const NETWORK_ID_DEFAULT: i32 = 1;
@@ -111,7 +110,7 @@ pub enum NodeError {
     AckTooOld(u64),
 
     #[error("Recv buf is closed")]
-    RecvBufClosed,
+    RecvBufDisconnected,
 
     #[error("Message type invalid")]
     MessageTypeInvalid,
@@ -600,6 +599,10 @@ impl NodeInner {
     }
 
     fn add_to_recv_buf(&self, sender: [u8; 32], payload: &[u8]) -> Result<(), NodeError> {
+        if log_enabled!(Level::Debug) {
+            debug!("Received APP from {}", bytes_to_hex(&sender));
+        }
+
         let payload = if COMPRESSION {
             decompress_size_prepended(payload).unwrap()
         } else {
@@ -611,7 +614,7 @@ impl NodeInner {
         match tx.try_send((sender, payload)) {
             Ok(_) => {}
             Err(TrySendError::Full(_)) => warn!("Received APP dropped: recv buf full."),
-            Err(TrySendError::Closed(_)) => return Err(NodeError::RecvBufClosed),
+            Err(TrySendError::Disconnected(_)) => return Err(NodeError::RecvBufDisconnected),
         }
 
         Ok(())
@@ -1120,10 +1123,6 @@ impl SendHandle {
     }
 
     pub async fn send(&self, bytes: &[u8]) -> Result<(), NodeError> {
-        if log_enabled!(Level::Debug) {
-            debug!("Send APP to {}", bytes_to_hex(&self.recipient));
-        }
-
         let bytes = if COMPRESSION {
             &compress_prepend_size(bytes)
         } else {
@@ -1213,7 +1212,7 @@ impl SendHandle {
 pub struct Node {
     inner: Arc<NodeInner>,
     #[allow(clippy::type_complexity)]
-    recv_buf_rx: Arc<Mutex<Receiver<([u8; ED25519_PUBLICKEYBYTES], Vec<u8>)>>>,
+    recv_buf_rx: Arc<Receiver<([u8; ED25519_PUBLICKEYBYTES], Vec<u8>)>>,
 }
 
 impl Node {
@@ -1267,7 +1266,7 @@ impl Node {
             as *mut [u8; ED25519_PUBLICKEYBYTES];
         let default_route = AtomicPtr::new(default_key);
 
-        let (recv_buf_tx, recv_buf_rx) = mpsc::channel(opts.recv_buf_cap);
+        let (recv_buf_tx, recv_buf_rx) = flume::bounded(opts.recv_buf_cap);
         let inner = Arc::new(NodeInner::new(
             opts,
             peers,
@@ -1326,20 +1325,18 @@ impl Node {
 
         Ok(Self {
             inner,
-            recv_buf_rx: Arc::new(Mutex::new(recv_buf_rx)),
+            recv_buf_rx: Arc::new(recv_buf_rx),
         })
     }
 
-    pub async fn recv_buf_len(&self) -> usize {
-        // TODO: Instead of locking on every call, we might be able to share a lock between multiple calls to improve performance.
-        self.recv_buf_rx.lock().await.len()
+    pub fn recv_buf_len(&self) -> usize {
+        self.recv_buf_rx.len()
     }
 
     pub async fn recv_from(&self) -> Result<(Vec<u8>, [u8; ED25519_PUBLICKEYBYTES]), NodeError> {
-        // TODO: Instead of locking on every call, we might be able to share a lock between multiple calls to improve performance.
-        match self.recv_buf_rx.lock().await.recv().await {
-            Some((sender, message)) => Ok((message, sender)),
-            None => Err(NodeError::RecvBufClosed),
+        match self.recv_buf_rx.recv_async().await {
+            Ok((sender, message)) => Ok((message, sender)),
+            Err(_) => Err(NodeError::RecvBufDisconnected),
         }
     }
 

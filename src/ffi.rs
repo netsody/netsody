@@ -29,14 +29,13 @@ impl From<NodeError> for c_int {
             NodeError::HelloTooOld(_) => -15,
             NodeError::AckTimeIsInFuture => -16,
             NodeError::AckTooOld(_) => -17,
-            NodeError::RecvBufClosed => -18,
+            NodeError::RecvBufDisconnected => -18,
             NodeError::MessageTypeInvalid => -19,
             NodeError::GetAddrsFailed(_) => -20,
             NodeError::UdpSendToError(_, _) => -21,
             NodeError::UdpLocalAddrError(_) => -22,
             NodeError::PeerNotPresent => -23,
             NodeError::TcpPeerAddrError(_) => -24,
-            NodeError::RecipientUnreachable => -25,
             NodeError::HousekeepingFailed(_) => -26,
             NodeError::HelloEndpointInvalid(_) => -27,
             NodeError::AppLenInvalid(_, _) => -28,
@@ -388,12 +387,7 @@ pub extern "C" fn drasyl_node_bind_free(bind: &mut NodeBind) {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_node_recv_buf_len(bind: &mut NodeBind) -> c_int {
-    match bind
-        .runtime
-        .block_on(async { bind.node.recv_buf_len().await })
-    {
-        len => len as c_int,
-    }
+    bind.node.recv_buf_len() as c_int
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
