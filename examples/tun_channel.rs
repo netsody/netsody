@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         .hello_endpoints(hello_endpoints)
         .hello_addresses_excluded(hello_addresses_excluded)
         .housekeeping_delay(housekeeping_delay)
+        .udp_sockets(num_threads)
         .build()
         .expect("Failed to build node opts");
 

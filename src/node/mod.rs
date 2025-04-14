@@ -59,6 +59,7 @@ pub const RECV_BUF_CAP_DEFAULT: usize = 64; // messages
 pub const MTU_DEFAULT: usize = 1472; // Ethernet MTU (1500) - IPv4 header (20) - UDP header (8)
 pub const PROCESS_UNITES_DEFAULT: bool = true;
 pub const HOUSEKEEPING_DELAY_DEFAULT: u64 = 5 * 1_000; // milliseconds
+pub const UDP_SOCKETS_DEFAULT: usize = 1;
 pub(in crate::node) const DIRECT_LINK_TIMEOUT: u64 = 60_000; // milliseconds
 pub(in crate::node) const RTT_WINDOW_SIZE: usize = 5;
 pub(in crate::node) const DNS_LOOKUP_TIMEOUT: u64 = 2_000; // milliseconds
@@ -203,6 +204,8 @@ pub struct NodeOpts {
     pub hello_addresses_excluded: String,
     #[builder(default = "HOUSEKEEPING_DELAY_DEFAULT")]
     pub housekeeping_delay: u64,
+    #[builder(default = "UDP_SOCKETS_DEFAULT")]
+    pub udp_sockets: usize,
 }
 
 pub struct NodeInner {
@@ -251,10 +254,8 @@ impl NodeInner {
         src: SocketAddr,
         buf: &mut [u8],
         response_buf: &mut [u8],
-        udp_socket: &Arc<UdpSocket>,
     ) -> Result<(), NodeError> {
-        self.on_packet(src, UDP, buf, response_buf, Some(udp_socket))
-            .await
+        self.on_packet(src, UDP, buf, response_buf).await
     }
 
     pub async fn on_tcp_segment(
@@ -263,7 +264,7 @@ impl NodeInner {
         buf: &mut [u8],
         response_buf: &mut [u8],
     ) -> Result<(), NodeError> {
-        self.on_packet(src, TCP, buf, response_buf, None).await
+        self.on_packet(src, TCP, buf, response_buf).await
     }
 
     pub(in crate::node) async fn on_packet(
@@ -272,7 +273,6 @@ impl NodeInner {
         prot: TransportProt,
         buf: &mut [u8],
         response_buf: &mut [u8],
-        udp_socket: Option<&Arc<UdpSocket>>,
     ) -> Result<(), NodeError> {
         trace!("Got packet from src {}://{}", prot, src);
 
@@ -1282,12 +1282,12 @@ impl Node {
         };
 
         // start udp servers
-        let num_udp = 3;
-        let mut udp_sockets = Vec::with_capacity(num_udp);
+        let num_udp_sockets = opts.udp_sockets;
+        let mut udp_sockets = Vec::with_capacity(num_udp_sockets);
         let local_addr = Self::derive_udp_port(&opts.udp_listen, &opts.id.pk)
             .parse()
             .map_err(NodeError::BindParseError)?;
-        for _ in 0..num_udp {
+        for _ in 0..num_udp_sockets {
             let udp_socket = Self::new_udp_reuseport(local_addr).map_err(NodeError::BindError)?;
             udp_sockets.push(Arc::new(udp_socket));
         }
@@ -1361,7 +1361,7 @@ impl Node {
         });
 
         // udp servers
-        for i in 0..num_udp {
+        for i in 0..num_udp_sockets {
             let udp_inner = inner.clone();
             tokio::spawn(async move {
                 let mut buf = vec![0u8; udp_inner.opts.mtu];
@@ -1379,7 +1379,7 @@ impl Node {
 
                     // process datagram
                     if let Err(e) = udp_inner
-                        .on_udp_datagram(src, &mut buf[..size], &mut response_buf, udp_socket)
+                        .on_udp_datagram(src, &mut buf[..size], &mut response_buf)
                         .await
                     {
                         error!("Error processing packet: {}", e);

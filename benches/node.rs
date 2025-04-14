@@ -111,7 +111,7 @@ fn benchmark_node(c: &mut Criterion) {
                 let mut response_buf = vec![0u8; MTU_DEFAULT];
                 black_box(
                     node_rx
-                        .on_udp_datagram(src, &mut app, &mut response_buf, udp_socket)
+                        .on_udp_datagram(src, &mut app, &mut response_buf)
                         .await,
                 )
             })
