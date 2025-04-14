@@ -19,7 +19,7 @@ use crate::utils::crypto::{
 use crate::utils::hex::{bytes_to_hex, hex_to_bytes};
 use crate::utils::net;
 use crate::utils::net::get_addrs;
-use ahash::RandomState;
+use ahash::{AHasher, RandomState};
 use arc_swap::{ArcSwap, Guard};
 use core::sync::atomic::Ordering::SeqCst;
 use derive_builder::Builder;
@@ -30,9 +30,10 @@ use murmur3::murmur3_32;
 use net::listening_addrs;
 use papaya::HashMap;
 use std::collections::{HashMap as StdHashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::Cursor;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{AddrParseError, IpAddr, SocketAddr};
 use std::ops::Deref;
 use std::str::FromStr;
 use std::string::ToString;
@@ -61,6 +62,7 @@ pub const HOUSEKEEPING_DELAY_DEFAULT: u64 = 5 * 1_000; // milliseconds
 pub(in crate::node) const DIRECT_LINK_TIMEOUT: u64 = 60_000; // milliseconds
 pub(in crate::node) const RTT_WINDOW_SIZE: usize = 5;
 pub(in crate::node) const DNS_LOOKUP_TIMEOUT: u64 = 2_000; // milliseconds
+const MIN_DERIVED_PORT: u16 = 22528;
 
 #[derive(Debug, Error)]
 pub enum NodeError {
@@ -75,6 +77,9 @@ pub enum NodeError {
 
     #[error("Crypto error: {0}")]
     CryptoError(#[from] CryptoError),
+
+    #[error("Bind parse error: {0}")]
+    BindParseError(AddrParseError),
 
     #[error("Bind error: {0}")]
     BindError(io::Error),
@@ -204,7 +209,7 @@ pub struct NodeInner {
     pub(in crate::node) opts: NodeOpts,
     coarse_timer: AtomicU64,
     peers_list: PeersList,
-    udp_socket: UdpSocket,
+    pub udp_sockets: Vec<Arc<UdpSocket>>,
     udp_socket_addr: SocketAddr,
     recv_buf_tx: Sender<([u8; ED25519_PUBLICKEYBYTES], Vec<u8>)>,
     agreement_sk: Option<[u8; CURVE25519_SECRETKEYBYTES]>,
@@ -222,7 +227,7 @@ impl NodeInner {
         agreement_sk: Option<[u8; CURVE25519_SECRETKEYBYTES]>,
         agreement_pk: Option<[u8; CURVE25519_PUBLICKEYBYTES]>,
         default_route: AtomicPtr<[u8; ED25519_PUBLICKEYBYTES]>,
-        udp_socket: UdpSocket,
+        udp_sockets: Vec<Arc<UdpSocket>>,
         udp_socket_addr: SocketAddr,
         recv_buf_tx: Sender<([u8; ED25519_PUBLICKEYBYTES], Vec<u8>)>,
     ) -> Self {
@@ -232,7 +237,7 @@ impl NodeInner {
             opts,
             coarse_timer: AtomicU64::new(Self::clock()),
             peers_list: peers,
-            udp_socket,
+            udp_sockets,
             udp_socket_addr,
             recv_buf_tx,
             agreement_sk,
@@ -246,8 +251,9 @@ impl NodeInner {
         src: SocketAddr,
         buf: &mut [u8],
         response_buf: &mut [u8],
+        udp_socket: &Arc<UdpSocket>,
     ) -> Result<(), NodeError> {
-        self.on_packet(src, UDP, buf, response_buf).await
+        self.on_packet(src, UDP, buf, response_buf, Some(udp_socket)).await
     }
 
     pub async fn on_tcp_segment(
@@ -256,7 +262,7 @@ impl NodeInner {
         buf: &mut [u8],
         response_buf: &mut [u8],
     ) -> Result<(), NodeError> {
-        self.on_packet(src, TCP, buf, response_buf).await
+        self.on_packet(src, TCP, buf, response_buf, None).await
     }
 
     pub(in crate::node) async fn on_packet(
@@ -265,8 +271,15 @@ impl NodeInner {
         prot: TransportProt,
         buf: &mut [u8],
         response_buf: &mut [u8],
+        udp_socket: Option<&Arc<UdpSocket>>,
     ) -> Result<(), NodeError> {
         trace!("Got packet from src {}://{}", prot, src);
+
+        // if let Some(udp_socket) = udp_socket {
+        //     if let Some(index) = self.udp_sockets.iter().position(|x| std::ptr::eq(x, udp_socket)) {
+        //         println!("< UdpSocket: {index}; src: {src}");
+        //     }
+        // }
 
         {
             // short header
@@ -297,7 +310,7 @@ impl NodeInner {
 
         // recipient
         if long_header.recipient == self.opts.id.pk {
-            let mut send_queue: Vec<(Vec<u8>, SocketAddr)> = Vec::new();
+            let mut send_queue: Vec<(Vec<u8>, SocketAddr, Arc<UdpSocket>)> = Vec::new();
             {
                 let peers = self.peers_list.peers.pin();
                 let peer = if let Some(peer) = peers.get(&long_header.sender) {
@@ -409,7 +422,7 @@ impl NodeInner {
                                             )?;
 
                                             // queue HELLO and sent it later, otherwise entry lock is held across an async call
-                                            send_queue.push((hello, *endpoint_addr));
+                                            send_queue.push((hello, *endpoint_addr, self.udp_socket_for(&unite.address, Some(endpoint_addr))));
 
                                             candidate.hello_tx(time);
                                         }
@@ -497,7 +510,7 @@ impl NodeInner {
 
                                 // queue HELLO and sent it later, otherwise entry lock is held across an async call
                                 // TODO: avoid to_vec clone!
-                                send_queue.push((response_buf[..ack_len].to_vec(), src));
+                                send_queue.push((response_buf[..ack_len].to_vec(), src, self.udp_socket_for(&long_header.sender, Some(&src))));
 
                                 // HELLO from unknown endpoint? peer might be behind symmetric NAT
                                 #[allow(clippy::map_entry)]
@@ -517,7 +530,7 @@ impl NodeInner {
                                         time,
                                         node_peer.rx_short_id(),
                                     )?;
-                                    send_queue.push((hello, src));
+                                    send_queue.push((hello, src, self.udp_socket_for(&long_header.sender, Some(&src))));
                                 }
                             }
                             Ok(MessageType::UNITE) => {
@@ -531,8 +544,8 @@ impl NodeInner {
             }
 
             // process send queue
-            for (msg, dst) in send_queue {
-                if let Err(e) = self.udp_socket.send_to(&msg, dst).await {
+            for (msg, dst, udp_socket) in send_queue {
+                if let Err(e) = udp_socket.send_to(&msg, dst).await {
                     debug!("Failed to send msg to udp://{}: {}", dst, e);
                     continue;
                 } else if log_enabled!(Level::Trace) {
@@ -741,7 +754,13 @@ impl NodeInner {
                         super_peer.hello_tx(time);
                         let dst = *super_peer.resolved_addr();
 
-                        if let Err(e) = inner.udp_socket.send_to(&hello, dst).await {
+                        if let Err(e) = inner
+                            .udp_sockets
+                            .last()
+                            .unwrap()
+                            .send_to(&hello, dst)
+                            .await
+                        {
                             debug!("Failed to send HELLO to super peer udp://{}: {}", dst, e);
                             continue;
                         } else if log_enabled!(Level::Trace) {
@@ -793,7 +812,13 @@ impl NodeInner {
                             let dst = *endpoint_addr;
                             candidate.hello_tx(time);
 
-                            if let Err(e) = inner.udp_socket.send_to(&hello, dst).await {
+                            if let Err(e) = inner
+                                .udp_sockets
+                                .last()
+                                .unwrap()
+                                .send_to(&hello, dst)
+                                .await
+                            {
                                 debug!("Failed to send HELLO to node peer udp://{}: {}", dst, e);
                                 continue;
                             } else if log_enabled!(Level::Trace) {
@@ -841,15 +866,19 @@ impl NodeInner {
         for (peer_key, handle) in &inner.send_handles.pin_owned() {
             let peer = peers.get(peer_key);
             if let Some(Peer::NodePeer(node_peer)) = peer {
+                let best_addr = node_peer.best_addr();
+                let udp_socket = inner.udp_socket_for(peer_key, best_addr);
                 handle.update_state(SendHandleState {
-                    best_addr: node_peer.best_addr().copied(),
+                    best_addr: best_addr.copied(),
                     app_tx: node_peer.app_tx.clone(),
                     tx_key: node_peer.tx_key(),
                     short_id: node_peer.tx_short_id(),
                     sp_tcp_stream: sp_tcp_stream.clone(),
                     sp_resolved_addr,
+                    udp_socket,
                 });
             } else {
+                let udp_socket = inner.udp_socket_for(peer_key, None);
                 handle.update_state(SendHandleState {
                     best_addr: None,
                     app_tx: Default::default(),
@@ -857,6 +886,7 @@ impl NodeInner {
                     short_id: None,
                     sp_tcp_stream: sp_tcp_stream.clone(),
                     sp_resolved_addr,
+                    udp_socket,
                 });
             }
         }
@@ -1021,6 +1051,23 @@ impl NodeInner {
         Ok(my_addrs)
     }
 
+    fn udp_socket_for(&self, key: &[u8; ED25519_PUBLICKEYBYTES], addr: Option<&SocketAddr>) -> Arc<UdpSocket> {
+        let sockets_len = self.udp_sockets.len();
+        let udp_socket = if sockets_len == 1 {
+            self.udp_sockets.first()
+        }
+        else {
+            let mut hasher = AHasher::default();
+            key.hash(&mut hasher);
+            addr.hash(&mut hasher);
+            let index = (hasher.finish() % sockets_len as u64) as usize;
+            // println!("> UdpSocket: {index}; src: {:?}", addr);
+            self.udp_sockets.get(index)
+        };
+
+        udp_socket.unwrap().clone()
+    }
+
     pub(in crate::node) fn clock() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1029,8 +1076,6 @@ impl NodeInner {
     }
 }
 
-const MIN_DERIVED_PORT: u16 = 22528;
-
 struct SendHandleState {
     best_addr: Option<SocketAddr>,
     app_tx: Arc<AtomicU64>,
@@ -1038,6 +1083,7 @@ struct SendHandleState {
     short_id: Option<[u8; 4]>,
     sp_tcp_stream: Option<Arc<Mutex<OwnedWriteHalf>>>,
     sp_resolved_addr: SocketAddr,
+    udp_socket: Arc<UdpSocket>,
 }
 
 pub struct SendHandleGuard(Arc<SendHandle>);
@@ -1101,16 +1147,18 @@ impl SendHandle {
         let sp_resolved_addr = *super_peer.resolved_addr();
 
         if let Peer::NodePeer(node_peer) = peer {
+            let best_addr = node_peer.best_addr();
             Ok(Self {
                 inner: inner.clone(),
                 recipient,
                 state_ptr: ArcSwap::from_pointee(SendHandleState {
-                    best_addr: node_peer.best_addr().copied(),
+                    best_addr: best_addr.copied(),
                     app_tx: node_peer.app_tx.clone(),
                     tx_key: node_peer.tx_key(),
                     short_id: node_peer.tx_short_id(),
                     sp_tcp_stream,
                     sp_resolved_addr,
+                    udp_socket: inner.udp_socket_for(&recipient, best_addr).clone(),
                 }),
             })
         } else {
@@ -1138,6 +1186,7 @@ impl SendHandle {
         let short_id = state.short_id;
         let sp_tcp_stream = &state.sp_tcp_stream;
         let sp_resolved_addr = state.sp_resolved_addr;
+        let udp_socket = &state.udp_socket;
 
         // TODO: Consider using a buffer pool to avoid repeated allocations.
         let app = if best_addr.is_none() || short_id.is_none() {
@@ -1164,8 +1213,7 @@ impl SendHandle {
 
         // direct link?
         if let Some(my_addr) = state.best_addr {
-            self.inner
-                .udp_socket
+            udp_socket
                 .send_to(&app, my_addr)
                 .await
                 .map_err(|e| NodeError::UdpSendToError(e, my_addr))?;
@@ -1191,8 +1239,7 @@ impl SendHandle {
             TCP
         } else {
             // Fallback to UDP
-            self.inner
-                .udp_socket
+            udp_socket
                 .send_to(&app, sp_resolved_addr)
                 .await
                 .map_err(|e| NodeError::UdpSendToError(e, sp_resolved_addr))?;
@@ -1231,11 +1278,20 @@ impl Node {
             (None, None)
         };
 
-        // start udp server
-        let udp_socket = UdpSocket::bind(Self::derive_udp_port(&opts.udp_listen, &opts.id.pk))
-            .await
-            .map_err(NodeError::BindError)?;
-        let udp_socket_addr = udp_socket
+        // start udp servers
+        let num_udp = 3;
+        let mut udp_sockets = Vec::with_capacity(num_udp);
+        let local_addr = Self::derive_udp_port(&opts.udp_listen, &opts.id.pk)
+            .parse()
+            .map_err(NodeError::BindParseError)?;
+        for _ in 0..num_udp {
+            let udp_socket = Self::new_udp_reuseport(local_addr).map_err(NodeError::BindError)?;
+            udp_sockets.push(Arc::new(udp_socket));
+        }
+
+        let udp_socket_addr = udp_sockets
+            .first()
+            .unwrap()
             .local_addr()
             .map_err(NodeError::UdpLocalAddrError)?;
         info!("Bound UDP server to {}", udp_socket_addr);
@@ -1277,7 +1333,7 @@ impl Node {
             agreement_sk,
             agreement_pk,
             default_route,
-            udp_socket,
+            udp_sockets,
             udp_socket_addr,
             recv_buf_tx,
         ));
@@ -1301,31 +1357,34 @@ impl Node {
             }
         });
 
-        // udp server
-        let udp_inner = inner.clone();
-        tokio::spawn(async move {
-            let mut buf = vec![0u8; udp_inner.opts.mtu];
-            let mut response_buf = vec![0u8; udp_inner.opts.mtu];
-            loop {
-                // read datagram
-                let (size, src) = match udp_inner.udp_socket.recv_from(&mut buf).await {
-                    Ok(result) => result,
-                    Err(e) => {
-                        error!("Error receiving datagram: {}", e);
+        // udp servers
+        for i in 0..num_udp {
+            let udp_inner = inner.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; udp_inner.opts.mtu];
+                let mut response_buf = vec![0u8; udp_inner.opts.mtu];
+                loop {
+                    // read datagram
+                    let udp_socket = udp_inner.udp_sockets.get(i).unwrap();
+                    let (size, src) = match udp_socket.recv_from(&mut buf).await {
+                        Ok(result) => result,
+                        Err(e) => {
+                            error!("Error receiving datagram: {}", e);
+                            continue;
+                        }
+                    };
+
+                    // process datagram
+                    if let Err(e) = udp_inner
+                        .on_udp_datagram(src, &mut buf[..size], &mut response_buf, udp_socket)
+                        .await
+                    {
+                        error!("Error processing packet: {}", e);
                         continue;
                     }
-                };
-
-                // process datagram
-                if let Err(e) = udp_inner
-                    .on_udp_datagram(src, &mut buf[..size], &mut response_buf)
-                    .await
-                {
-                    error!("Error processing packet: {}", e);
-                    continue;
                 }
-            }
-        });
+            });
+        }
 
         Ok(Self {
             inner,
@@ -1392,6 +1451,26 @@ impl Node {
             }
             _ => udp_listen.to_owned(),
         }
+    }
+
+    // from phantun/phantun/src/utils.rs
+    fn new_udp_reuseport(local_addr: SocketAddr) -> Result<UdpSocket, io::Error> {
+        let udp_sock = socket2::Socket::new(
+            if local_addr.is_ipv4() {
+                socket2::Domain::IPV4
+            } else {
+                socket2::Domain::IPV6
+            },
+            socket2::Type::DGRAM,
+            None,
+        )
+        .unwrap();
+        udp_sock.set_reuse_port(true).unwrap();
+        udp_sock.set_cloexec(true).unwrap();
+        udp_sock.set_nonblocking(true).unwrap();
+        udp_sock.bind(&socket2::SockAddr::from(local_addr)).unwrap();
+        let udp_sock: std::net::UdpSocket = udp_sock.into();
+        udp_sock.try_into()
     }
 }
 

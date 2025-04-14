@@ -544,6 +544,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "ring",
+ "socket2",
  "thiserror",
  "tokio",
  "tun-rs",

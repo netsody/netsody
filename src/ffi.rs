@@ -18,7 +18,7 @@ impl From<NodeError> for c_int {
             NodeError::MessageError(_) => -3,
             NodeError::PeersError(_) => -4,
             NodeError::CryptoError(_) => -5,
-            NodeError::BindError(_) => -6,
+            NodeError::BindParseError(_) => -6,
             NodeError::NetworkIdInvalid(_) => -7,
             NodeError::PowInvalid => -8,
             NodeError::MessageUnarmed => -9,
@@ -47,6 +47,7 @@ impl From<NodeError> for c_int {
             NodeError::SuperPeerResolveEmpty => -37,
             NodeError::SuperPeerResolveWrongFamily => -38,
             NodeError::SendHandleAlreadyCreated => -39,
+            NodeError::BindError(_) => -40,
         }
     }
 }

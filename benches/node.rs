@@ -9,6 +9,7 @@ use drasyl::utils::hex::hex_to_bytes;
 use flume::Receiver;
 use papaya::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::sync::atomic::AtomicPtr;
 use tokio::net::UdpSocket;
 use tokio::runtime::Runtime;
@@ -27,8 +28,8 @@ fn create_test_node_rx(
             .build()
             .unwrap();
 
-        let udp_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let udp_socket_addr = udp_socket.local_addr().unwrap();
+        let udp_sockets = vec![Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap())];
+        let udp_socket_addr = udp_sockets.first().unwrap().local_addr().unwrap();
 
         let (recv_buf_tx, recv_buf_rx) = flume::bounded(opts.recv_buf_cap);
         let peers = HashMap::builder()
@@ -42,7 +43,7 @@ fn create_test_node_rx(
                 None,
                 None,
                 AtomicPtr::default(),
-                udp_socket,
+                udp_sockets,
                 udp_socket_addr,
                 recv_buf_tx,
             ),
@@ -99,6 +100,7 @@ fn benchmark_node(c: &mut Criterion) {
     let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
     let bytes = vec![0u8; 1024];
     let mut app = create_app(&network_id, &id_2.pk, &id_2.pow, &id_1.pk);
+    let udp_socket = node_rx.udp_sockets.first().unwrap();
 
     let runtime = Runtime::new().unwrap();
     let mut group = c.benchmark_group("node");
@@ -109,7 +111,7 @@ fn benchmark_node(c: &mut Criterion) {
                 let mut response_buf = vec![0u8; MTU_DEFAULT];
                 black_box(
                     node_rx
-                        .on_udp_datagram(src, &mut app, &mut response_buf)
+                        .on_udp_datagram(src, &mut app, &mut response_buf, udp_socket)
                         .await,
                 )
             })
