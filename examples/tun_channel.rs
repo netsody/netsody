@@ -4,7 +4,8 @@ use drasyl::node::{Node, NodeOptsBuilder};
 use drasyl::utils::crypto::ED25519_PUBLICKEYBYTES;
 use drasyl::utils::hex::{bytes_to_hex, hex_to_bytes};
 use drasyl::utils::system;
-use log::info;
+use etherparse::Ipv4HeaderSlice;
+use log::{info, warn};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tun_rs::DeviceBuilder;
@@ -20,11 +21,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         )
         .as_str(),
     );
-    println!("peer : {}", bytes_to_hex(&peer));
     let ip: Ipv4Addr = format!("10.0.0.{}", system::get_env("IP", 1))
         .parse()
         .expect("Invalid IPv4 address"); // milliseconds
     println!("ip   : {ip}");
+    println!("peer : {}", bytes_to_hex(&peer));
+    let peer_ip = match ip.octets()[3] {
+        1 => Ipv4Addr::new(10, 0, 0, 2),
+        _ => Ipv4Addr::new(10, 0, 0, 1),
+    };
 
     let identity_file = system::get_env("IDENTITY_FILE", "node.identity".to_string());
     let network_id = system::get_env("NETWORK_ID", 1i32).to_be_bytes();
@@ -105,10 +110,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         handles.push(tokio::spawn(async move {
             let mut buf = vec![0u8; tun_mtu as usize];
             while let Ok(size) = dev_clone.recv(&mut buf).await {
-                tun_tx
-                    .send_async(buf[..size].to_vec())
-                    .await
-                    .expect("Error sending message to tun_tx");
+                match Ipv4HeaderSlice::from_slice(&buf[..size]) {
+                    Ok(ip_header)
+                        if ip_header.source_addr().eq(&ip)
+                            && ip_header.destination_addr().eq(&peer_ip) =>
+                    {
+                        // println!("READ https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf[..size]));
+                        match tun_tx.try_send(buf[..size].to_vec()) {
+                            Ok(_) => {}
+                            Err(e) => warn!("Failed to send to tun_rx: {:?}", e),
+                        }
+                    }
+                    Ok(ip_header) => {
+                        println!("Source: {}", ip_header.source_addr());
+                        println!("Destination: {}", ip_header.destination_addr());
+                        println!("Protocol: {:?}", ip_header.protocol());
+                    }
+                    Err(e) => {
+                        eprintln!("Fehler beim Parsen: {e:?}");
+                    }
+                }
             }
         }));
 
@@ -117,8 +138,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         let tun_rx = tun_rx.clone();
         handles.push(tokio::spawn(async move {
             while let Ok(buf) = tun_rx.recv_async().await {
-                if let Err(e) = dev_clone.send(&buf).await {
-                    eprintln!("Error sending message to tun: {e}");
+                match Ipv4HeaderSlice::from_slice(&buf) {
+                    Ok(ip_header)
+                        if ip_header.source_addr().eq(&peer_ip)
+                            && ip_header.destination_addr().eq(&ip) =>
+                    {
+                        // println!("SEND https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf));
+                        if let Err(e) = dev_clone.send(&buf).await {
+                            eprintln!("Error sending message to tun: {e}");
+                        }
+                    }
+                    Ok(ip_header) => {
+                        println!("Source: {}", ip_header.source_addr());
+                        println!("Destination: {}", ip_header.destination_addr());
+                        println!("Protocol: {:?}", ip_header.protocol());
+                    }
+                    Err(e) => {
+                        eprintln!("Fehler beim Parsen: {e:?}");
+                    }
                 }
             }
         }));
@@ -128,10 +165,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         let drasyl_tx = drasyl_tx.clone();
         handles.push(tokio::spawn(async move {
             while let Ok((buf, _)) = node.recv_from().await {
-                drasyl_tx
-                    .send_async(buf)
-                    .await
-                    .expect("Error sending message to drasyl_tx");
+                match drasyl_tx.try_send(buf) {
+                    Ok(_) => {}
+                    Err(e) => warn!("Failed to send to drasyl_tx: {:?}", e),
+                }
             }
         }));
 
