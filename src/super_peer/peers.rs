@@ -80,7 +80,12 @@ impl Peer {
     }
 
     pub(in crate::super_peer) fn is_stale(&self, time: u64, hello_timeout: u64) -> bool {
-        let age = time - self.last_hello().as_ref().map_or(0, |h| h.time);
+        let mut last_hello_time = self.last_hello().as_ref().map_or(0, |h| h.time);
+        if time < last_hello_time {
+            // TODO: This can be removed once we've switched to a monotonically increasing time source.
+            last_hello_time = time;
+        }
+        let age = time - last_hello_time;
         age > (hello_timeout * 1_000)
     }
 
