@@ -253,7 +253,8 @@ impl NodeInner {
         response_buf: &mut [u8],
         udp_socket: &Arc<UdpSocket>,
     ) -> Result<(), NodeError> {
-        self.on_packet(src, UDP, buf, response_buf, Some(udp_socket)).await
+        self.on_packet(src, UDP, buf, response_buf, Some(udp_socket))
+            .await
     }
 
     pub async fn on_tcp_segment(
@@ -274,12 +275,6 @@ impl NodeInner {
         udp_socket: Option<&Arc<UdpSocket>>,
     ) -> Result<(), NodeError> {
         trace!("Got packet from src {}://{}", prot, src);
-
-        // if let Some(udp_socket) = udp_socket {
-        //     if let Some(index) = self.udp_sockets.iter().position(|x| std::ptr::eq(x, udp_socket)) {
-        //         println!("< UdpSocket: {index}; src: {src}");
-        //     }
-        // }
 
         {
             // short header
@@ -422,7 +417,14 @@ impl NodeInner {
                                             )?;
 
                                             // queue HELLO and sent it later, otherwise entry lock is held across an async call
-                                            send_queue.push((hello, *endpoint_addr, self.udp_socket_for(&unite.address, Some(endpoint_addr))));
+                                            send_queue.push((
+                                                hello,
+                                                *endpoint_addr,
+                                                self.udp_socket_for(
+                                                    &unite.address,
+                                                    Some(endpoint_addr),
+                                                ),
+                                            ));
 
                                             candidate.hello_tx(time);
                                         }
@@ -510,7 +512,11 @@ impl NodeInner {
 
                                 // queue HELLO and sent it later, otherwise entry lock is held across an async call
                                 // TODO: avoid to_vec clone!
-                                send_queue.push((response_buf[..ack_len].to_vec(), src, self.udp_socket_for(&long_header.sender, Some(&src))));
+                                send_queue.push((
+                                    response_buf[..ack_len].to_vec(),
+                                    src,
+                                    self.udp_socket_for(&long_header.sender, Some(&src)),
+                                ));
 
                                 // HELLO from unknown endpoint? peer might be behind symmetric NAT
                                 #[allow(clippy::map_entry)]
@@ -530,7 +536,11 @@ impl NodeInner {
                                         time,
                                         node_peer.rx_short_id(),
                                     )?;
-                                    send_queue.push((hello, src, self.udp_socket_for(&long_header.sender, Some(&src))));
+                                    send_queue.push((
+                                        hello,
+                                        src,
+                                        self.udp_socket_for(&long_header.sender, Some(&src)),
+                                    ));
                                 }
                             }
                             Ok(MessageType::UNITE) => {
@@ -754,12 +764,7 @@ impl NodeInner {
                         super_peer.hello_tx(time);
                         let dst = *super_peer.resolved_addr();
 
-                        if let Err(e) = inner
-                            .udp_sockets
-                            .last()
-                            .unwrap()
-                            .send_to(&hello, dst)
-                            .await
+                        if let Err(e) = inner.udp_sockets.last().unwrap().send_to(&hello, dst).await
                         {
                             debug!("Failed to send HELLO to super peer udp://{}: {}", dst, e);
                             continue;
@@ -812,12 +817,8 @@ impl NodeInner {
                             let dst = *endpoint_addr;
                             candidate.hello_tx(time);
 
-                            if let Err(e) = inner
-                                .udp_sockets
-                                .last()
-                                .unwrap()
-                                .send_to(&hello, dst)
-                                .await
+                            if let Err(e) =
+                                inner.udp_sockets.last().unwrap().send_to(&hello, dst).await
                             {
                                 debug!("Failed to send HELLO to node peer udp://{}: {}", dst, e);
                                 continue;
@@ -1051,17 +1052,19 @@ impl NodeInner {
         Ok(my_addrs)
     }
 
-    fn udp_socket_for(&self, key: &[u8; ED25519_PUBLICKEYBYTES], addr: Option<&SocketAddr>) -> Arc<UdpSocket> {
+    fn udp_socket_for(
+        &self,
+        key: &[u8; ED25519_PUBLICKEYBYTES],
+        addr: Option<&SocketAddr>,
+    ) -> Arc<UdpSocket> {
         let sockets_len = self.udp_sockets.len();
         let udp_socket = if sockets_len == 1 {
             self.udp_sockets.first()
-        }
-        else {
+        } else {
             let mut hasher = AHasher::default();
             key.hash(&mut hasher);
             addr.hash(&mut hasher);
             let index = (hasher.finish() % sockets_len as u64) as usize;
-            // println!("> UdpSocket: {index}; src: {:?}", addr);
             self.udp_sockets.get(index)
         };
 

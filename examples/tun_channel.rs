@@ -100,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
     let mut handles = Vec::new();
 
+    #[allow(unused_variables)]
     for i in 0..num_threads {
         // tun -> channel
         #[cfg(target_os = "linux")]
