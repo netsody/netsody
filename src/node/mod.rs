@@ -162,6 +162,9 @@ pub enum NodeError {
 
     #[error("Send handle for peer already exist")]
     SendHandleAlreadyCreated,
+
+    #[error("Short id received after peer removal")]
+    ShortIdOutdated,
 }
 
 #[derive(Clone, Builder)]
@@ -278,7 +281,8 @@ impl NodeInner {
 
                     return self.add_to_recv_buf(*sender, payload);
                 } else {
-                    unreachable!()
+                    warn!("Drop package with short header we no longer can match to a peer");
+                    return Err(NodeError::ShortIdOutdated);
                 }
             }
         }
