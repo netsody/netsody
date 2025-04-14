@@ -100,10 +100,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
     let mut handles = Vec::new();
 
-    for _ in 0..num_threads {
+    for i in 0..num_threads {
         // tun -> channel
         #[cfg(target_os = "linux")]
-        let dev = Arc::new(dev.try_clone().unwrap());
+        let dev = if i == 0 {
+            dev.clone()
+        } else {
+            Arc::new(dev.try_clone().unwrap())
+        };
         let dev_clone = dev.clone();
 
         let tun_tx = tun_tx.clone();
@@ -115,20 +119,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
                         if ip_header.source_addr().eq(&ip)
                             && ip_header.destination_addr().eq(&peer_ip) =>
                     {
-                        // println!("READ https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf[..size]));
+                        // eprintln!("READ https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf[..size]));
                         match tun_tx.try_send(buf[..size].to_vec()) {
                             Ok(_) => {}
                             Err(e) => warn!("Failed to send to tun_rx: {:?}", e),
                         }
                     }
                     Ok(ip_header) => {
-                        println!("Source: {}", ip_header.source_addr());
-                        println!("Destination: {}", ip_header.destination_addr());
-                        println!("Protocol: {:?}", ip_header.protocol());
+                        eprintln!(
+                            "Dropping unroutable packet: src={}, dst={}",
+                            ip_header.source_addr(),
+                            ip_header.destination_addr()
+                        );
                     }
-                    Err(e) => {
-                        eprintln!("Fehler beim Parsen: {e:?}");
-                    }
+                    Err(_) => {}
                 }
             }
         }));
@@ -143,19 +147,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
                         if ip_header.source_addr().eq(&peer_ip)
                             && ip_header.destination_addr().eq(&ip) =>
                     {
-                        // println!("SEND https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf));
+                        // eprintln!("SEND https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf));
                         if let Err(e) = dev_clone.send(&buf).await {
                             eprintln!("Error sending message to tun: {e}");
                         }
                     }
                     Ok(ip_header) => {
-                        println!("Source: {}", ip_header.source_addr());
-                        println!("Destination: {}", ip_header.destination_addr());
-                        println!("Protocol: {:?}", ip_header.protocol());
+                        eprintln!(
+                            "Dropping unroutable packet: src={}, dst={}",
+                            ip_header.source_addr(),
+                            ip_header.destination_addr()
+                        );
                     }
-                    Err(e) => {
-                        eprintln!("Fehler beim Parsen: {e:?}");
-                    }
+                    Err(_) => {}
                 }
             }
         }));
