@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let mut handles = Vec::new();
 
     #[allow(unused_variables)]
-    for i in 0..num_threads {
+    for i in 0..3 {
         // tun -> channel
         #[cfg(target_os = "linux")]
         let dev = if i == 0 {
@@ -113,82 +113,125 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         let dev_clone = dev.clone();
 
         let tun_tx = tun_tx.clone();
-        handles.push(tokio::spawn(async move {
-            let mut buf = vec![0u8; tun_mtu as usize];
-            while let Ok(size) = dev_clone.recv(&mut buf).await {
-                match Ipv4HeaderSlice::from_slice(&buf[..size]) {
-                    Ok(ip_header)
+        handles.push(tokio::task::Builder::new()
+            .name("tun>ch")
+            .spawn(async move {
+                let mut buf = vec![0u8; tun_mtu as usize];
+                while let Ok(size) = dev_clone.recv(&mut buf).await {
+                    match Ipv4HeaderSlice::from_slice(&buf[..size]) {
+                        Ok(ip_header)
                         if ip_header.source_addr().eq(&ip)
                             && ip_header.destination_addr().eq(&peer_ip) =>
-                    {
-                        // eprintln!("READ https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf[..size]));
-                        match tun_tx.try_send(buf[..size].to_vec()) {
-                            Ok(_) => {}
-                            Err(e) => warn!("Failed to send to tun_rx: {:?}", e),
+                            {
+                                // eprintln!("READ https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf[..size]));
+                                match tun_tx.try_send(buf[..size].to_vec()) {
+                                    Ok(_) => {}
+                                    Err(e) => warn!("Failed to send to tun_rx: {:?}", e),
+                                }
+                            }
+                        Ok(ip_header) => {
+                            eprintln!(
+                                "Dropping unroutable packet: src={}, dst={}",
+                                ip_header.source_addr(),
+                                ip_header.destination_addr()
+                            );
                         }
+                        Err(_) => {}
                     }
-                    Ok(ip_header) => {
-                        eprintln!(
-                            "Dropping unroutable packet: src={}, dst={}",
-                            ip_header.source_addr(),
-                            ip_header.destination_addr()
-                        );
-                    }
-                    Err(_) => {}
                 }
-            }
-        }));
+            }).unwrap());
 
         // channel -> tun
         let dev_clone = dev.clone();
-        let tun_rx = tun_rx.clone();
-        handles.push(tokio::spawn(async move {
-            while let Ok(buf) = tun_rx.recv_async().await {
-                match Ipv4HeaderSlice::from_slice(&buf) {
-                    Ok(ip_header)
+        let tun_rx_clone = tun_rx.clone();
+        handles.push(tokio::task::Builder::new()
+            .name("ch>tun")
+            .spawn(async move {
+                while let Ok(buf) = tun_rx_clone.recv_async().await {
+                    match Ipv4HeaderSlice::from_slice(&buf) {
+                        Ok(ip_header)
                         if ip_header.source_addr().eq(&peer_ip)
                             && ip_header.destination_addr().eq(&ip) =>
-                    {
-                        // eprintln!("SEND https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf));
-                        if let Err(e) = dev_clone.send(&buf).await {
-                            eprintln!("Error sending message to tun: {e}");
+                            {
+                                // eprintln!("SEND https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf));
+                                if let Err(e) = dev_clone.send(&buf).await {
+                                    eprintln!("Error sending message to tun: {e}");
+                                }
+                            }
+                        Ok(ip_header) => {
+                            eprintln!(
+                                "Dropping unroutable packet: src={}, dst={}",
+                                ip_header.source_addr(),
+                                ip_header.destination_addr()
+                            );
                         }
+                        Err(_) => {}
                     }
-                    Ok(ip_header) => {
-                        eprintln!(
-                            "Dropping unroutable packet: src={}, dst={}",
-                            ip_header.source_addr(),
-                            ip_header.destination_addr()
-                        );
-                    }
-                    Err(_) => {}
                 }
-            }
-        }));
+            }).unwrap());
 
+        // channel -> tun
+        let dev_clone = dev.clone();
+        let tun_rx_clone = tun_rx.clone();
+        handles.push(tokio::task::Builder::new()
+            .name("ch>tun")
+            .spawn(async move {
+                while let Ok(buf) = tun_rx_clone.recv_async().await {
+                    match Ipv4HeaderSlice::from_slice(&buf) {
+                        Ok(ip_header)
+                        if ip_header.source_addr().eq(&peer_ip)
+                            && ip_header.destination_addr().eq(&ip) =>
+                            {
+                                // eprintln!("SEND https://hpd.gasmi.net/?data={}&force=ipv4", bytes_to_hex(&buf));
+                                if let Err(e) = dev_clone.send(&buf).await {
+                                    eprintln!("Error sending message to tun: {e}");
+                                }
+                            }
+                        Ok(ip_header) => {
+                            eprintln!(
+                                "Dropping unroutable packet: src={}, dst={}",
+                                ip_header.source_addr(),
+                                ip_header.destination_addr()
+                            );
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }).unwrap());
+    }
+
+    #[allow(unused_variables)]
+    for i in 0..3 {
         // drasyl -> channel
         let node = node.clone();
         let drasyl_tx = drasyl_tx.clone();
-        handles.push(tokio::spawn(async move {
-            while let Ok((buf, _)) = node.recv_from().await {
-                match drasyl_tx.try_send(buf) {
-                    Ok(_) => {}
-                    Err(e) => warn!("Failed to send to drasyl_tx: {:?}", e),
+        handles.push(tokio::task::Builder::new()
+            .name("drasyl>ch")
+            .spawn(async move {
+                while let Ok((buf, _)) = node.recv_from().await {
+                    match drasyl_tx.try_send(buf) {
+                        Ok(_) => {}
+                        Err(e) => warn!("Failed to send to drasyl_tx: {:?}", e),
+                    }
                 }
-            }
-        }));
+            }).unwrap());
+    }
 
+    #[allow(unused_variables)]
+    for i in 0..6 {
         // channel -> drasyl
         let drasyl_rx = drasyl_rx.clone();
         let send_handle = send_handle.clone();
-        handles.push(tokio::spawn(async move {
+        handles.push(tokio::task::Builder::new()
+                         .name("ch>drasyl")
+                         .spawn(async move {
             while let Ok(buf) = drasyl_rx.recv_async().await {
                 send_handle
                     .send(&buf)
                     .await
                     .expect("Error sending message to drasyl");
             }
-        }));
+        }).unwrap());
     }
 
     for handle in handles {

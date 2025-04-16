@@ -717,17 +717,22 @@ impl NodeInner {
                         let tcp_inner = inner.clone();
                         let tx_key = super_peer.tx_key();
 
-                        super_peer.set_tcp_handle(tokio::spawn(async move {
-                            if let Ok(stream) = TcpStream::connect(tcp_addr).await {
-                                if let Err(e) = Self::handle_tcp_stream(
-                                    peer_key, time, tcp_addr, &tcp_inner, tx_key, stream,
-                                )
-                                .await
-                                {
-                                    error!("Failed to handle TCP stream: {}", e);
-                                }
-                            }
-                        }));
+                        super_peer.set_tcp_handle(
+                            tokio::task::Builder::new()
+                                .name("tcp client")
+                                .spawn(async move {
+                                    if let Ok(stream) = TcpStream::connect(tcp_addr).await {
+                                        if let Err(e) = Self::handle_tcp_stream(
+                                            peer_key, time, tcp_addr, &tcp_inner, tx_key, stream,
+                                        )
+                                        .await
+                                        {
+                                            error!("Failed to handle TCP stream: {}", e);
+                                        }
+                                    }
+                                })
+                                .unwrap(),
+                        );
                     }
 
                     // send HELLO
@@ -1343,50 +1348,52 @@ impl Node {
 
         // housekeeping task
         let housekeeping_inner = inner.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(
-                housekeeping_inner.opts.housekeeping_delay,
-            ));
-
-            loop {
-                interval.tick().await;
-                if let Err(e) = housekeeping_inner.housekeeping(&housekeeping_inner).await {
-                    error!("Error in housekeeping: {}", e);
-                }
-                tokio::time::sleep(Duration::from_millis(
+        tokio::task::Builder::new()
+            .name("housekeeping")
+            .spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(
                     housekeeping_inner.opts.housekeeping_delay,
-                ))
-                .await;
-            }
-        });
+                ));
+
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = housekeeping_inner.housekeeping(&housekeeping_inner).await {
+                        error!("Error in housekeeping: {}", e);
+                    }
+                }
+            })
+            .unwrap();
 
         // udp servers
         for i in 0..num_udp_sockets {
             let udp_inner = inner.clone();
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; udp_inner.opts.mtu];
-                let mut response_buf = vec![0u8; udp_inner.opts.mtu];
-                loop {
-                    // read datagram
-                    let udp_socket = udp_inner.udp_sockets.get(i).unwrap();
-                    let (size, src) = match udp_socket.recv_from(&mut buf).await {
-                        Ok(result) => result,
-                        Err(e) => {
-                            error!("Error receiving datagram: {}", e);
+            tokio::task::Builder::new()
+                .name("udp server")
+                .spawn(async move {
+                    let mut buf = vec![0u8; udp_inner.opts.mtu];
+                    let mut response_buf = vec![0u8; udp_inner.opts.mtu];
+                    loop {
+                        // read datagram
+                        let udp_socket = udp_inner.udp_sockets.get(i).unwrap();
+                        let (size, src) = match udp_socket.recv_from(&mut buf).await {
+                            Ok(result) => result,
+                            Err(e) => {
+                                error!("Error receiving datagram: {}", e);
+                                continue;
+                            }
+                        };
+
+                        // process datagram
+                        if let Err(e) = udp_inner
+                            .on_udp_datagram(src, &mut buf[..size], &mut response_buf)
+                            .await
+                        {
+                            error!("Error processing packet: {}", e);
                             continue;
                         }
-                    };
-
-                    // process datagram
-                    if let Err(e) = udp_inner
-                        .on_udp_datagram(src, &mut buf[..size], &mut response_buf)
-                        .await
-                    {
-                        error!("Error processing packet: {}", e);
-                        continue;
                     }
-                }
-            });
+                })
+                .unwrap();
         }
 
         Ok(Self {
