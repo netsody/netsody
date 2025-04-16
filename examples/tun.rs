@@ -12,6 +12,7 @@ use tun_rs::DeviceBuilder;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    console_subscriber::init();
     env_logger::init();
 
     let peer = hex_to_bytes::<ED25519_PUBLICKEYBYTES>(
