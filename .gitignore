@@ -21,3 +21,5 @@ target/
 
 # drasyl identity files
 *.identity
+.DS_Store
+auth.token

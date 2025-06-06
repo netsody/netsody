@@ -1,33 +1,27 @@
-[package]
-name = "drasyl"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+    "drasyl",
+    "drasyl-sdn"
+, "drasyl-sp", "drasyl-bench"]
+resolver = "3"
 
-[dependencies]
-libsodium-sys-stable = { version = "1.22.2", features = ["optimized", "minimal"] }
-log = "0.4.25"
-env_logger = { version = "0.11.6", features = ["humantime", "auto-color"], default-features = false }
-ring = "0.17.8"
-tokio = { version = "1.43.0", features = ["rt-multi-thread", "io-util", "net", "time", "macros", "sync"] }
-if-addrs = "0.13.3"
-thiserror = "2.0.11"
-zerocopy = { version = "0.8.18", features = ["derive"] }
-derive_builder = "0.20.2"
-rand = { version = "0.9", default-features = false, features = ["small_rng", "os_rng"] }
-murmur3 = "0.5.2"
-futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
-papaya = "0.2.0"
-arc-swap = "1.7.1"
+[workspace.dependencies]
+tracing = { version = "0.1.41"}
+tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "fmt", "ansi", "time", "local-time"] }
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+tokio-util = "0.7.15"
 ahash = "0.8.11"
-faster-hex = "0.10.0"
-tun-rs = { version = "2", features = ["async"] }
-aegis = "0.9.0"
-xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
-rand_chacha = "0.9.0"
-lz4_flex = { version = "0.11" }
-
-[dev-dependencies]
-criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+thiserror = "2.0.12"
+serde = { version = "1.0", features = ["derive"] }
+derive_builder = "0.20.2"
+papaya = "0.2.1"
+lazy_static = "1.5.0"
+hyper = { version = "1.6" }
+hyper-util = { version = "0.1.11" }
+bytes = "1.10.1"
+arc-swap = "1.7.1"
+futures = "0.3.31"
+prometheus = { version = "0.14.0", default-features = false }
 
 [profile.release]
 opt-level = 3
@@ -36,41 +30,3 @@ codegen-units = 1
 strip = true
 debug = false
 incremental = false
-
-[[bench]]
-name = "sha256"
-harness = false
-
-[[bench]]
-name = "random_bytes"
-harness = false
-
-[[bench]]
-name = "super_peer"
-harness = false
-
-[[bench]]
-name = "node"
-harness = false
-
-[[bench]]
-name = "clock"
-harness = false
-
-[lints.clippy]
-explicit_iter_loop = "deny"
-manual_string_new = "deny"
-map_unwrap_or = "deny"
-ref_option = "deny"
-redundant_closure_for_method_calls = "deny"
-semicolon_if_nothing_returned = "deny"
-single_match_else = "deny"
-uninlined_format_args = "deny"
-unused_async = "deny"
-wildcard_imports = "deny"
-
-[lib]
-crate-type = ["lib", "cdylib"]
-
-[features]
-ffi = []

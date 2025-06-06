@@ -1,0 +1,63 @@
+name: libdrasyl
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        job_name:
+          - linux-amd64
+          - linux-arm64
+          - macos-amd64
+          - macos-arm64
+          - windows-amd64
+
+        include:
+          - job_name: linux-amd64
+            os: ubuntu-22.04
+            path: target/release/libdrasyl.so
+
+          - job_name: linux-arm64
+            os: [ self-hosted, linux, ARM64 ]
+            path: target/release/libdrasyl.so
+
+          - job_name: macos-amd64
+            os: macOS-13
+            path: target/release/libdrasyl.dylib
+
+          - job_name: macos-arm64
+            os: macOS-latest
+            path: target/release/libdrasyl.dylib
+
+          - job_name: windows-amd64
+            os: windows-latest
+            path: target/release/drasyl.dll
+
+    name: Build FFI on ${{ matrix.job_name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        if: success() && matrix.job_name == 'linux-arm64'
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build with FFI feature
+        run: cargo build --verbose --package drasyl --features ffi --release
+
+      - name: Upload FFI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libdrasyl-${{ matrix.job_name }}
+          path: ${{ matrix.path }}

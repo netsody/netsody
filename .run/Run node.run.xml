@@ -1,22 +1,23 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Run node" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
-    <option name="command" value="run --package drasyl --example node" />
+    <option name="command" value="run --package drasyl --features prometheus --example node" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
-      <env name="DRASYL_ARM_MESSAGES" value="true" />
       <env name="DRASYL_HELLO_MAX_AGE" value="60000" />
       <env name="DRASYL_HELLO_TIMEOUT" value="30000" />
-      <env name="DRASYL_HOUSEKEEPING_DELAY" value="5000" />
+      <env name="DRASYL_HOUSEKEEPING_INTERVAL" value="5000" />
       <env name="DRASYL_IDENTITY_FILE" value="node.identity" />
-      <env name="DRASYL_MAX_PEERS" value="10000" />
+      <env name="DRASYL_MAX_PEERS" value="8192" />
       <env name="DRASYL_MIN_POW_DIFFICULTY" value="24" />
-      <env name="DRASYL_NETWORK_ID" value="1" />
       <env name="DRASYL_PROCESS_UNITES" value="true" />
-      <env name="DRASYL_RECV_BUF_LEN" value="64" />
-      <env name="DRASYL_SUPER_PEERS" value="udp://sp-fkb1.drasyl.org:22527?publicKey=c0900bcfabc493d062ecd293265f571edb70b85313ba4cdda96c9f77163ba62d&amp;networkId=1 udp://sp-rjl1.drasyl.org:22527?publicKey=5b4578909bf0ad3565bb5faf843a9f68b325dd87451f6cb747e49d82f6ce5f4c&amp;networkId=1 udp://sp-nyc1.drasyl.org:22527?publicKey=bf3572dba7ebb6c5ccd037f3a978707b5d7c5a9b9b01b56b4b9bf059af56a4e0&amp;networkId=1 udp://sp-sgp1.drasyl.org:22527?publicKey=ab7a1654d463f9986530bed00569cc895697827b802153b8ef1598579713045f&amp;networkId=1" />
+      <env name="DRASYL_RECV_BUF_CAP" value="64" />
+      <env name="xDRASYL_SUPER_PEERS" value="udp://127.0.0.1:22527?publicKey=3ab5ae3f1456988543dd3417556d52dd028f2b5524d86bc95d58e91faa9ddf4c&amp;networkId=1&amp;tcpPort=8443" />
       <env name="DRASYL_UDP_LISTEN" value="0.0.0.0:-1" />
-      <env name="RUST_LOG" value="debug,drasyl::node=debug" />
+      <env name="xDRASYL_ARM_MESSAGES" value="false" />
+      <env name="xDRASYL_NETWORK_ID" value="2" />
+      <env name="xRUST_LOG" value="trace,drasyl::node=trace" />
+      <env name="xRUSTFLAGS" value="--cfg tokio_unstable" />
     </envs>
     <option name="emulateTerminal" value="true" />
     <option name="channel" value="DEFAULT" />
