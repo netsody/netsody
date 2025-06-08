@@ -18,7 +18,6 @@ bytes = { workspace = true }
 hyper-util = { workspace = true, features = ["http1", "client"] }
 arc-swap = { workspace = true }
 futures = { workspace = true }
-papaya = { workspace = true }
 hyper-rustls = { version = "0.27.5", features = ["webpki-roots"] }
 etherparse = "0.17.0"
 flume = { version = "0.11.1", default-features = false, features = ["async"] }
