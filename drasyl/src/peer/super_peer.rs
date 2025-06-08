@@ -14,13 +14,13 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
 
 // External crate imports
-use arc_swap::{ArcSwap, ArcSwapOption, Guard};
-use papaya::{HashMap as PapayaHashMap, LocalGuard};
+use arc_swap::{ArcSwapOption, Guard};
+use papaya::{HashMap as PapayaHashMap, HashMap, LocalGuard};
 use thiserror::Error;
 use tokio::net::lookup_host;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::trace;
+use tracing::{trace, warn};
 
 // Crate-internal imports
 use crate::crypto::{
@@ -53,7 +53,7 @@ pub struct SuperPeer {
     /// Session keys for message encryption/decryption.
     pub session_keys: Option<SessionKeys>,
     /// Atomic reference to resolved IP addresses.
-    resolved_addrs_store: ArcSwap<Vec<SocketAddr>>,
+    resolved_addrs_store: ArcSwapOption<Vec<SocketAddr>>,
     /// Atomic pointer to the best UDP path key.
     best_udp_path_store: AtomicPtr<PeerPathKey>,
     /// Map of all UDP paths to this super peer.
@@ -94,26 +94,10 @@ impl SuperPeer {
         tcp_port: u16,
         udp_bindings: Vec<Arc<UdpBinding>>,
     ) -> Result<Self, Error> {
-        let resolved_addrs = SuperPeer::lookup_host(&addr).await?;
+        let resolved_addrs = SuperPeer::lookup_host(&addr).await.ok();
 
         let udp_paths = PapayaHashMap::new();
-        for udp_binding in &udp_bindings {
-            let local_addr = udp_binding.local_addr;
-
-            let remote_addr = resolved_addrs.iter().find(|addr| match local_addr {
-                SocketAddr::V4(_) => addr.is_ipv4(),
-                SocketAddr::V6(_) => addr.is_ipv6(),
-            });
-
-            if let Some(remote_addr) = remote_addr {
-                let new_path_key = PeerPathKey((local_addr, *remote_addr));
-
-                if !udp_paths.pin().contains_key(&new_path_key) {
-                    let path = PeerPath::new();
-                    udp_paths.pin().insert(new_path_key, path);
-                }
-            }
-        }
+        Self::add_paths_for_resolved_addrs(&udp_bindings, resolved_addrs.as_ref(), &udp_paths);
 
         let session_keys = if arm_messages {
             Some(SessionKeys::new(compute_kx_session_keys(
@@ -130,7 +114,7 @@ impl SuperPeer {
             tcp_port,
             tcp_connection_store: Default::default(),
             session_keys,
-            resolved_addrs_store: ArcSwap::from_pointee(resolved_addrs),
+            resolved_addrs_store: ArcSwapOption::from_pointee(resolved_addrs),
             best_udp_path_store: Default::default(),
             udp_paths,
         })
@@ -249,20 +233,30 @@ impl SuperPeer {
     /// * [`Error::SuperPeerLookupFailed`] - If DNS resolution fails
     /// * [`Error::SuperPeerResolveTimeout`] - If DNS resolution times out
     /// * [`Error::SuperPeerResolveEmpty`] - If no addresses are returned
-    pub(crate) async fn lookup_host(addr: &str) -> Result<Vec<SocketAddr>, Error> {
+    pub(crate) async fn lookup_host(host: &str) -> Result<Vec<SocketAddr>, Error> {
         // resolve hostname
+        trace!("Resolve hostname {}", host);
         let addrs: Vec<SocketAddr> =
-            match timeout(Duration::from_millis(DNS_LOOKUP_TIMEOUT), lookup_host(addr)).await {
-                Ok(Ok(addrs)) => addrs.collect(),
+            match timeout(Duration::from_millis(DNS_LOOKUP_TIMEOUT), lookup_host(host)).await {
+                Ok(Ok(addrs)) => {
+                    let addrs = addrs.collect();
+                    trace!("Resolved hostname {} to {:?}", host, addrs);
+                    addrs
+                }
                 Ok(Err(e)) => {
+                    warn!("Failed to resolve hostname {}: {}", host, e);
                     return Err(Error::SuperPeerLookupFailed(
-                        addr.to_string(),
+                        host.to_string(),
                         e.to_string(),
                     ));
                 }
                 Err(_) => {
+                    warn!(
+                        "Timeout of {} ms exceeded while attempting to resolve hostname {}",
+                        DNS_LOOKUP_TIMEOUT, host
+                    );
                     return Err(Error::SuperPeerResolveTimeout(
-                        addr.to_string(),
+                        host.to_string(),
                         DNS_LOOKUP_TIMEOUT,
                     ));
                 }
@@ -297,7 +291,7 @@ impl SuperPeer {
     ///
     /// # Returns
     /// An atomic reference to the vector of resolved addresses
-    pub fn resolved_addrs(&self) -> Arc<Vec<SocketAddr>> {
+    pub fn resolved_addrs(&self) -> Option<Arc<Vec<SocketAddr>>> {
         self.resolved_addrs_store.load_full()
     }
 
@@ -305,8 +299,8 @@ impl SuperPeer {
     ///
     /// # Arguments
     /// * `new_addrs` - The new list of resolved addresses
-    pub(crate) fn set_resolved_addrs(&self, new_addrs: Vec<SocketAddr>) {
-        self.resolved_addrs_store.store(Arc::new(new_addrs));
+    pub(crate) fn update_resolved_addrs(&self, new_addrs: Vec<SocketAddr>) {
+        self.resolved_addrs_store.store(Some(Arc::new(new_addrs)));
     }
 
     /// Get the TCP connection path.
@@ -446,6 +440,33 @@ impl SuperPeer {
     /// `true` if there are active UDP paths to this super peer, `false` otherwise
     pub fn is_reachable(&self) -> bool {
         self.best_udp_path_key().is_some()
+    }
+
+    pub(crate) fn add_paths_for_resolved_addrs(
+        udp_bindings: &Vec<Arc<UdpBinding>>,
+        resolved_addrs: Option<&Vec<SocketAddr>>,
+        udp_paths: &HashMap<PeerPathKey, PeerPath>,
+    ) {
+        if let Some(resolved_addrs) = &resolved_addrs {
+            for udp_binding in udp_bindings {
+                let local_addr = udp_binding.local_addr;
+
+                let remote_addr = resolved_addrs.iter().find(|addr| match local_addr {
+                    SocketAddr::V4(_) => addr.is_ipv4(),
+                    SocketAddr::V6(_) => addr.is_ipv6(),
+                });
+
+                if let Some(remote_addr) = remote_addr {
+                    let new_path_key = PeerPathKey((local_addr, *remote_addr));
+
+                    if !udp_paths.pin().contains_key(&new_path_key) {
+                        trace!("Add new path {new_path_key} to super peer");
+                        let path = PeerPath::new();
+                        udp_paths.pin().insert(new_path_key, path);
+                    }
+                }
+            }
+        }
     }
 }
 

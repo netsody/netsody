@@ -6,7 +6,7 @@ use crate::node::SendHandleState;
 use crate::node::UdpBinding;
 use crate::node::inner::NodeInner;
 use crate::node::{Error, Node};
-use crate::peer::{NodePeer, Peer, PeerPath, PeerPathKey, SuperPeer};
+use crate::peer::{NodePeer, Peer, SuperPeer};
 use crate::util::get_addrs;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -157,30 +157,14 @@ impl NodeInner {
             self.udp_bindings.store(udp_bindings.clone());
 
             // add paths
-            for (peer_pk, peer) in &inner.peers_list.peers.pin_owned() {
+            for (_, peer) in &inner.peers_list.peers.pin_owned() {
                 if let Peer::SuperPeer(super_peer) = peer {
-                    for udp_binding in udp_bindings.iter() {
-                        let local_addr = udp_binding.local_addr;
-
-                        // TODO: Duplicate code from `Node::bind` and `SuperPeer::new`.
-
-                        let resolved_addrs = super_peer.resolved_addrs().clone();
-                        let remote_addr = resolved_addrs.iter().find(|addr| match local_addr {
-                            SocketAddr::V4(_) => addr.is_ipv4(),
-                            SocketAddr::V6(_) => addr.is_ipv6(),
-                        });
-
-                        if let Some(remote_addr) = remote_addr {
-                            let new_path_key = PeerPathKey((local_addr, *remote_addr));
-
-                            let udp_paths = super_peer.udp_paths.pin();
-                            if !udp_paths.contains_key(&new_path_key) {
-                                trace!("Add new path {new_path_key} to super peer {peer_pk}");
-                                let path = PeerPath::new();
-                                udp_paths.insert(new_path_key, path);
-                            }
-                        }
-                    }
+                    let resolved_addrs = super_peer.resolved_addrs().clone();
+                    SuperPeer::add_paths_for_resolved_addrs(
+                        &self.udp_bindings.load(),
+                        resolved_addrs.as_deref(),
+                        &super_peer.udp_paths,
+                    );
                 }
             }
         }
@@ -460,7 +444,7 @@ impl NodeInner {
         super_peer.remove_stale_udp_paths(time, self.opts.hello_timeout);
 
         match SuperPeer::lookup_host(super_peer.addr()).await {
-            Ok(resolved_addrs) => super_peer.set_resolved_addrs(resolved_addrs),
+            Ok(resolved_addrs) => super_peer.update_resolved_addrs(resolved_addrs),
             Err(e) => warn!(
                 "Failed to update resolved super peer addresses for super peer {}: {}",
                 super_peer.addr(),
@@ -469,24 +453,11 @@ impl NodeInner {
         }
 
         let resolved_addrs = super_peer.resolved_addrs();
-        for udp_binding in self.udp_bindings.load().iter() {
-            let local_addr = udp_binding.local_addr;
-
-            let remote_addr = resolved_addrs.iter().find(|addr| match local_addr {
-                SocketAddr::V4(_) => addr.is_ipv4(),
-                SocketAddr::V6(_) => addr.is_ipv6(),
-            });
-
-            if let Some(remote_addr) = remote_addr {
-                let new_path_key = PeerPathKey((local_addr, *remote_addr));
-
-                let guard1 = super_peer.udp_paths.guard();
-                if !super_peer.udp_paths.contains_key(&new_path_key, &guard1) {
-                    let path = PeerPath::new();
-                    super_peer.udp_paths.insert(new_path_key, path, &guard1);
-                }
-            }
-        }
+        SuperPeer::add_paths_for_resolved_addrs(
+            &self.udp_bindings.load(),
+            resolved_addrs.as_deref(),
+            &super_peer.udp_paths,
+        );
 
         #[cfg(feature = "prometheus")]
         {
