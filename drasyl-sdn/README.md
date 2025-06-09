@@ -229,3 +229,22 @@ The following configuration assumes that `target/release/drasyl` has been moved 
    sudo systemctl enable drasyl
    sudo systemctl start drasyl
    ```
+
+## Accessing REST API
+
+The SDN node provides a REST API accessible at `http://127.0.0.1:22527`. The API is protected by a bearer authentication token, which is stored in the working directory as `auth.token` and is only readable by the root user.
+
+You can access the API using curl:
+```bash
+curl -H "Authorization: Bearer $(sudo cat /etc/drasyl/auth.token)" http://localhost:22527/status
+```
+
+The CLI can also interact with the API and format the output nicely:
+```bash
+sudo -E DRASYL_AUTH_FILE=/etc/drasyl/auth.token drasyl status
+```
+
+To avoid running `drasyl status` with elevated privileges every time, you can store the token in `~/.drasyl/auth.token`. After doing this, you can simply use:
+```bash
+drasyl status
+```
