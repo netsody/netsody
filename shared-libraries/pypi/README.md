@@ -1,17 +1,13 @@
 [<img src="https://docs.drasyl.org/img/logo-text.svg" alt="drasyl" width="200"/>](https://drasyl.org)
 
 [Website](https://drasyl.org) |
-[Documentation](https://docs.drasyl.org) |
-[Contributing](CONTRIBUTING.md) |
-[Changelog](CHANGELOG.md)
+[Documentation](https://docs.drasyl.org)
 
-[![Test](https://github.com/drasyl/drasyl/actions/workflows/test.yml/badge.svg)](https://github.com/drasyl/drasyl/actions/workflows/test.yml)
+[![Test](https://github.com/drasyl/drasyl-rs/actions/workflows/test.yml/badge.svg)](https://github.com/drasyl/drasyl-rs/actions/workflows/test.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/licenses/MIT)
-[![Maven Central](https://img.shields.io/maven-central/v/org.drasyl/drasyl-core.svg)](https://mvnrepository.com/artifact/org.drasyl/drasyl-core)
 [![Homebrew](https://img.shields.io/badge/dynamic/json.svg?url=https://raw.githubusercontent.com/drasyl/homebrew-tap/main/Info/drasyl.json&prefix=v&query=$.versions.stable&label=homebrew&color=important)](https://github.com/drasyl/homebrew-tap)
 [![Chocolatey](https://img.shields.io/chocolatey/v/drasyl)](https://chocolatey.org/packages/drasyl)
 [![Python Package Index](https://img.shields.io/pypi/v/drasyl.svg)](https://pypi.org/project/drasyl)
-[![Docker Pulls](https://img.shields.io/docker/pulls/drasyl/drasyl)](https://hub.docker.com/r/drasyl/drasyl)
 [![Discord](https://img.shields.io/discord/959492172560891905)](https://discord.gg/2tcZPy7BCu)
 
 # drasyl
@@ -36,8 +32,8 @@ To prevent developers from reinventing the wheel, drasyl provides extensions tha
 # Usage & Documentation
 
 * [Getting Started](https://docs.drasyl.org/language-bindings/python/)
-* [Examples](https://github.com/drasyl/drasyl/tree/master/drasyl-shared-library/examples/python)
+* [Examples](https://github.com/drasyl/drasyl-rs/tree/master/shared-library/examples/python)
 
 # License
 
-This is free software under the terms of the [MIT License](https://github.com/drasyl/drasyl/blob/master/LICENSE).
+This is free software under the terms of the [MIT License](https://github.com/drasyl/drasyl-rs/blob/master/LICENSE).

@@ -20,9 +20,7 @@
 # OR OTHER DEALINGS IN THE SOFTWARE.
 #
 from ctypes import *
-import time
 import os
-import sys
 import platform
 
 _dir = os.path.dirname(os.path.realpath(__file__))
@@ -104,9 +102,59 @@ DRASYL_EVENT_MESSAGE = 30
 # Signals that the node was unable to process an inbound message
 DRASYL_EVENT_INBOUND_EXCEPTION = 40
 
+# === Constants matching Rust definitions ===
+ED25519_SECRETKEYBYTES = 64
+ED25519_PUBLICKEYBYTES = 32
+POW_BYTES = 4
+
 _libdrasyl.drasyl_version.restype = c_char_p
 def drasyl_version():
     version = _libdrasyl.drasyl_version()
     return version.decode("utf-8").strip("\0")
 
+def drasyl_generate_identity():
+    """
+Calls the Rust `generate_identity` function and returns
+the generated secret key, public key, and proof of work as bytes.
 
+Returns:
+tuple(bytes, bytes, bytes): (secret_key, public_key, proof_of_work)
+
+Raises:
+RuntimeError: If the Rust function returns an error code.
+    """
+
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.generate_identity.argtypes = [
+        POINTER(c_ubyte),  # secret key buffer
+        POINTER(c_ubyte),  # public key buffer
+        POINTER(c_ubyte),  # proof of work buffer
+    ]
+    _libdrasyl.generate_identity.restype = c_int
+
+    # Allocate buffers for the output data
+    sk = (c_ubyte * ED25519_SECRETKEYBYTES)()
+    pk = (c_ubyte * ED25519_PUBLICKEYBYTES)()
+    pow_buf = (c_ubyte * POW_BYTES)()
+
+    # Call the Rust function
+    result = _libdrasyl.generate_identity(sk, pk, pow_buf)
+
+    # Handle possible error codes from Rust
+    if result == 1:
+        raise RuntimeError("Null pointer passed to generate_identity()")
+    elif result == 2:
+        raise RuntimeError("Identity generation failed")
+    elif result != 0:
+        raise RuntimeError(f"Unknown error code returned: {result}")
+
+    # Return the results as Python bytes objects
+    return bytes(sk), bytes(pk), bytes(pow_buf)
+
+
+def parse_identity(identity_tuple):
+    sk_bytes, pk_bytes, pow_bytes = identity_tuple
+    sk_hex = sk_bytes.hex()
+    pk_hex = pk_bytes.hex()
+    pow_int = int.from_bytes(pow_bytes, byteorder='big', signed=True)
+    return sk_hex, pk_hex, pow_int
