@@ -102,6 +102,7 @@ impl UniteMessage {
     ///
     /// # Returns
     /// Vector containing the complete UNITE message or an error
+    #[allow(clippy::uninit_vec)]
     #[instrument(name = "UniteMessage::build", skip_all)]
     pub fn build(
         network_id: &NetworkId,

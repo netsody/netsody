@@ -84,7 +84,7 @@ impl SuperPeer {
     /// * [`Error::SuperPeerResolveTimeout`] - If hostname resolution times out
     /// * [`Error::SuperPeerResolveEmpty`] - If hostname resolution returns no results
     /// * [`Error::AgreementPkNotPresent`] - If agreement keys are missing when encryption is enabled
-    /// * [`Error::CryptoError`] - If cryptographic operations fail
+    /// * [`Error::Crypto`] - If cryptographic operations fail
     pub(crate) async fn new(
         arm_messages: bool,
         pk: &PubKey,

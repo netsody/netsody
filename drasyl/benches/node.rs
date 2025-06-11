@@ -16,7 +16,6 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_util::sync::CancellationToken;
 
-#[allow(clippy::type_complexity)]
 fn create_test_node_rx(
     network_id: &NetworkId,
     id: &Identity,

@@ -17,6 +17,10 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{Mutex, mpsc};
 use zerocopy::IntoBytes;
 
+// Type alias for the complex receiver type
+type MessageReceiver = Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>;
+type MessageSender = Arc<Sender<(PubKey, Vec<u8>)>>;
+
 // -1..-100
 const ERR_UTF8: c_int = -1;
 const ERR_IO: c_int = -2;
@@ -91,7 +95,7 @@ impl From<SuperPeerUrlError> for c_int {
 // MessageSink
 //
 
-pub struct ChannelSink(pub Arc<Sender<(PubKey, Vec<u8>)>>);
+pub struct ChannelSink(pub MessageSender);
 
 impl MessageSink for ChannelSink {
     fn accept(&self, sender: PubKey, message: Vec<u8>) {
@@ -105,10 +109,7 @@ impl MessageSink for ChannelSink {
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_new(
     recv_buf_cap: usize,
-) -> *mut (
-    Arc<Sender<(PubKey, Vec<u8>)>>,
-    Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
-) {
+) -> *mut (MessageSender, MessageReceiver) {
     let (recv_buf_tx, recv_buf_rx) = mpsc::channel::<(PubKey, Vec<u8>)>(recv_buf_cap);
     Box::into_raw(Box::new((
         Arc::new(recv_buf_tx),
@@ -118,12 +119,7 @@ pub extern "C" fn drasyl_recv_buf_new(
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_recv_buf_free(
-    recv_buf: *mut (
-        Arc<Sender<(PubKey, Vec<u8>)>>,
-        Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
-    ),
-) {
+pub extern "C" fn drasyl_recv_buf_free(recv_buf: *mut (MessageSender, MessageReceiver)) {
     unsafe {
         drop(Box::from_raw(recv_buf));
     }
@@ -131,21 +127,15 @@ pub extern "C" fn drasyl_recv_buf_free(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_tx(
-    recv_buf: &mut (
-        Arc<Sender<(PubKey, Vec<u8>)>>,
-        Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
-    ),
-) -> *mut Arc<Sender<(PubKey, Vec<u8>)>> {
+    recv_buf: &mut (MessageSender, MessageReceiver),
+) -> *mut MessageSender {
     Box::into_raw(Box::new(recv_buf.0.clone()))
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_rx(
-    recv_buf: &mut (
-        Arc<Sender<(PubKey, Vec<u8>)>>,
-        Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
-    ),
-) -> *mut Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>> {
+    recv_buf: &mut (MessageSender, MessageReceiver),
+) -> *mut MessageReceiver {
     Box::into_raw(Box::new(recv_buf.1.clone()))
 }
 
@@ -153,7 +143,7 @@ pub extern "C" fn drasyl_recv_buf_rx(
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_len(
     bind: &mut NodeBind,
-    recv_buf_rx: &mut Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
+    recv_buf_rx: &mut MessageReceiver,
 ) -> c_int {
     let recv_buf_rx = recv_buf_rx.clone();
     bind.runtime
@@ -164,7 +154,7 @@ pub extern "C" fn drasyl_recv_buf_len(
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_recv(
     bind: &mut NodeBind,
-    recv_buf_rx: &mut Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
+    recv_buf_rx: &mut MessageReceiver,
     sender: *mut u8,
     buf: *mut u8,
     buf_len: usize,
@@ -223,7 +213,7 @@ pub extern "C" fn drasyl_node_opts_builder_id(
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_node_opts_builder_message_sink(
     builder: &mut NodeOptsBuilder,
-    recv_buf_tx: &mut Arc<Sender<(PubKey, Vec<u8>)>>,
+    recv_buf_tx: &mut MessageSender,
 ) -> c_int {
     let recv_buf_tx = unsafe { Box::from_raw(recv_buf_tx) };
     builder.message_sink(Arc::new(ChannelSink(*recv_buf_tx)));
@@ -565,6 +555,7 @@ pub struct Peer {
     reachable: bool,
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_peers_list_peers(
     peers_list: &mut &PeersList,
@@ -606,6 +597,7 @@ pub extern "C" fn drasyl_peers_list_peers_free(peers: &mut Vec<Peer>) {
     }
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_peers_list_peer_pk(
     peers: &mut Vec<Peer>,

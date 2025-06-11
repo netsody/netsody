@@ -84,7 +84,7 @@ async fn client(ticket: &str) -> Result<()> {
 
     let start = Instant::now();
     // FIXME: check for direct connection
-    let connection = endpoint.connect(node.clone(), ALPN).await?;
+    let _connection = endpoint.connect(node.clone(), ALPN).await?;
     // loop {
     //     connection.send_datagram(bytes::Bytes::from(b"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000".to_vec()))?;
     // }

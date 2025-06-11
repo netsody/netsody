@@ -118,6 +118,7 @@ impl ShortHeader {
     ///
     /// # Returns
     /// Vector containing the complete message or an error
+    #[allow(clippy::uninit_vec)]
     pub fn build(
         short_id: ShortId,
         tx_key: Option<&SessionKey>,
