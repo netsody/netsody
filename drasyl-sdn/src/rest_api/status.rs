@@ -199,7 +199,7 @@ impl fmt::Display for Status {
             writeln!(f, "  Prometheus:")?;
             writeln!(
                 f,
-                "    URL: {:?}",
+                "    URL: {}",
                 self.opts
                     .prometheus_url
                     .as_ref()
@@ -207,7 +207,7 @@ impl fmt::Display for Status {
             )?;
             writeln!(
                 f,
-                "    User: {:?}",
+                "    User: {}",
                 self.opts
                     .prometheus_user
                     .as_ref()
@@ -215,11 +215,11 @@ impl fmt::Display for Status {
             )?;
             writeln!(
                 f,
-                "    Password: {:?}",
+                "    Password: {}",
                 self.opts
                     .prometheus_pass
                     .as_ref()
-                    .map_or("None".to_string(), |pass| pass.to_string())
+                    .map_or("None".to_string(), |_| "****".to_string())
             )?;
         }
         writeln!(f)?;
