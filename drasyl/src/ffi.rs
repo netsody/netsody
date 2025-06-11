@@ -208,6 +208,7 @@ pub extern "C" fn drasyl_version() -> *const u8 {
 /// * `0` on success
 /// * `1` if any buffer pointer is null
 /// * `2` if identity generation fails
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_generate_identity(
     sk_buf: *mut u8,

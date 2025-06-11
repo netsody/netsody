@@ -17,10 +17,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Runs the SDN node
-    Run {
-        #[arg(num_args = 1..)]
-        urls: Vec<String>,
-    },
+    Run,
     /// Shows the status of the running SDN node
     Status,
 }
@@ -32,14 +29,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { urls } => run_sdn_node(urls).await,
+        Commands::Run => run_sdn_node().await,
         Commands::Status => show_status().await,
     }
 }
 
-async fn run_sdn_node(
-    urls: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+async fn run_sdn_node() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     // config
     let config_path = util::get_env("CONFIG", "config.toml".to_string());
     let config = SdnNodeConfig::load_or_generate(&config_path).expect("Failed to load SDN config");
