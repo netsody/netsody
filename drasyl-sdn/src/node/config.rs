@@ -10,8 +10,8 @@ use std::fs;
 use tracing::trace;
 use url::Url;
 
-#[derive(Deserialize, Serialize)]
-#[cfg_attr(feature = "prometheus", derive(Debug, Clone))]
+#[cfg(feature = "prometheus")]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PrometheusConfig {
     pub url: String,
     pub user: String,

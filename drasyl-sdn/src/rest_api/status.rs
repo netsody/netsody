@@ -194,6 +194,13 @@ impl fmt::Display for Status {
             format_duration(Duration::from_millis(self.opts.housekeeping_interval))
         )?;
         writeln!(f, "  Enforce TCP: {}", self.opts.enforce_tcp)?;
+        #[cfg(feature = "prometheus")]
+        {
+            writeln!(f, "  Prometheus:")?;
+            writeln!(f, "    URL: {:?}", self.opts.prometheus_url)?;
+            writeln!(f, "    User: {:?}", self.opts.prometheus_user)?;
+            writeln!(f, "    Password: {:?}", self.opts.prometheus_pass)?;
+        }
         writeln!(f)?;
 
         // peers list
