@@ -22,6 +22,7 @@
 from ctypes import *
 import os
 import platform
+import json
 
 _dir = os.path.dirname(os.path.realpath(__file__))
 # get the right filename
@@ -33,6 +34,49 @@ else:
     _name = "libdrasyl.dylib"
 _libdrasyl = cdll.LoadLibrary(os.path.join(_dir, "libdrasyl", _name))
 
+#
+# classes
+#
+
+class Identity:
+    def __init__(self, secret_key: bytes, public_key: bytes, proof_of_work: bytes):
+        self.secret_key = secret_key
+        self.public_key = public_key
+        self.proof_of_work = proof_of_work
+
+    def __str__(self):
+        return (
+            "{\n"
+            f"  secret_key: {self.secret_key.hex()},\n"
+            f"  public_key: {self.public_key.hex()},\n"
+            f"  proof_of_work: {int.from_bytes(self.proof_of_work, byteorder='big', signed=True)}\n"
+            "}"
+        )
+
+    def to_dict(self):
+        return {
+            "secret_key": self.secret_key.hex(),
+            "public_key": self.public_key.hex(),
+            "proof_of_work": self.proof_of_work.hex(),
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(
+            secret_key=bytes.fromhex(d["secret_key"]),
+            public_key=bytes.fromhex(d["public_key"]),
+            proof_of_work=bytes.fromhex(d["proof_of_work"]),
+        )
+
+    def save_to_file(self, filename):
+        with open(filename, "w") as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+    @classmethod
+    def load_from_file(cls, filename):
+        with open(filename) as f:
+            data = json.load(f)
+        return cls.from_dict(data)
 
 #
 # utilities
@@ -68,51 +112,26 @@ def _wrap_event(event):
     return _dotdict(response)
 
 #
-# drasyl API
+# Return codes
 #
 
-DRASYL_LOG_TRACE = 300
-DRASYL_LOG_DEBUG = 500
-DRASYL_LOG_INFO = 800
-DRASYL_LOG_WARN = 900
-DRASYL_LOG_ERROR = 1000
-
-# Signals that the node has been started
-DRASYL_EVENT_NODE_UP = 10
-# Signals that the node is shut down
-DRASYL_EVENT_NODE_DOWN = 11
-# Signals that the node is currently connected to a super peer
-DRASYL_EVENT_NODE_ONLINE = 12
-# Signals that the node is currently not connected to a super peer
-DRASYL_EVENT_NODE_OFFLINE = 13
-# Signals that the node encountered an unrecoverable error
-DRASYL_EVENT_NODE_UNRECOVERABLE_ERROR = 14
-# Signals that the node has terminated normally
-DRASYL_EVENT_NODE_NORMAL_TERMINATION = 15
-# Signals that the node has established a direct connection to a peer
-DRASYL_EVENT_PEER_DIRECT = 20
-# Signals that communication with this peer is only possible by relaying messages via a super peer
-DRASYL_EVENT_PEER_RELAY = 21
-# Signals that currently all messages from and to the peer are encrypted with a long time key
-DRASYL_EVENT_LONG_TIME_ENCRYPTION = 22
-# Signals that currently all messages from and to the {@code #peer} are encrypted with an ephemeral session key
-DRASYL_EVENT_PERFECT_FORWARD_SECRECY_ENCRYPTION = 23
-# Signals that the node has received a message addressed to it
-DRASYL_EVENT_MESSAGE = 30
-# Signals that the node was unable to process an inbound message
-DRASYL_EVENT_INBOUND_EXCEPTION = 40
+# Signals a null pointer exception
+ERR_NULL_POINTER = -6
+# Signals an identity generation error
+ERR_IDENTITY_GENERATION = -7
 
 # === Constants matching Rust definitions ===
 ED25519_SECRETKEYBYTES = 64
 ED25519_PUBLICKEYBYTES = 32
 POW_BYTES = 4
+DEFAULT_POW_DIFFICULTY = 24
 
 _libdrasyl.drasyl_version.restype = c_char_p
 def drasyl_version():
     version = _libdrasyl.drasyl_version()
     return version.decode("utf-8").strip("\0")
 
-def drasyl_generate_identity():
+def drasyl_generate_identity(pow_difficulty = DEFAULT_POW_DIFFICULTY):
     """
 Calls the Rust `generate_identity` function and returns
 the generated secret key, public key, and proof of work as bytes.
@@ -125,12 +144,13 @@ RuntimeError: If the Rust function returns an error code.
     """
 
     # Set argument and return types for the Rust FFI function
-    _libdrasyl.generate_identity.argtypes = [
+    _libdrasyl.drasyl_generate_identity.argtypes = [
         POINTER(c_ubyte),  # secret key buffer
         POINTER(c_ubyte),  # public key buffer
         POINTER(c_ubyte),  # proof of work buffer
+        c_uint8
     ]
-    _libdrasyl.generate_identity.restype = c_int
+    _libdrasyl.drasyl_generate_identity.restype = c_int
 
     # Allocate buffers for the output data
     sk = (c_ubyte * ED25519_SECRETKEYBYTES)()
@@ -138,23 +158,16 @@ RuntimeError: If the Rust function returns an error code.
     pow_buf = (c_ubyte * POW_BYTES)()
 
     # Call the Rust function
-    result = _libdrasyl.generate_identity(sk, pk, pow_buf)
+    result = _libdrasyl.drasyl_generate_identity(sk, pk, pow_buf, pow_difficulty)
 
     # Handle possible error codes from Rust
-    if result == 1:
+    if result == 0:
+        return Identity(bytes(sk), bytes(pk), bytes(pow_buf))
+    elif result == ERR_NULL_POINTER:
         raise RuntimeError("Null pointer passed to generate_identity()")
-    elif result == 2:
+    elif result == ERR_IDENTITY_GENERATION:
         raise RuntimeError("Identity generation failed")
     elif result != 0:
         raise RuntimeError(f"Unknown error code returned: {result}")
 
-    # Return the results as Python bytes objects
-    return bytes(sk), bytes(pk), bytes(pow_buf)
-
-
-def parse_identity(identity_tuple):
-    sk_bytes, pk_bytes, pow_bytes = identity_tuple
-    sk_hex = sk_bytes.hex()
-    pk_hex = pk_bytes.hex()
-    pow_int = int.from_bytes(pow_bytes, byteorder='big', signed=True)
-    return sk_hex, pk_hex, pow_int
+    return None
