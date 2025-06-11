@@ -28,6 +28,8 @@ const ERR_IO: c_int = -2;
 const ERR_CHANNEL_CLOSED: c_int = -3;
 const ERR_ADDR_PARSE: c_int = -4;
 const ERR_INDEX: c_int = -5;
+const ERR_NULL_POINTER: c_int = -6;
+const ERR_IDENTITY_GENERATION: c_int = -7;
 
 // -101..-300
 impl From<node::Error> for c_int {
@@ -205,20 +207,20 @@ pub extern "C" fn drasyl_version() -> *const u8 {
 /// * `1` if any buffer pointer is null
 /// * `2` if identity generation fails
 #[unsafe(no_mangle)]
-pub extern "C" fn generate_identity(
+pub extern "C" fn drasyl_generate_identity(
     sk_buf: *mut u8,
     pk_buf: *mut u8,
     pow_buf: *mut u8,
-) -> i32 {
+) -> c_int {
     // Validate input pointers
     if sk_buf.is_null() || pk_buf.is_null() || pow_buf.is_null() {
-        return 1;
+        return ERR_NULL_POINTER;
     }
 
     // Attempt to generate identity
     let identity = match Identity::generate(MIN_POW_DIFFICULTY_DEFAULT) {
         Ok(id) => id,
-        Err(_) => return 2,
+        Err(_) => return ERR_IDENTITY_GENERATION,
     };
 
     // Borrow inner byte arrays using known fixed-size types
