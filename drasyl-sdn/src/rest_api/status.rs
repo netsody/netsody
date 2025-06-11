@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url;
+use url::Url;
 
 impl RestApi {
     pub(crate) async fn status(State(sdn_node): State<Arc<SdnNode>>, _: AuthToken) -> Json<Status> {
@@ -64,7 +65,7 @@ pub struct Status {
     super_peers: HashMap<PubKey, SuperPeerStatus>,
     node_peers: HashMap<PubKey, NodePeerStatus>,
     // drasyl-sdn
-    networks: HashMap<String, NetworkStatus>,
+    networks: HashMap<Url, NetworkStatus>,
 }
 
 impl fmt::Display for Status {
@@ -580,15 +581,12 @@ fn time_ago_in_words(timestamp_micros: u64) -> String {
 }
 
 /// mask secrets in a network config url
-fn mask_url(url: &str) -> String {
-    if let Ok(parsed_url) = url::Url::parse(url) {
-        if let Some(password) = parsed_url.password() {
-            let mut masked_url = url.to_string();
-            let username = parsed_url.username();
-            let auth = format!("{}:{}", username, password);
-            masked_url = masked_url.replace(&auth, "****:****");
-            return masked_url;
-        }
+fn mask_url(url: &Url) -> String {
+    if !url.username().is_empty() || url.password().is_some() {
+        let mut masked_url = url.clone();
+        masked_url.set_username("****").unwrap();
+        masked_url.set_password(Some("****")).unwrap();
+        return masked_url.to_string();
     }
     url.to_string()
 }

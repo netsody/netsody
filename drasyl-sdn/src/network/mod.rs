@@ -5,6 +5,7 @@ pub use config::*;
 use drasyl::node::SendHandle;
 use ipnet::Ipv4Net;
 use ipnet_trie::IpnetTrie;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
@@ -46,18 +47,11 @@ impl Default for NetworkInner {
     }
 }
 
+#[derive(Deserialize)]
 pub struct Network {
     pub(crate) config_url: String,
+    #[serde(skip_deserializing, default)]
     pub(crate) state: Mutex<Option<LocalNodeState>>,
+    #[serde(skip_deserializing, default)]
     pub(crate) inner: Arc<NetworkInner>,
-}
-
-impl Network {
-    pub(crate) fn new(config_url: String) -> Self {
-        Self {
-            config_url,
-            state: Default::default(),
-            inner: Default::default(),
-        }
-    }
 }
