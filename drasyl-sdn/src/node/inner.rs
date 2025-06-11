@@ -91,10 +91,17 @@ impl SdnNodeInner {
         let housekeeping_interval = util::get_env("HOUSEKEEPING_INTERVAL", 5 * 1000); // milliseconds
         let enforce_tcp = util::get_env("ENFORCE_TCP", false);
         let udp_sockets = util::get_env("UDP_SOCKETS", 3);
+        #[cfg(feature = "prometheus")]
+        let prometheus_url = util::get_env("PROMETHEUS_URL", String::new());
+        #[cfg(feature = "prometheus")]
+        let prometheus_user = util::get_env("PROMETHEUS_USER", String::new());
+        #[cfg(feature = "prometheus")]
+        let prometheus_pass = util::get_env("PROMETHEUS_PASS", String::new());
 
         // build node
         let (recv_buf_tx, recv_buf_rx) = flume::bounded::<(PubKey, Vec<u8>)>(recv_buf_cap);
-        let opts = NodeOptsBuilder::default()
+        let mut builder = NodeOptsBuilder::default();
+        builder
             .id(id.clone())
             .network_id(network_id)
             .arm_messages(arm_messages)
@@ -107,9 +114,13 @@ impl SdnNodeInner {
             .housekeeping_interval(housekeeping_interval)
             .udp_sockets(udp_sockets)
             .message_sink(Arc::new(ChannelSink(recv_buf_tx)))
-            .enforce_tcp(enforce_tcp)
-            .build()
-            .expect("Failed to build node opts");
+            .enforce_tcp(enforce_tcp);
+        #[cfg(feature = "prometheus")]
+        builder
+            .prometheus_url((!prometheus_url.is_empty()).then_some(prometheus_url))
+            .prometheus_user((!prometheus_user.is_empty()).then_some(prometheus_user))
+            .prometheus_pass((!prometheus_pass.is_empty()).then_some(prometheus_pass));
+        let opts = builder.build().expect("Failed to build node opts");
 
         // bind node
         let node = Arc::new(Node::bind(opts).await.expect("Failed to bind node"));
