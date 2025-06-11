@@ -1,7 +1,7 @@
 use crate::crypto::{ED25519_PUBLICKEYBYTES, ED25519_SECRETKEYBYTES};
 use crate::identity::{Identity, PubKey};
 use crate::node;
-use crate::node::{MessageSink, Node, NodeOpts, NodeOptsBuilder, NodeOptsBuilderError, MIN_POW_DIFFICULTY_DEFAULT};
+use crate::node::{MessageSink, Node, NodeOpts, NodeOptsBuilder, NodeOptsBuilderError};
 use crate::peer;
 use crate::peer::PeersList;
 use crate::peer::SuperPeerUrl;
@@ -199,9 +199,10 @@ pub extern "C" fn drasyl_version() -> *const u8 {
 /// The caller must ensure that all buffers are non-null and properly sized.
 ///
 /// # Arguments
-/// * `sk_buf` - Pointer to a buffer of at least 64 bytes for the secret key
-/// * `pk_buf` - Pointer to a buffer of at least 32 bytes for the public key
-/// * `pow_buf` - Pointer to a buffer of at least 4 bytes for the proof of work
+/// * `sk_buf`   - Pointer to a buffer of at least 64 bytes for the secret key
+/// * `pk_buf`   - Pointer to a buffer of at least 32 bytes for the public key
+/// * `pow_buf`  - Pointer to a buffer of at least 4 bytes for the proof of work
+/// * `pow_diff` - The proof of work difficulty
 ///
 /// # Returns
 /// * `0` on success
@@ -212,6 +213,7 @@ pub extern "C" fn drasyl_generate_identity(
     sk_buf: *mut u8,
     pk_buf: *mut u8,
     pow_buf: *mut u8,
+    pow_diff: u8,
 ) -> c_int {
     // Validate input pointers
     if sk_buf.is_null() || pk_buf.is_null() || pow_buf.is_null() {
@@ -219,7 +221,7 @@ pub extern "C" fn drasyl_generate_identity(
     }
 
     // Attempt to generate identity
-    let identity = match Identity::generate(MIN_POW_DIFFICULTY_DEFAULT) {
+    let identity = match Identity::generate(pow_diff) {
         Ok(id) => id,
         Err(_) => return ERR_IDENTITY_GENERATION,
     };
