@@ -197,9 +197,30 @@ impl fmt::Display for Status {
         #[cfg(feature = "prometheus")]
         {
             writeln!(f, "  Prometheus:")?;
-            writeln!(f, "    URL: {:?}", self.opts.prometheus_url)?;
-            writeln!(f, "    User: {:?}", self.opts.prometheus_user)?;
-            writeln!(f, "    Password: {:?}", self.opts.prometheus_pass)?;
+            writeln!(
+                f,
+                "    URL: {:?}",
+                self.opts
+                    .prometheus_url
+                    .as_ref()
+                    .map_or("None".to_string(), |url| url.to_string())
+            )?;
+            writeln!(
+                f,
+                "    User: {:?}",
+                self.opts
+                    .prometheus_user
+                    .as_ref()
+                    .map_or("None".to_string(), |user| user.to_string())
+            )?;
+            writeln!(
+                f,
+                "    Password: {:?}",
+                self.opts
+                    .prometheus_pass
+                    .as_ref()
+                    .map_or("None".to_string(), |pass| pass.to_string())
+            )?;
         }
         writeln!(f)?;
 
