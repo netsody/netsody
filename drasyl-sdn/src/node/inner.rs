@@ -28,12 +28,13 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, trace, warn};
 use tun_rs::AsyncDevice as TunDevice;
+use url::Url;
 
 type TrieRx = IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>>;
 
 pub struct SdnNodeInner {
     pub(crate) id: Identity,
-    pub(crate) networks: HashMap<String, Network>,
+    pub(crate) networks: HashMap<Url, Network>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) node: Arc<Node>,
     recv_buf_rx: Arc<Receiver<(PubKey, Vec<u8>)>>,
@@ -46,7 +47,7 @@ pub struct SdnNodeInner {
 impl SdnNodeInner {
     pub(crate) fn new(
         id: Identity,
-        networks: HashMap<String, Network>,
+        networks: HashMap<Url, Network>,
         cancellation_token: CancellationToken,
         node: Arc<Node>,
         recv_buf_rx: Arc<Receiver<(PubKey, Vec<u8>)>>,

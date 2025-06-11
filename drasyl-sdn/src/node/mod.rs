@@ -1,14 +1,14 @@
+mod config;
 mod error;
 mod housekeeping;
 mod inner;
 
-use crate::network::Network;
-use drasyl::identity::{Identity, PubKey};
+pub use config::*;
+use drasyl::identity::PubKey;
 use drasyl::node::{MessageSink, Node, SendHandle};
 use drasyl::util;
 pub use error::*;
 pub use inner::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
@@ -19,16 +19,12 @@ pub struct SdnNode {
 }
 
 impl SdnNode {
-    pub async fn start(id: Identity, config_urls: Vec<String>) -> Self {
+    pub async fn start(config: SdnNodeConfig) -> Self {
         info!("Start SDN node.");
-        let mut networks = HashMap::with_capacity(config_urls.len());
-        for config_url in config_urls {
-            networks.insert(config_url.clone(), Network::new(config_url));
-        }
 
         // start node
         let cancellation_token = CancellationToken::new();
-        let (node, recv_buf_rx) = SdnNodeInner::bind_node(&id)
+        let (node, recv_buf_rx) = SdnNodeInner::bind_node(&config.id)
             .await
             .expect("Failed to bind node");
 
@@ -41,8 +37,8 @@ impl SdnNode {
         let drasyl_rx = Arc::new(drasyl_rx);
 
         let inner = Arc::new(SdnNodeInner::new(
-            id,
-            networks,
+            config.id,
+            config.networks,
             cancellation_token,
             node,
             recv_buf_rx,
