@@ -384,6 +384,7 @@ impl SdnNodeInner {
         );
 
         // create tun device
+        trace!("Create TUN device");
         let mut dev_builder = TunDeviceBuilder::new().ipv4(ip, netmask, Some(ip)).mtu(mtu);
         if let Some(name) = &name {
             dev_builder = dev_builder.name(name);
