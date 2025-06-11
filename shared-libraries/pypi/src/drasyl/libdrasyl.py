@@ -19,6 +19,7 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 # OR OTHER DEALINGS IN THE SOFTWARE.
 #
+import ctypes
 from ctypes import *
 import os
 import platform
@@ -97,13 +98,95 @@ def check_not_none(*allowed_none_args):
         return wrapper
     return decorator
 
+def validate_ctypes(strict_convert=False):
+    """
+Decorator that validates:
+- Compatibility with annotated ctypes types
+- Value ranges for ctypes integer types
+- Optionally auto-converts compatible raw values to ctypes instances
+    """
+    def decorator(func):
+        sig = inspect.signature(func)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            bound_args = sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
+
+            for name, value in bound_args.arguments.items():
+                # Type annotation of the argument
+                expected_type = sig.parameters[name].annotation
+
+                # Skip if no type annotation or not a ctypes type
+                if expected_type is inspect._empty or not issubclass_safe(expected_type, ctypes._SimpleCData):
+                    continue
+
+                # If already the correct ctypes type, allow it
+                if isinstance(value, expected_type):
+                    continue
+
+                # Try conversion or validation
+                try:
+                    # Integer range validation for numeric types
+                    raw_value = int(value)
+                    min_val, max_val = get_ctypes_range(expected_type)
+                    if not (min_val <= raw_value <= max_val):
+                        raise ValueError(f"Argument '{name}'={raw_value} is out of range for {expected_type.__name__} ({min_val}–{max_val})")
+
+                    # Auto-convert if strict mode is on
+                    if strict_convert:
+                        bound_args.arguments[name] = expected_type(raw_value)
+
+                except Exception as e:
+                    raise TypeError(f"Argument '{name}' cannot be used as {expected_type.__name__}: {e}")
+
+            return func(*bound_args.args, **bound_args.kwargs)
+
+        return wrapper
+    return decorator
+
+
+def get_ctypes_range(ctype):
+    """
+Return min and max allowed values for a given ctypes integer type.
+    """
+    if issubclass(ctype, ctypes._SimpleCData):
+        size = ctypes.sizeof(ctype)
+        signed = hasattr(ctype, 'value') and ctype(-1).value < 0
+        if signed:
+            min_val = -(2 ** (size * 8 - 1))
+            max_val = 2 ** (size * 8 - 1) - 1
+        else:
+            min_val = 0
+            max_val = 2 ** (size * 8) - 1
+        return min_val, max_val
+    raise TypeError("Unsupported ctypes type for range check")
+
+
+def issubclass_safe(obj, cls):
+    """
+Safe check to determine if obj is a subclass of cls.
+    """
+    try:
+        return issubclass(obj, cls)
+    except TypeError:
+        return False
+
 def success(code: int):
     return code == 0
+
+def ensure_success(code: int):
+    if code != 0:
+        raise RuntimeError("Unexpected error code " + str(code))
 
 #
 # Return codes
 #
 
+# Signals an UTF-8 encoding error
+ERR_UTF8 = -1
+# Signals an error during address parsing
+ERR_ADDR_PARSE = -4
 # Signals a null pointer exception
 ERR_NULL_POINTER = -6
 # Signals an identity generation error
@@ -170,6 +253,7 @@ RuntimeError: If the Rust function returns an error code.
 # MessageSink
 
 # Returns the length of the recv buffer for the given bindAddr and message receiver
+@validate_ctypes()
 @check_not_none()
 def drasyl_recv_buf_len(bind_addr: c_void_p, recv_buf_rx: c_void_p):
     # Set argument and return types for the Rust FFI function
@@ -190,16 +274,140 @@ def drasyl_node_opts_builder_new():
 
     return _libdrasyl.drasyl_node_opts_builder_new()
 
+# Adds an identity to the node opts builder
+@validate_ctypes()
 @check_not_none()
-def drasyl_node_opts_builder_id(bind_addr: c_void_p, identity: Identity):
+def drasyl_node_opts_builder_id(builder: c_void_p, identity: Identity):
     # Set argument and return types for the Rust FFI function
     _libdrasyl.drasyl_node_opts_builder_id.argtypes = [
-        c_void_p,  # bindAddr
+        c_void_p,  # builder
         c_void_p   # recv_buf_rx
     ]
     _libdrasyl.drasyl_node_opts_builder_id.restype = c_int
 
-    result = _libdrasyl.drasyl_node_opts_builder_id(bind_addr, identity.secret_key, identity.proof_of_work)
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_id(builder, identity.secret_key, identity.proof_of_work))
 
-    if not success(result):
-        raise RuntimeError("Unexpected error")
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_message_sink(builder: c_void_p, recv_buf_tx: c_void_p):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_message_sink.argtypes = [
+        c_void_p,  # builder
+        c_void_p   # recv_buf_tx
+    ]
+    _libdrasyl.drasyl_node_opts_builder_message_sink.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_message_sink(builder, recv_buf_tx))
+
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_network_id(builder: c_void_p, network_id: c_int32):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_network_id.argtypes = [
+        c_void_p,  # builder
+        c_void_p   # network_id
+    ]
+    _libdrasyl.drasyl_node_opts_builder_network_id.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_network_id(builder, network_id))
+
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_udp_addrs(builder: c_void_p, udp_addrs: str):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_udp_addrs.argtypes = [
+        c_void_p,  # builder
+        c_char_p   # udp_addrs
+    ]
+    _libdrasyl.drasyl_node_opts_builder_udp_addrs.restype = c_int
+
+    result = _libdrasyl.drasyl_node_opts_builder_udp_addrs(builder, udp_addrs.encode('utf-8'))
+
+    if result == ERR_UTF8:
+        raise RuntimeError("Address is not in valid utf-8 format.")
+    elif result == ERR_ADDR_PARSE:
+        raise RuntimeError("Address is not in a valid format.")
+
+    ensure_success(result)
+
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_udp_port(builder: c_void_p, udp_port: c_ushort):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_udp_port.argtypes = [
+        c_void_p,  # builder
+        c_ushort   # udp_port
+    ]
+    _libdrasyl.drasyl_node_opts_builder_udp_port.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_udp_port(builder, udp_port))
+
+@check_not_none()
+def drasyl_node_opts_builder_udp_port_none(builder: c_void_p):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_udp_port_none.argtypes = [
+        c_void_p  # builder
+    ]
+    _libdrasyl.drasyl_node_opts_builder_udp_port_none.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_udp_port_none(builder))
+
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_arm_messages(builder: c_void_p, arm_messages: c_bool):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_arm_messages.argtypes = [
+        c_void_p,  # builder
+        c_bool     # arm_messages
+    ]
+    _libdrasyl.drasyl_node_opts_builder_arm_messages.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_arm_messages(builder, arm_messages))
+
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_max_peers(builder: c_void_p, max_peers: c_uint64):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_max_peers.argtypes = [
+        c_void_p,  # builder
+        c_uint64   # max_peers
+    ]
+    _libdrasyl.drasyl_node_opts_builder_max_peers.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_max_peers(builder, max_peers))
+
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_min_pow_difficulty(builder: c_void_p, min_pow_difficulty: c_uint8):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_min_pow_difficulty.argtypes = [
+        c_void_p,  # builder
+        c_uint8    # min_pow_difficulty
+    ]
+    _libdrasyl.drasyl_node_opts_builder_min_pow_difficulty.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_min_pow_difficulty(builder, min_pow_difficulty))
+
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_hello_timeout(builder: c_void_p, hello_timeout: c_uint64):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_hello_timeout.argtypes = [
+        c_void_p,  # builder
+        c_uint64   # hello_timeout
+    ]
+    _libdrasyl.drasyl_node_opts_builder_hello_timeout.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_min_pow_difficulty(builder, hello_timeout))
+
+@validate_ctypes()
+@check_not_none()
+def drasyl_node_opts_builder_hello_max_age(builder: c_void_p, hello_max_age: c_uint64):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_hello_max_age.argtypes = [
+        c_void_p,  # builder
+        c_uint64   # hello_max_age
+    ]
+    _libdrasyl.drasyl_node_opts_builder_hello_max_age.restype = c_int
+
+    ensure_success(_libdrasyl.drasyl_node_opts_builder_hello_max_age(builder, hello_max_age))
