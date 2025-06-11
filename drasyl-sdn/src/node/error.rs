@@ -1,4 +1,5 @@
 use crate::network;
+use drasyl::identity;
 use std::io;
 use std::string::FromUtf8Error;
 use thiserror::Error;
@@ -31,4 +32,10 @@ pub enum Error {
 
     #[error("Network error: {0}")]
     NetworkError(#[from] network::ConfigError),
+
+    #[error("Identity error: {0}")]
+    IdentityError(#[from] identity::Error),
+
+    #[error("TOML serialization error: {0}")]
+    TomlSerError(#[from] toml::ser::Error),
 }

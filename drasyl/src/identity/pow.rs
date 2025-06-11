@@ -46,6 +46,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, FromBytes, IntoBytes, Immutable)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(into = "i32", from = "i32"))]
 pub struct Pow(pub(crate) [u8; 4]);
 
 impl Pow {
@@ -130,6 +131,12 @@ impl Display for Pow {
 impl fmt::Debug for Pow {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(self, f)
+    }
+}
+
+impl From<Pow> for i32 {
+    fn from(pow: Pow) -> Self {
+        i32::from_be_bytes(pow.0)
     }
 }
 
