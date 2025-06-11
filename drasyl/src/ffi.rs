@@ -122,10 +122,11 @@ pub extern "C" fn drasyl_recv_buf_new(
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_recv_buf_free(recv_buf: *mut (MessageSender, MessageReceiver)) {
+pub extern "C" fn drasyl_recv_buf_free(recv_buf: *mut (MessageSender, MessageReceiver)) -> c_int {
     unsafe {
         drop(Box::from_raw(recv_buf));
     }
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -428,10 +429,11 @@ pub extern "C" fn drasyl_node_opts_builder_build(
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_node_opts_builder_free(builder: *mut NodeOptsBuilder) {
+pub extern "C" fn drasyl_node_opts_builder_free(builder: *mut NodeOptsBuilder) -> c_int {
     unsafe {
         drop(Box::from_raw(builder));
     }
+    0
 }
 
 //
@@ -509,10 +511,11 @@ pub extern "C" fn drasyl_node_opts_enforce_tcp(opts: &mut NodeOpts) -> bool {
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_node_opts_free(opts: *mut NodeOpts) {
+pub extern "C" fn drasyl_node_opts_free(opts: *mut NodeOpts) -> c_int {
     unsafe {
         drop(Box::from_raw(opts));
     }
+    0
 }
 
 //
@@ -551,10 +554,11 @@ pub extern "C" fn drasyl_node_bind(opts: *mut NodeOpts, bind: *mut *mut NodeBind
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_node_bind_free(bind: &mut NodeBind) {
+pub extern "C" fn drasyl_node_bind_free(bind: &mut NodeBind) -> c_int {
     unsafe {
         drop(Box::from_raw(bind));
     }
+    0
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -640,10 +644,11 @@ pub extern "C" fn drasyl_peers_list_peers_len(peers: &mut Vec<Peer>) -> u64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_peers_list_peers_free(peers: &mut Vec<Peer>) {
+pub extern "C" fn drasyl_peers_list_peers_free(peers: &mut Vec<Peer>) -> c_int {
     unsafe {
         drop(Box::from_raw(peers));
     }
+    0
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
