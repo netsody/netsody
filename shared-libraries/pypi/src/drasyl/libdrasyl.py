@@ -24,6 +24,9 @@ import os
 import platform
 import json
 
+from functools import wraps
+import inspect
+
 _dir = os.path.dirname(os.path.realpath(__file__))
 # get the right filename
 if platform.uname()[0] == "Windows":
@@ -35,11 +38,11 @@ else:
 _libdrasyl = cdll.LoadLibrary(os.path.join(_dir, "libdrasyl", _name))
 
 #
-# classes
+# utils
 #
 
 class Identity:
-    def __init__(self, secret_key: bytes, public_key: bytes, proof_of_work: bytes):
+    def __init__(self, secret_key: bytes, public_key: bytes, proof_of_work: int):
         self.secret_key = secret_key
         self.public_key = public_key
         self.proof_of_work = proof_of_work
@@ -49,7 +52,7 @@ class Identity:
             "{\n"
             f"  secret_key: {self.secret_key.hex()},\n"
             f"  public_key: {self.public_key.hex()},\n"
-            f"  proof_of_work: {int.from_bytes(self.proof_of_work, byteorder='big', signed=True)}\n"
+            f"  proof_of_work: {self.proof_of_work}\n"
             "}"
         )
 
@@ -57,7 +60,7 @@ class Identity:
         return {
             "secret_key": self.secret_key.hex(),
             "public_key": self.public_key.hex(),
-            "proof_of_work": self.proof_of_work.hex(),
+            "proof_of_work": self.proof_of_work,
         }
 
     @classmethod
@@ -65,7 +68,7 @@ class Identity:
         return cls(
             secret_key=bytes.fromhex(d["secret_key"]),
             public_key=bytes.fromhex(d["public_key"]),
-            proof_of_work=bytes.fromhex(d["proof_of_work"]),
+            proof_of_work=d["proof_of_work"],
         )
 
     def save_to_file(self, filename):
@@ -78,38 +81,24 @@ class Identity:
             data = json.load(f)
         return cls.from_dict(data)
 
-#
-# utilities
-#
+def check_not_none(*allowed_none_args):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            sig = inspect.signature(func)
+            bound_args = sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
 
-class _dotdict(dict):
-    """dot.notation access to dictionary attributes"""
-    __getattr__ = dict.get
-    __setattr__ = dict.__setitem__
-    __delattr__ = dict.__delitem__
+            for name, value in bound_args.arguments.items():
+                if name not in allowed_none_args and value is None:
+                    raise ValueError(f"Argument '{name}' must not be None.")
 
-def _wrap_event(event):
-    response = {
-        'event_code': event[0].event_code
-    }
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
-    if 10 <= event[0].event_code and event[0].event_code <= 15:
-        response['node'] = _dotdict({
-            'identity': _dotdict({
-                'proof_of_work': event[0].node[0].identity[0].proof_of_work,
-                'identity_public_key': event[0].node[0].identity[0].identity_public_key.decode('UTF-8'),
-                'identity_secret_key': event[0].node[0].identity[0].identity_secret_key.decode('UTF-8')
-            })
-        })
-    elif 20 <= event[0].event_code and event[0].event_code <= 23:
-        response['peer'] = _dotdict({
-            'address': event[0].peer[0].address.decode('UTF-8')
-        })
-    elif event[0].event_code == 30:
-        response['sender'] = event[0].message_sender.decode('UTF-8')
-        response['payload'] = event[0].message_payload.decode('UTF-8')
-
-    return _dotdict(response)
+def success(code: int):
+    return code == 0
 
 #
 # Return codes
@@ -126,8 +115,13 @@ ED25519_PUBLICKEYBYTES = 32
 POW_BYTES = 4
 DEFAULT_POW_DIFFICULTY = 24
 
-_libdrasyl.drasyl_version.restype = c_char_p
+#
+# Libdrasyl functions
+#
 def drasyl_version():
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_version.restype = c_char_p
+
     version = _libdrasyl.drasyl_version()
     return version.decode("utf-8").strip("\0")
 
@@ -162,7 +156,7 @@ RuntimeError: If the Rust function returns an error code.
 
     # Handle possible error codes from Rust
     if result == 0:
-        return Identity(bytes(sk), bytes(pk), bytes(pow_buf))
+        return Identity(bytes(sk), bytes(pk), int.from_bytes(pow_buf, byteorder='big', signed=True))
     elif result == ERR_NULL_POINTER:
         raise RuntimeError("Null pointer passed to generate_identity()")
     elif result == ERR_IDENTITY_GENERATION:
@@ -171,3 +165,41 @@ RuntimeError: If the Rust function returns an error code.
         raise RuntimeError(f"Unknown error code returned: {result}")
 
     return None
+
+
+# MessageSink
+
+# Returns the length of the recv buffer for the given bindAddr and message receiver
+@check_not_none()
+def drasyl_recv_buf_len(bind_addr: c_void_p, recv_buf_rx: c_void_p):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_recv_buf_len.argtypes = [
+        c_void_p,  # bindAddr
+        c_void_p   # recv_buf_rx
+    ]
+    _libdrasyl.drasyl_recv_buf_len.restype = c_int
+
+    return _libdrasyl.drasyl_recv_buf_len(bind_addr, recv_buf_rx)
+
+# NodeOptsBuilder
+
+# Returns a pointer to a newly created node opts builder object
+def drasyl_node_opts_builder_new():
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_new.restype = c_void_p
+
+    return _libdrasyl.drasyl_node_opts_builder_new()
+
+@check_not_none()
+def drasyl_node_opts_builder_id(bind_addr: c_void_p, identity: Identity):
+    # Set argument and return types for the Rust FFI function
+    _libdrasyl.drasyl_node_opts_builder_id.argtypes = [
+        c_void_p,  # bindAddr
+        c_void_p   # recv_buf_rx
+    ]
+    _libdrasyl.drasyl_node_opts_builder_id.restype = c_int
+
+    result = _libdrasyl.drasyl_node_opts_builder_id(bind_addr, identity.secret_key, identity.proof_of_work)
+
+    if not success(result):
+        raise RuntimeError("Unexpected error")
