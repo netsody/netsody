@@ -1,4 +1,3 @@
-use anyhow::Result;
 use drasyl::identity::{Identity, PubKey};
 use drasyl::node::{MessageSink, Node, NodeOptsBuilder};
 use std::env;
@@ -12,8 +11,9 @@ use tracing::info;
 
 // cargo run --package drasyl-bench --bin drasyl --release
 #[tokio::main]
-async fn main() -> Result<()> {
-    env_logger::init();
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    tracing_subscriber::fmt::init();
+
     let args: Vec<String> = env::args().collect();
 
     if let Some(server) = args.get(1) {
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn server() -> Result<()> {
+async fn server() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     // identity
     let id = Identity::load_or_generate("server.identity", 24).expect("Failed to load identity");
     info!("I am {}", id.pk);
@@ -58,7 +58,7 @@ async fn server() -> Result<()> {
     Ok(())
 }
 
-async fn client(server: &str) -> Result<()> {
+async fn client(server: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let server = PubKey::from_str(server)?;
     let bytes = vec![0];
 

@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use iroh::{Endpoint, SecretKey};
 use iroh_base::ticket::NodeTicket;
 use std::env;
@@ -10,8 +9,9 @@ const ALPN: &[u8] = b"DRASYLBENCHV0";
 
 // cargo run --package drasyl-bench --bin iroh --release
 #[tokio::main]
-async fn main() -> Result<()> {
-    // env_logger::init();
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    tracing_subscriber::fmt::init();
+
     let args: Vec<String> = env::args().collect();
 
     if let Some(ticket) = args.get(1) {
@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn server() -> Result<()> {
+async fn server() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let secret_key = get_or_create_secret()?;
     let endpoint = Endpoint::builder()
         .discovery_n0()
@@ -70,7 +70,7 @@ async fn server() -> Result<()> {
     Ok(())
 }
 
-async fn client(ticket: &str) -> Result<()> {
+async fn client(ticket: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let secret_key = get_or_create_secret()?;
     let endpoint = Endpoint::builder()
         .discovery_n0()
@@ -98,9 +98,9 @@ async fn client(ticket: &str) -> Result<()> {
 /// Get the secret key or generate a new one.
 ///
 /// Print the secret key to stderr if it was generated, so the user can save it.
-fn get_or_create_secret() -> Result<SecretKey> {
+fn get_or_create_secret() -> Result<SecretKey, Box<dyn std::error::Error + Send + Sync + 'static>> {
     match env::var("IROH_SECRET") {
-        Ok(secret) => SecretKey::from_str(&secret).context("invalid secret"),
+        Ok(secret) => Ok(SecretKey::from_str(&secret)?),
         Err(_) => {
             let key = SecretKey::generate(rand::rngs::OsRng);
             info!("using secret key {}", key);
