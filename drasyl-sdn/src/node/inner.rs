@@ -1,6 +1,6 @@
 use crate::network::Network;
 use crate::network::config::{NetworkConfig, PhysicalRoutingTable};
-use crate::node::{ChannelSink, Error};
+use crate::node::{ChannelSink, Error, SdnNodeConfig};
 use arc_swap::ArcSwap;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -68,7 +68,7 @@ impl SdnNodeInner {
     }
 
     pub(crate) async fn bind_node(
-        id: &Identity,
+        config: &SdnNodeConfig,
     ) -> Result<(Arc<Node>, Arc<Receiver<(PubKey, Vec<u8>)>>), Error> {
         // options
         let super_peers = SuperPeerUrl::parse_list(&util::get_env(
@@ -91,18 +91,12 @@ impl SdnNodeInner {
         let housekeeping_interval = util::get_env("HOUSEKEEPING_INTERVAL", 5 * 1000); // milliseconds
         let enforce_tcp = util::get_env("ENFORCE_TCP", false);
         let udp_sockets = util::get_env("UDP_SOCKETS", 3);
-        #[cfg(feature = "prometheus")]
-        let prometheus_url = util::get_env("PROMETHEUS_URL", String::new());
-        #[cfg(feature = "prometheus")]
-        let prometheus_user = util::get_env("PROMETHEUS_USER", String::new());
-        #[cfg(feature = "prometheus")]
-        let prometheus_pass = util::get_env("PROMETHEUS_PASS", String::new());
 
         // build node
         let (recv_buf_tx, recv_buf_rx) = flume::bounded::<(PubKey, Vec<u8>)>(recv_buf_cap);
         let mut builder = NodeOptsBuilder::default();
         builder
-            .id(id.clone())
+            .id(config.id.clone())
             .network_id(network_id)
             .arm_messages(arm_messages)
             .max_peers(max_peers)
@@ -117,9 +111,24 @@ impl SdnNodeInner {
             .enforce_tcp(enforce_tcp);
         #[cfg(feature = "prometheus")]
         builder
-            .prometheus_url((!prometheus_url.is_empty()).then_some(prometheus_url))
-            .prometheus_user((!prometheus_user.is_empty()).then_some(prometheus_user))
-            .prometheus_pass((!prometheus_pass.is_empty()).then_some(prometheus_pass));
+            .prometheus_url(
+                config
+                    .prometheus
+                    .as_ref()
+                    .map(|prometheus| prometheus.url.clone()),
+            )
+            .prometheus_user(
+                config
+                    .prometheus
+                    .as_ref()
+                    .map(|prometheus| prometheus.user.clone()),
+            )
+            .prometheus_pass(
+                config
+                    .prometheus
+                    .as_ref()
+                    .map(|prometheus| prometheus.pass.clone()),
+            );
         let opts = builder.build().expect("Failed to build node opts");
 
         // bind node

@@ -24,7 +24,7 @@ impl SdnNode {
 
         // start node
         let cancellation_token = CancellationToken::new();
-        let (node, recv_buf_rx) = SdnNodeInner::bind_node(&config.id)
+        let (node, recv_buf_rx) = SdnNodeInner::bind_node(&config)
             .await
             .expect("Failed to bind node");
 
