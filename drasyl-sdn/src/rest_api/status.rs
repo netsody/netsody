@@ -211,7 +211,7 @@ impl fmt::Display for Status {
                 self.opts
                     .prometheus_user
                     .as_ref()
-                    .map_or("None".to_string(), |user| user.to_string())
+                    .map_or("None".to_string(), |_| "****".to_string())
             )?;
             writeln!(
                 f,
