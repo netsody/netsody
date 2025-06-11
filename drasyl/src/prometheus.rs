@@ -1,7 +1,6 @@
 use crate::identity::PubKey;
 use crate::node::NodeInner;
 use crate::peer::Peer;
-use crate::util;
 use lazy_static::lazy_static;
 use prometheus::{CounterVec, HistogramVec, labels, register_counter_vec, register_histogram_vec};
 use prometheus::{GaugeVec, register_gauge_vec};
@@ -67,34 +66,33 @@ impl NodeInner {
         inner: Arc<NodeInner>,
         cancellation_token: CancellationToken,
     ) {
-        let prometheus_url = util::get_env("PROMETHEUS_URL", String::new());
-        let prometheus_user = util::get_env("PROMETHEUS_USER", String::new());
-        let prometheus_pass = util::get_env("PROMETHEUS_PASS", String::new());
+        if let (Some(prometheus_url), Some(prometheus_user), Some(prometheus_pass)) = (
+            inner.opts.prometheus_url.clone(),
+            inner.opts.prometheus_user.clone(),
+            inner.opts.prometheus_pass.clone(),
+        ) {
+            let mut interval = tokio::time::interval(Duration::from_millis(5000));
 
-        if prometheus_url.is_empty() {
-            trace!("prometheus_url is empty. Stop prometheus_pusher");
-            return;
-        }
-
-        let mut interval = tokio::time::interval(Duration::from_millis(5000));
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    let inner = inner.clone();
-                    let prometheus_url = prometheus_url.clone();
-                    let prometheus_user = prometheus_user.clone();
-                    let prometheus_pass = prometheus_pass.clone();
-                    if let Err(e) = tokio::task::spawn_blocking(move || {
-                        Self::push_metrics(&inner, prometheus_url, prometheus_user, prometheus_pass);
-                    }).await {
-                        error!("push metrics error {:?}", e);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let inner = inner.clone();
+                        let prometheus_url = prometheus_url.clone();
+                        let prometheus_user = prometheus_user.clone();
+                        let prometheus_pass = prometheus_pass.clone();
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                            Self::push_metrics(&inner, prometheus_url, prometheus_user, prometheus_pass);
+                        }).await {
+                            error!("push metrics error {:?}", e);
+                        }
+                    }
+                    _ = cancellation_token.cancelled() => {
+                        break;
                     }
                 }
-                _ = cancellation_token.cancelled() => {
-                    break;
-                }
             }
+        } else {
+            trace!("prometheus_url, user or pass is empty. Stop prometheus_pusher");
         }
     }
 

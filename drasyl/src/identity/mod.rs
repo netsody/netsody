@@ -79,14 +79,32 @@ const MIN_DERIVED_PORT: u16 = 22528;
 /// Identity::save("backup.identity", &identity).expect("Failed to save identity");
 /// ```
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Identity {
     /// The secret key used for signing messages and deriving the public key.
     pub sk: SecKey,
     /// The public key used for node identification and message verification.
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub pk: PubKey,
     /// The proof of work value that meets the minimum difficulty requirement.
     pub pow: Pow,
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Identity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct IdentityHelper {
+            sk: SecKey,
+            pow: Pow,
+        }
+
+        let helper = IdentityHelper::deserialize(deserializer)?;
+        Ok(Identity::new(helper.sk, helper.pow))
+    }
 }
 
 impl Identity {

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
-use drasyl::identity::Identity;
 use drasyl::util;
 use drasyl_sdn::node::SdnNode;
+use drasyl_sdn::node::SdnNodeConfig;
 use drasyl_sdn::rest_api::{RestApi, load_auth_token};
 use http_body_util::{BodyExt, Empty};
 use hyper::Request;
@@ -22,10 +22,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Runs the SDN node
-    Run {
-        #[arg(num_args = 1..)]
-        urls: Vec<String>,
-    },
+    Run,
     /// Shows the status of the running SDN node
     Status,
 }
@@ -37,24 +34,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { urls } => run_sdn_node(urls).await,
+        Commands::Run => run_sdn_node().await,
         Commands::Status => show_status().await,
     }
 }
 
-async fn run_sdn_node(
-    urls: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    // options
-    let identity_file = util::get_env("IDENTITY_FILE", "drasyl.identity".to_string());
-    let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
+async fn run_sdn_node() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    // config
+    let config_path = util::get_env("CONFIG", "config.toml".to_string());
+    let config = SdnNodeConfig::load_or_generate(&config_path).expect("Failed to load SDN config");
 
     // identity
-    let id = Identity::load_or_generate(&identity_file, min_pow_difficulty)
-        .expect("Failed to load identity");
-    info!("I am {}", id.pk);
+    info!("I am {}", config.id.pk);
 
-    let node = Arc::new(SdnNode::start(id, urls).await);
+    let node = Arc::new(SdnNode::start(config).await);
     let rest_api = RestApi::new(node.clone());
 
     let node_clone = node.clone();
