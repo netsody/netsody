@@ -1,7 +1,9 @@
 use crate::network::{Network, PhysicalRoutingTable, VirtualRoutingTable};
 use crate::node::SdnNode;
-use crate::rest_api::RestApi;
 use crate::rest_api::auth::AuthToken;
+use crate::rest_api::error::Error;
+use crate::rest_api::server::RestApiServer;
+use crate::rest_api::{RestApiClient, load_auth_token};
 use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Local, Utc};
@@ -9,7 +11,13 @@ use drasyl::identity::PubKey;
 use drasyl::message::ShortId;
 use drasyl::node::{HELLO_TIMEOUT_DEFAULT, NodeOpts};
 use drasyl::peer::{NodePeer, Peer, PeerPathInner, PeerPathKey, PowStatus, SessionKeys, SuperPeer};
+use drasyl::util;
+use http::Request;
+use http_body_util::BodyExt;
+use http_body_util::Empty;
 use humantime::format_duration;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,7 +29,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url;
 use url::Url;
 
-impl RestApi {
+impl RestApiServer {
     pub(crate) async fn status(State(sdn_node): State<Arc<SdnNode>>, _: AuthToken) -> Json<Status> {
         // opts
         let opts = sdn_node.drasyl_node().opts().clone();
@@ -57,10 +65,66 @@ impl RestApi {
         Json(status)
     }
 }
+
+impl RestApiClient {
+    pub async fn status(&self) -> Result<Status, Error> {
+        let client = Client::builder(TokioExecutor::new()).build_http();
+        let token_file = util::get_env("AUTH_FILE", crate::rest_api::AUTH_FILE_DEFAULT.to_string());
+        let auth_token = load_auth_token(&token_file).map_err(Error::AuthTokenReadFailed)?;
+
+        let uri = "http://localhost:22527/status"
+            .parse::<hyper::Uri>()
+            .map_err(|e| Error::StatusRequestFailed {
+                reason: format!("Failed to parse URI: {}", e),
+            })?;
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("Authorization", format!("Bearer {}", auth_token))
+            .body(Empty::<bytes::Bytes>::new())
+            .map_err(|e| Error::StatusRequestFailed {
+                reason: format!("Failed to build request: {}", e),
+            })?;
+
+        let response = client
+            .request(req)
+            .await
+            .map_err(|e| Error::StatusRequestFailed {
+                reason: format!("HTTP request failed: {}", e),
+            })?;
+        let status_code = response.status();
+
+        if status_code.is_success() {
+            let body_bytes = response
+                .into_body()
+                .collect()
+                .await
+                .map_err(|e| Error::StatusRequestFailed {
+                    reason: format!("Failed to collect response body: {}", e),
+                })?
+                .to_bytes();
+            let body_str =
+                String::from_utf8(body_bytes.to_vec()).map_err(|e| Error::StatusRequestFailed {
+                    reason: format!("Failed to parse response body as UTF-8: {}", e),
+                })?;
+            let status: Status =
+                serde_json::from_str(&body_str).map_err(|e| Error::StatusRequestFailed {
+                    reason: format!("Failed to parse response as JSON: {}", e),
+                })?;
+
+            Ok(status)
+        } else {
+            Err(Error::StatusRequestFailed {
+                reason: format!("Server returned error status: {}", status_code),
+            })
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Status {
     // drasyl
-    opts: NodeOpts,
+    pub opts: NodeOpts,
     default_route: PubKey,
     super_peers: HashMap<PubKey, SuperPeerStatus>,
     node_peers: HashMap<PubKey, NodePeerStatus>,
@@ -428,6 +492,13 @@ impl fmt::Display for NetworkStatus {
                 .as_ref()
                 .map_or("None".to_string(), |ip| ip.to_string())
         )?;
+        writeln!(
+            f,
+            "TUN device: {}",
+            self.tun_device
+                .as_ref()
+                .map_or("None".to_string(), |tun_device| tun_device.to_string())
+        )?;
         match &self.virtual_routes {
             Some(virtual_routes) if !virtual_routes.is_empty() => {
                 writeln!(f, "Virtual Routes:")?;
@@ -470,13 +541,6 @@ impl fmt::Display for NetworkStatus {
                 }
             }
         }
-        writeln!(
-            f,
-            "TUN device: {}",
-            self.tun_device
-                .as_ref()
-                .map_or("None".to_string(), |tun_device| tun_device.to_string())
-        )?;
 
         Ok(())
     }
