@@ -11,6 +11,14 @@ use tracing::trace;
 use url::Url;
 
 #[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "prometheus", derive(Debug, Clone))]
+pub struct PrometheusConfig {
+    pub url: String,
+    pub user: String,
+    pub pass: String,
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct SdnNodeConfig {
     #[serde(rename = "identity")]
     pub id: Identity,
@@ -21,6 +29,8 @@ pub struct SdnNodeConfig {
         deserialize_with = "deserialize_networks"
     )]
     pub networks: HashMap<Url, Network>,
+    #[cfg(feature = "prometheus")]
+    pub prometheus: Option<PrometheusConfig>,
 }
 
 impl SdnNodeConfig {
@@ -28,6 +38,8 @@ impl SdnNodeConfig {
         Self {
             id,
             networks: Default::default(),
+            #[cfg(feature = "prometheus")]
+            prometheus: Default::default(),
         }
     }
 

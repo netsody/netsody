@@ -173,6 +173,15 @@ pub struct NodeOpts {
     /// Default: false
     #[builder(default)]
     pub enforce_tcp: bool,
+    #[cfg(feature = "prometheus")]
+    #[builder(default)]
+    pub prometheus_url: Option<String>,
+    #[cfg(feature = "prometheus")]
+    #[builder(default)]
+    pub prometheus_user: Option<String>,
+    #[cfg(feature = "prometheus")]
+    #[builder(default)]
+    pub prometheus_pass: Option<String>,
 }
 
 pub const COMPRESSION: bool = false;
