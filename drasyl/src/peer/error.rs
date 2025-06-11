@@ -15,7 +15,7 @@ use thiserror::Error;
 pub enum Error {
     /// Cryptographic operation failed.
     #[error("Crypto error: {0}")]
-    CryptoError(#[from] crypto::Error),
+    Crypto(#[from] crypto::Error),
 
     /// Agreement public key is not present when required.
     #[error("Agreement pk not present")]

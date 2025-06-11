@@ -1,7 +1,7 @@
 use crate::crypto::{ED25519_PUBLICKEYBYTES, ED25519_SECRETKEYBYTES};
 use crate::identity::{Identity, PubKey};
 use crate::node;
-use crate::node::{MessageSink, Node, NodeOpts, NodeOptsBuilder, NodeOptsBuilderError, MIN_POW_DIFFICULTY_DEFAULT};
+use crate::node::{MessageSink, Node, NodeOpts, NodeOptsBuilder, NodeOptsBuilderError};
 use crate::peer;
 use crate::peer::PeersList;
 use crate::peer::SuperPeerUrl;
@@ -18,12 +18,18 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{Mutex, mpsc};
 use zerocopy::IntoBytes;
 
+// Type alias for the complex receiver type
+type MessageReceiver = Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>;
+type MessageSender = Arc<Sender<(PubKey, Vec<u8>)>>;
+
 // -1..-100
 const ERR_UTF8: c_int = -1;
 const ERR_IO: c_int = -2;
 const ERR_CHANNEL_CLOSED: c_int = -3;
 const ERR_ADDR_PARSE: c_int = -4;
 const ERR_INDEX: c_int = -5;
+const ERR_NULL_POINTER: c_int = -6;
+const ERR_IDENTITY_GENERATION: c_int = -7;
 
 // -101..-300
 impl From<node::Error> for c_int {
@@ -92,7 +98,7 @@ impl From<SuperPeerUrlError> for c_int {
 // MessageSink
 //
 
-pub struct ChannelSink(pub Arc<Sender<(PubKey, Vec<u8>)>>);
+pub struct ChannelSink(pub MessageSender);
 
 impl MessageSink for ChannelSink {
     fn accept(&self, sender: PubKey, message: Vec<u8>) {
@@ -106,10 +112,7 @@ impl MessageSink for ChannelSink {
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_new(
     recv_buf_cap: usize,
-) -> *mut (
-    Arc<Sender<(PubKey, Vec<u8>)>>,
-    Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
-) {
+) -> *mut (MessageSender, MessageReceiver) {
     let (recv_buf_tx, recv_buf_rx) = mpsc::channel::<(PubKey, Vec<u8>)>(recv_buf_cap);
     Box::into_raw(Box::new((
         Arc::new(recv_buf_tx),
@@ -119,34 +122,24 @@ pub extern "C" fn drasyl_recv_buf_new(
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_recv_buf_free(
-    recv_buf: *mut (
-        Arc<Sender<(PubKey, Vec<u8>)>>,
-        Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
-    ),
-) {
+pub extern "C" fn drasyl_recv_buf_free(recv_buf: *mut (MessageSender, MessageReceiver)) -> c_int {
     unsafe {
         drop(Box::from_raw(recv_buf));
     }
+    0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_tx(
-    recv_buf: &mut (
-        Arc<Sender<(PubKey, Vec<u8>)>>,
-        Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
-    ),
-) -> *mut Arc<Sender<(PubKey, Vec<u8>)>> {
+    recv_buf: &mut (MessageSender, MessageReceiver),
+) -> *mut MessageSender {
     Box::into_raw(Box::new(recv_buf.0.clone()))
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_rx(
-    recv_buf: &mut (
-        Arc<Sender<(PubKey, Vec<u8>)>>,
-        Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
-    ),
-) -> *mut Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>> {
+    recv_buf: &mut (MessageSender, MessageReceiver),
+) -> *mut MessageReceiver {
     Box::into_raw(Box::new(recv_buf.1.clone()))
 }
 
@@ -154,7 +147,7 @@ pub extern "C" fn drasyl_recv_buf_rx(
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_len(
     bind: &mut NodeBind,
-    recv_buf_rx: &mut Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
+    recv_buf_rx: &mut MessageReceiver,
 ) -> c_int {
     let recv_buf_rx = recv_buf_rx.clone();
     bind.runtime
@@ -165,7 +158,7 @@ pub extern "C" fn drasyl_recv_buf_len(
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_recv_buf_recv(
     bind: &mut NodeBind,
-    recv_buf_rx: &mut Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>,
+    recv_buf_rx: &mut MessageReceiver,
     sender: *mut u8,
     buf: *mut u8,
     buf_len: usize,
@@ -206,29 +199,31 @@ pub extern "C" fn drasyl_version() -> *const u8 {
 /// The caller must ensure that all buffers are non-null and properly sized.
 ///
 /// # Arguments
-/// * `sk_buf` - Pointer to a buffer of at least 64 bytes for the secret key
-/// * `pk_buf` - Pointer to a buffer of at least 32 bytes for the public key
-/// * `pow_buf` - Pointer to a buffer of at least 4 bytes for the proof of work
+/// * `sk_buf`   - Pointer to a buffer of at least 64 bytes for the secret key
+/// * `pk_buf`   - Pointer to a buffer of at least 32 bytes for the public key
+/// * `pow_buf`  - Pointer to a buffer of at least 4 bytes for the proof of work
+/// * `pow_diff` - The proof of work difficulty
 ///
 /// # Returns
 /// * `0` on success
 /// * `1` if any buffer pointer is null
 /// * `2` if identity generation fails
 #[unsafe(no_mangle)]
-pub extern "C" fn generate_identity(
+pub extern "C" fn drasyl_generate_identity(
     sk_buf: *mut u8,
     pk_buf: *mut u8,
     pow_buf: *mut u8,
-) -> i32 {
+    pow_diff: u8,
+) -> c_int {
     // Validate input pointers
     if sk_buf.is_null() || pk_buf.is_null() || pow_buf.is_null() {
-        return 1;
+        return ERR_NULL_POINTER;
     }
 
     // Attempt to generate identity
-    let identity = match Identity::generate(MIN_POW_DIFFICULTY_DEFAULT) {
+    let identity = match Identity::generate(pow_diff) {
         Ok(id) => id,
-        Err(_) => return 2,
+        Err(_) => return ERR_IDENTITY_GENERATION,
     };
 
     // Borrow inner byte arrays using known fixed-size types
@@ -270,7 +265,7 @@ pub extern "C" fn drasyl_node_opts_builder_id(
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_node_opts_builder_message_sink(
     builder: &mut NodeOptsBuilder,
-    recv_buf_tx: &mut Arc<Sender<(PubKey, Vec<u8>)>>,
+    recv_buf_tx: &mut MessageSender,
 ) -> c_int {
     let recv_buf_tx = unsafe { Box::from_raw(recv_buf_tx) };
     builder.message_sink(Arc::new(ChannelSink(*recv_buf_tx)));
@@ -436,10 +431,11 @@ pub extern "C" fn drasyl_node_opts_builder_build(
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_node_opts_builder_free(builder: *mut NodeOptsBuilder) {
+pub extern "C" fn drasyl_node_opts_builder_free(builder: *mut NodeOptsBuilder) -> c_int {
     unsafe {
         drop(Box::from_raw(builder));
     }
+    0
 }
 
 //
@@ -517,10 +513,11 @@ pub extern "C" fn drasyl_node_opts_enforce_tcp(opts: &mut NodeOpts) -> bool {
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_node_opts_free(opts: *mut NodeOpts) {
+pub extern "C" fn drasyl_node_opts_free(opts: *mut NodeOpts) -> c_int {
     unsafe {
         drop(Box::from_raw(opts));
     }
+    0
 }
 
 //
@@ -559,10 +556,11 @@ pub extern "C" fn drasyl_node_bind(opts: *mut NodeOpts, bind: *mut *mut NodeBind
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_node_bind_free(bind: &mut NodeBind) {
+pub extern "C" fn drasyl_node_bind_free(bind: &mut NodeBind) -> c_int {
     unsafe {
         drop(Box::from_raw(bind));
     }
+    0
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -612,6 +610,7 @@ pub struct Peer {
     reachable: bool,
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_peers_list_peers(
     peers_list: &mut &PeersList,
@@ -647,12 +646,14 @@ pub extern "C" fn drasyl_peers_list_peers_len(peers: &mut Vec<Peer>) -> u64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_peers_list_peers_free(peers: &mut Vec<Peer>) {
+pub extern "C" fn drasyl_peers_list_peers_free(peers: &mut Vec<Peer>) -> c_int {
     unsafe {
         drop(Box::from_raw(peers));
     }
+    0
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_peers_list_peer_pk(
     peers: &mut Vec<Peer>,

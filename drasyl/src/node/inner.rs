@@ -241,6 +241,7 @@ impl NodeInner {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[instrument(fields(peer = %long_header.sender, %src), skip_all)]
     fn on_node_peer_hello(
         &self,

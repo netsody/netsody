@@ -148,6 +148,7 @@ impl HelloSuperPeerMessage {
     ///
     /// # Returns
     /// Vector containing the complete HELLO message or an error
+    #[allow(clippy::uninit_vec)]
     #[instrument(name = "HelloSuperPeerMessage::build", skip_all)]
     pub fn build(
         network_id: &NetworkId,
@@ -300,6 +301,7 @@ impl HelloNodePeerMessage {
     ///
     /// # Returns
     /// Vector containing the complete HELLO message or an error
+    #[allow(clippy::uninit_vec)]
     #[instrument(name = "HelloNodePeerMessage::build", skip_all)]
     pub fn build(
         network_id: &NetworkId,

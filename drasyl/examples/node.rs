@@ -17,7 +17,7 @@ async fn main() {
     let network_id = util::get_env("NETWORK_ID", 1i32).to_be_bytes();
     let arm_messages = util::get_env("ARM_MESSAGES", true);
     let udp_port = util::get_env("UDP_PORT", String::new());
-    let max_peers = util::get_env("MAX_PEERS", 10 * 1000); // set to 0 removes peers limit
+    let max_peers = util::get_env("MAX_PEERS", 8192); // set to 0 removes peers limit
     let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
     let hello_timeout = util::get_env("HELLO_TIMEOUT", 30 * 1000); // milliseconds
     let hello_max_age = util::get_env("HELLO_MAX_AGE", 60 * 1000); // milliseconds
@@ -134,6 +134,7 @@ async fn peers_task(node: Arc<Node>) {
     }
 }
 
+#[allow(clippy::type_complexity)]
 async fn recv_task(receiver: Arc<Mutex<Receiver<(PubKey, Vec<u8>)>>>) {
     while let Some((src, buf)) = receiver.lock().await.recv().await {
         let buf_str = String::from_utf8_lossy(&buf);

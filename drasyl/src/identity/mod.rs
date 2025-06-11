@@ -66,20 +66,17 @@ const MIN_DERIVED_PORT: u16 = 22528;
 /// # Example
 ///
 /// ```rust
-/// use std::error::Error;
 /// use drasyl::identity::Identity;
 /// use drasyl::node::MIN_POW_DIFFICULTY_DEFAULT;
 ///
-/// fn main() {
-///     // Load an existing identity or generate a new one
-///     let identity = Identity::load_or_generate("drasyl.identity", MIN_POW_DIFFICULTY_DEFAULT).expect("Failed to load identity");
+/// // Load an existing identity or generate a new one
+/// let identity = Identity::load_or_generate("drasyl.identity", MIN_POW_DIFFICULTY_DEFAULT).expect("Failed to load identity");
 ///
-///     // Access the public key for node identification
-///     let public_key = identity.pk;
+/// // Access the public key for node identification
+/// let public_key = identity.pk;
 ///
-///     // Save the identity to a file
-///     Identity::save("backup.identity", &identity).expect("Failed to save identity");
-/// }
+/// // Save the identity to a file
+/// Identity::save("backup.identity", &identity).expect("Failed to save identity");
 /// ```
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

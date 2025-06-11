@@ -82,6 +82,7 @@ impl AppMessage {
     ///
     /// # Returns
     /// Vector containing the complete APP message or an error
+    #[allow(clippy::uninit_vec)]
     pub fn build(
         network_id: &NetworkId,
         my_pk: &PubKey,

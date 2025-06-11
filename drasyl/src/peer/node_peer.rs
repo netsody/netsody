@@ -81,7 +81,7 @@ impl NodePeer {
     ///
     /// # Errors
     /// * [`Error::AgreementPkNotPresent`] - If agreement keys are missing when encryption is enabled
-    /// * [`Error::CryptoError`] - If cryptographic operations fail
+    /// * [`Error::Crypto`] - If cryptographic operations fail
     pub(crate) fn new(
         pow: Option<&Pow>,
         pk: &PubKey,
