@@ -1,3 +1,4 @@
+use crate::identity::PubKey;
 use crate::message::{MessageType, NetworkId};
 use crate::peer::TransportProt;
 use crate::{crypto, message, peer};
@@ -129,8 +130,8 @@ pub enum Error {
     #[error("Sending direct to {1} error: {0}")]
     SendingDirectError(io::Error, SocketAddr),
 
-    #[error("Sending relayed error")]
-    SendingRelayedError,
+    #[error("Failed to relay message for {0} via {1}")]
+    SendingRelayedError(PubKey, PubKey),
 
     #[error("UDP local_addr error: {0}")]
     UdpLocalAddrError(io::Error),

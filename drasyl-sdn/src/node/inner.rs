@@ -276,7 +276,15 @@ impl SdnNodeInner {
                     _ = async move {
                         while let Ok((buf, send_handle)) = drasyl_rx.recv_async().await {
                             if let Err(e) = send_handle.send(&buf).await {
-                                error!("Error sending message to drasyl: {:?}", e);
+                                warn!(
+                                    packet_size=?buf.len(),
+                                    recipient=?send_handle.recipient,
+                                    error=?e,
+                                    "Failed to send packet to drasyl network: recipient={}, packet_size={} bytes, error={}",
+                                    send_handle.recipient,
+                                    buf.len(),
+                                    e
+                                );
                             }
                         }
                     } => {}
