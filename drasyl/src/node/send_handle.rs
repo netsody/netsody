@@ -330,7 +330,7 @@ impl SendHandle {
                     }
                     if !result {
                         warn!("Failed to relay APP via super peer.");
-                        return Err(Error::SendingRelayedError);
+                        return Err(Error::SendingRelayedError(self.recipient, *default_route));
                     }
                 }
             }
