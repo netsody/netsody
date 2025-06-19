@@ -548,7 +548,7 @@ impl fmt::Display for NetworkStatus {
                 }
             }
             _ => {
-                writeln!(f, "Physical Routes: None")?;
+                writeln!(f, "Routes: None")?;
             }
         }
         #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
