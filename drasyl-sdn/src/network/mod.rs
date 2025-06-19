@@ -22,8 +22,8 @@ pub struct TunState {
 pub struct LocalNodeState {
     pub(crate) subnet: Ipv4Net,
     pub(crate) ip: Ipv4Addr,
-    pub(crate) virtual_routes: VirtualRoutingTable,
-    pub(crate) physical_routes: PhysicalRoutingTable,
+    pub(crate) access_rules: EffectiveAccessRuleList,
+    pub(crate) routes: EffectiveRoutingList,
     pub(crate) hostnames: HashMap<Ipv4Addr, String>,
 }
 
