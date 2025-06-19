@@ -4,7 +4,7 @@ use drasyl_sdn::node::{SdnNode, SdnNodeConfig};
 use drasyl_sdn::rest_api::{RestApiClient, RestApiServer};
 use std::sync::Arc;
 use tokio::signal;
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 #[derive(Parser, Debug)]
 #[command(name = "drasyl-sdn")]
@@ -79,7 +79,7 @@ async fn run_sdn_node() -> Result<(), Box<dyn std::error::Error + Send + Sync + 
                     trace!("rest_api shut down");
                 }
                 Err(e) => {
-                    trace!("rest_api failed to bind: {}", e);
+                    error!("rest_api failed to bind: {}", e);
                 }
             }
         }
