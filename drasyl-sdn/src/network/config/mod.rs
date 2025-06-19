@@ -21,9 +21,9 @@ pub struct NetworkConfig {
     #[serde(rename = "node", default, deserialize_with = "deserialize_nodes")]
     pub nodes: HashMap<PubKey, NetworkNode>,
     #[serde(rename = "route", default, deserialize_with = "deserialize_routes")]
-    pub routes: HashMap<Ipv4Net, VirtualRoute>,
+    pub routes: HashMap<Ipv4Net, NetworkRoute>,
     #[serde(rename = "policy", default, deserialize_with = "deserialize_policies")]
-    pub policies: HashSet<Policy>,
+    pub policies: HashSet<NetworkPolicy>,
 }
 
 impl NetworkConfig {
@@ -44,10 +44,10 @@ impl NetworkConfig {
         groups
     }
 
-    pub fn virtual_routing_table(
+    pub fn effective_access_rule_list(
         &self,
         my_pk: &PubKey,
-    ) -> Result<VirtualRoutingTable, network::ConfigError> {
+    ) -> Result<EffectiveAccessRuleList, network::ConfigError> {
         let node = self.nodes.get(my_pk).unwrap();
         let my_groups = &node.groups;
         let my_ip = &node.ip;
@@ -59,15 +59,15 @@ impl NetworkConfig {
             if !my_pk.eq(pk) {
                 let source: Ipv4Net = (*my_ip).into();
                 let dest: Ipv4Net = node.ip.into();
-                let entry = VirtualRoutingTableEntry {
+                let entry = EffectiveAccessRule {
                     direction: Direction::OUT,
                     source,
                     dest,
                     pk: *pk,
                     action: if self.matching_policy(my_pk, pk) {
-                        Action::ACCEPT
+                        Action::Allow
                     } else {
-                        Action::DROP
+                        Action::Deny
                     },
                 };
                 if entries.insert(entry.clone().into(), entry).is_some() {
@@ -81,12 +81,12 @@ impl NetworkConfig {
                 let accept = route.groups.is_empty()
                     || route.groups.iter().any(|g| my_groups.contains(g))
                         && self.matching_policy(my_pk, &route.gw);
-                let entry = VirtualRoutingTableEntry {
+                let entry = EffectiveAccessRule {
                     direction: Direction::OUT,
                     source,
                     dest: *dest,
                     pk: route.gw,
-                    action: if accept { Action::ACCEPT } else { Action::DROP },
+                    action: if accept { Action::Allow } else { Action::Deny },
                 };
                 if entries.insert(entry.clone().into(), entry).is_some() {
                     return Err(ConfigError::RouteDuplicate);
@@ -99,12 +99,12 @@ impl NetworkConfig {
                             || route.groups.iter().any(|g| node.groups.contains(g)))
                             && self.matching_policy(my_pk, pk);
 
-                        let entry = VirtualRoutingTableEntry {
+                        let entry = EffectiveAccessRule {
                             direction: Direction::OUT,
                             source: *dest,
                             dest: node_dest,
                             pk: *pk,
-                            action: if accept { Action::ACCEPT } else { Action::DROP },
+                            action: if accept { Action::Allow } else { Action::Deny },
                         };
                         if entries.insert(entry.clone().into(), entry).is_some() {
                             return Err(ConfigError::RouteDuplicate);
@@ -119,15 +119,15 @@ impl NetworkConfig {
             if !my_pk.eq(pk) {
                 let source: Ipv4Net = node.ip.into();
                 let dest: Ipv4Net = (*my_ip).into();
-                let entry = VirtualRoutingTableEntry {
+                let entry = EffectiveAccessRule {
                     direction: Direction::IN,
                     source,
                     dest,
                     pk: *pk,
                     action: if self.matching_policy(my_pk, pk) {
-                        Action::ACCEPT
+                        Action::Allow
                     } else {
-                        Action::DROP
+                        Action::Deny
                     },
                 };
                 if entries.insert(entry.clone().into(), entry).is_some() {
@@ -142,12 +142,12 @@ impl NetworkConfig {
                 let accept = route.groups.is_empty()
                     || route.groups.iter().any(|g| my_groups.contains(g))
                         && self.matching_policy(my_pk, &route.gw);
-                let entry = VirtualRoutingTableEntry {
+                let entry = EffectiveAccessRule {
                     direction: Direction::IN,
                     source,
                     dest,
                     pk: route.gw,
-                    action: if accept { Action::ACCEPT } else { Action::DROP },
+                    action: if accept { Action::Allow } else { Action::Deny },
                 };
                 if entries.insert(entry.clone().into(), entry).is_some() {
                     return Err(ConfigError::RouteDuplicate);
@@ -158,12 +158,12 @@ impl NetworkConfig {
                     let accept = route.groups.is_empty()
                         || route.groups.iter().any(|g| node.groups.contains(g))
                             && self.matching_policy(my_pk, pk);
-                    let entry = VirtualRoutingTableEntry {
+                    let entry = EffectiveAccessRule {
                         direction: Direction::IN,
                         source,
                         dest: *dest,
                         pk: *pk,
-                        action: if accept { Action::ACCEPT } else { Action::DROP },
+                        action: if accept { Action::Allow } else { Action::Deny },
                     };
                     if entries.insert(entry.clone().into(), entry).is_some() {
                         return Err(ConfigError::RouteDuplicate);
@@ -172,7 +172,7 @@ impl NetworkConfig {
             }
         }
 
-        Ok(VirtualRoutingTable(entries))
+        Ok(EffectiveAccessRuleList(entries))
     }
 
     pub(crate) fn hostnames(&self, my_pk: &PubKey) -> HashMap<Ipv4Addr, String> {
@@ -216,10 +216,10 @@ impl NetworkConfig {
         })
     }
 
-    pub fn physical_routing_table(
+    pub fn effective_routing_list(
         &self,
         my_pk: &PubKey,
-    ) -> Result<PhysicalRoutingTable, network::ConfigError> {
+    ) -> Result<EffectiveRoutingList, network::ConfigError> {
         let mut physical_route = HashMap::with_hasher(RandomState::new());
         for (dest, route) in &self.routes {
             let result = if my_pk.eq(&route.gw) {
@@ -236,7 +236,7 @@ impl NetworkConfig {
             };
             if result {
                 if let Some(node) = self.nodes.get(&route.gw) {
-                    let route = PhysicalRoutingTableEntry {
+                    let route = EffectiveRoute {
                         dest: *dest,
                         gw: node.ip,
                     };
@@ -246,7 +246,7 @@ impl NetworkConfig {
                 }
             }
         }
-        Ok(PhysicalRoutingTable(physical_route))
+        Ok(EffectiveRoutingList(physical_route))
     }
 }
 
@@ -327,11 +327,11 @@ where
     Ok(result)
 }
 
-fn deserialize_routes<'de, D>(deserializer: D) -> Result<HashMap<Ipv4Net, VirtualRoute>, D::Error>
+fn deserialize_routes<'de, D>(deserializer: D) -> Result<HashMap<Ipv4Net, NetworkRoute>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let routes: Vec<VirtualRoute> = Vec::deserialize(deserializer)?;
+    let routes: Vec<NetworkRoute> = Vec::deserialize(deserializer)?;
 
     let mut result = HashMap::new();
     for route in routes {
@@ -354,11 +354,11 @@ where
     Ok(vec.into_iter().collect())
 }
 
-fn deserialize_policies<'de, D>(deserializer: D) -> Result<HashSet<Policy>, D::Error>
+fn deserialize_policies<'de, D>(deserializer: D) -> Result<HashSet<NetworkPolicy>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let policies: Vec<Policy> = Vec::deserialize(deserializer)?;
+    let policies: Vec<NetworkPolicy> = Vec::deserialize(deserializer)?;
     Ok(policies.into_iter().collect())
 }
 
@@ -372,7 +372,7 @@ pub struct NetworkNode {
 }
 
 #[derive(PartialEq, Debug, Clone, Deserialize)]
-pub struct VirtualRoute {
+pub struct NetworkRoute {
     pub dest: Ipv4Net,
     pub gw: PubKey,
     #[serde(default, deserialize_with = "deserialize_groups")]
@@ -380,11 +380,11 @@ pub struct VirtualRoute {
 }
 
 #[derive(PartialEq, Clone, Default, Serialize, Deserialize)]
-pub struct VirtualRoutingTable(
-    pub HashMap<VirtualRoutingTableEntryKey, VirtualRoutingTableEntry, RandomState>,
+pub struct EffectiveAccessRuleList(
+    pub HashMap<EffectiveAccessRuleListEntryKey, EffectiveAccessRule, RandomState>,
 );
 
-impl VirtualRoutingTable {
+impl EffectiveAccessRuleList {
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -395,12 +395,12 @@ impl VirtualRoutingTable {
         // tx
         let mut trie_tx = IpnetTrie::new();
 
-        let out_entries: Vec<&VirtualRoutingTableEntry> = self
+        let out_entries: Vec<&EffectiveAccessRule> = self
             .0
             .values()
-            .filter(|e| e.direction == Direction::OUT && e.action == Action::ACCEPT)
+            .filter(|e| e.direction == Direction::OUT && e.action == Action::Allow)
             .collect();
-        let mut entries_by_source: HashMap<Ipv4Net, Vec<&VirtualRoutingTableEntry>, RandomState> =
+        let mut entries_by_source: HashMap<Ipv4Net, Vec<&EffectiveAccessRule>, RandomState> =
             HashMap::with_hasher(RandomState::new());
         for entry in out_entries {
             entries_by_source
@@ -419,13 +419,12 @@ impl VirtualRoutingTable {
         // rx
         let mut trie_rx = IpnetTrie::new();
 
-        let in_entries: Vec<&VirtualRoutingTableEntry> = self
+        let in_entries: Vec<&EffectiveAccessRule> = self
             .0
             .values()
-            .filter(|e| e.direction == Direction::IN && e.action == Action::ACCEPT)
+            .filter(|e| e.direction == Direction::IN && e.action == Action::Allow)
             .collect();
-        let mut entries_by_source: HashMap<Ipv4Net, Vec<&VirtualRoutingTableEntry>> =
-            HashMap::new();
+        let mut entries_by_source: HashMap<Ipv4Net, Vec<&EffectiveAccessRule>> = HashMap::new();
         for entry in in_entries {
             entries_by_source
                 .entry(entry.source)
@@ -444,7 +443,7 @@ impl VirtualRoutingTable {
     }
 }
 
-impl Display for VirtualRoutingTable {
+impl Display for EffectiveAccessRuleList {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -452,7 +451,7 @@ impl Display for VirtualRoutingTable {
             "Type", "Source", "Destination", "PubKey", "Action"
         )?;
 
-        let mut entries: Vec<&VirtualRoutingTableEntry> = self.0.values().collect();
+        let mut entries: Vec<&EffectiveAccessRule> = self.0.values().collect();
         entries.sort_by(|a, b| match a.direction.cmp(&b.direction) {
             Ordering::Equal => match a.source.cmp(&b.source) {
                 Ordering::Equal => a.dest.cmp(&b.dest),
@@ -478,14 +477,14 @@ impl Display for VirtualRoutingTable {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct VirtualRoutingTableEntryKey {
+pub struct EffectiveAccessRuleListEntryKey {
     pub direction: Direction,
     pub source: Ipv4Net,
     pub dest: Ipv4Net,
 }
 
-impl From<VirtualRoutingTableEntry> for VirtualRoutingTableEntryKey {
-    fn from(entry: VirtualRoutingTableEntry) -> Self {
+impl From<EffectiveAccessRule> for EffectiveAccessRuleListEntryKey {
+    fn from(entry: EffectiveAccessRule) -> Self {
         Self {
             direction: entry.direction,
             source: entry.source,
@@ -494,7 +493,7 @@ impl From<VirtualRoutingTableEntry> for VirtualRoutingTableEntryKey {
     }
 }
 
-impl Serialize for VirtualRoutingTableEntryKey {
+impl Serialize for EffectiveAccessRuleListEntryKey {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -504,7 +503,7 @@ impl Serialize for VirtualRoutingTableEntryKey {
     }
 }
 
-impl<'de> Deserialize<'de> for VirtualRoutingTableEntryKey {
+impl<'de> Deserialize<'de> for EffectiveAccessRuleListEntryKey {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -536,7 +535,7 @@ impl<'de> Deserialize<'de> for VirtualRoutingTableEntryKey {
             .parse::<Ipv4Net>()
             .map_err(|e| serde::de::Error::custom(format!("Invalid destination network: {}", e)))?;
 
-        Ok(VirtualRoutingTableEntryKey {
+        Ok(EffectiveAccessRuleListEntryKey {
             direction,
             source,
             dest,
@@ -545,7 +544,7 @@ impl<'de> Deserialize<'de> for VirtualRoutingTableEntryKey {
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct VirtualRoutingTableEntry {
+pub struct EffectiveAccessRule {
     pub direction: Direction,
     pub source: Ipv4Net,
     pub dest: Ipv4Net,
@@ -553,7 +552,7 @@ pub struct VirtualRoutingTableEntry {
     pub action: Action,
 }
 
-impl Display for VirtualRoutingTableEntry {
+impl Display for EffectiveAccessRule {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -597,30 +596,28 @@ impl fmt::Display for Direction {
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum Action {
-    ACCEPT,
-    DROP,
+    Allow,
+    Deny,
 }
 
 impl fmt::Display for Action {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Action::ACCEPT => write!(f, "ACCEPT"),
-            Action::DROP => write!(f, "DROP"),
+            Action::Allow => write!(f, "ALLOW"),
+            Action::Deny => write!(f, "DENY"),
         }
     }
 }
 
-#[derive(PartialEq, Debug, Clone, Deserialize)]
-pub struct Policy {
+#[derive(PartialEq, Eq, Debug, Clone, Deserialize)]
+pub struct NetworkPolicy {
     #[serde(rename = "source_groups", deserialize_with = "deserialize_groups")]
     pub source_groups: HashSet<String>,
     #[serde(rename = "destination_groups", deserialize_with = "deserialize_groups")]
     pub destination_groups: HashSet<String>,
 }
 
-impl Eq for Policy {}
-
-impl Hash for Policy {
+impl Hash for NetworkPolicy {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Sortiere die Gruppen, um eine konsistente Hash-Berechnung zu gewährleisten
         let mut source_groups: Vec<&String> = self.source_groups.iter().collect();
@@ -638,12 +635,12 @@ impl Hash for Policy {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct PhysicalRoutingTableEntry {
+pub struct EffectiveRoute {
     dest: Ipv4Net,
     gw: Ipv4Addr,
 }
 
-impl PhysicalRoutingTableEntry {
+impl EffectiveRoute {
     pub(crate) fn net_route(&self) -> net_route::Route {
         let route = net_route::Route::new(IpAddr::V4(self.dest.addr()), self.dest.prefix_len())
             .with_gateway(IpAddr::V4(self.gw));
@@ -654,12 +651,10 @@ impl PhysicalRoutingTableEntry {
 }
 
 #[derive(PartialEq, Clone, Debug, Default, Serialize, Deserialize)]
-pub struct PhysicalRoutingTable(pub HashMap<Ipv4Net, PhysicalRoutingTableEntry, RandomState>);
+pub struct EffectiveRoutingList(pub HashMap<Ipv4Net, EffectiveRoute, RandomState>);
 
-impl PhysicalRoutingTable {
-    pub(crate) fn iter(
-        &self,
-    ) -> std::collections::hash_map::Iter<'_, Ipv4Net, PhysicalRoutingTableEntry> {
+impl EffectiveRoutingList {
+    pub(crate) fn iter(&self) -> std::collections::hash_map::Iter<'_, Ipv4Net, EffectiveRoute> {
         self.0.iter()
     }
 
@@ -667,7 +662,7 @@ impl PhysicalRoutingTable {
         self.0.contains_key(dest)
     }
 
-    pub(crate) fn add(&mut self, route: PhysicalRoutingTableEntry) {
+    pub(crate) fn add(&mut self, route: EffectiveRoute) {
         self.0.insert(route.dest, route);
     }
 
@@ -676,11 +671,11 @@ impl PhysicalRoutingTable {
     }
 }
 
-impl Display for PhysicalRoutingTable {
+impl Display for EffectiveRoutingList {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{:<18} {:<15}", "Destination", "Gateway")?;
 
-        let mut entries: Vec<(&Ipv4Net, &PhysicalRoutingTableEntry)> = self.iter().collect();
+        let mut entries: Vec<(&Ipv4Net, &EffectiveRoute)> = self.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
 
         for (dest, entry) in entries {
@@ -711,7 +706,7 @@ fn is_valid_hostname(hostname: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::network;
-    use crate::network::config::{NetworkConfig, Policy};
+    use crate::network::config::{NetworkConfig, NetworkPolicy};
     use drasyl::identity::PubKey;
     use ipnet::Ipv4Net;
     use std::collections::HashSet;
@@ -785,11 +780,11 @@ mod tests {
         assert_eq!(route.groups, HashSet::from(["group1".to_string()]));
 
         // Test policies
-        let all_policy = Policy {
+        let all_policy = NetworkPolicy {
             source_groups: HashSet::from(["ALL".to_string()]),
             destination_groups: HashSet::from(["ALL".to_string()]),
         };
-        let heiko_policy = Policy {
+        let heiko_policy = NetworkPolicy {
             source_groups: HashSet::from(["heiko".to_string()]),
             destination_groups: HashSet::from(["ALL".to_string()]),
         };

@@ -1,4 +1,4 @@
-use crate::network::{Network, PhysicalRoutingTable, VirtualRoutingTable};
+use crate::network::{EffectiveAccessRuleList, EffectiveRoutingList, Network};
 use crate::node::SdnNode;
 use crate::rest_api::auth::AuthToken;
 use crate::rest_api::error::Error;
@@ -478,8 +478,8 @@ impl fmt::Display for NodePeerStatus {
 struct NetworkStatus {
     subnet: Option<Ipv4Net>,
     ip: Option<Ipv4Addr>,
-    virtual_routes: Option<VirtualRoutingTable>,
-    physical_routes: Option<PhysicalRoutingTable>,
+    access_rules: Option<EffectiveAccessRuleList>,
+    routes: Option<EffectiveRoutingList>,
     hostnames: Option<HashMap<Ipv4Addr, String>>,
     tun_device: Option<String>,
 }
@@ -490,8 +490,8 @@ impl NetworkStatus {
         Self {
             subnet: guard.as_ref().map(|state| state.subnet),
             ip: guard.as_ref().map(|state| state.ip),
-            virtual_routes: guard.as_ref().map(|state| state.virtual_routes.clone()),
-            physical_routes: guard.as_ref().map(|state| state.physical_routes.clone()),
+            access_rules: guard.as_ref().map(|state| state.access_rules.clone()),
+            routes: guard.as_ref().map(|state| state.routes.clone()),
             hostnames: guard.as_ref().map(|state| state.hostnames.clone()),
             tun_device: network
                 .inner
@@ -527,22 +527,22 @@ impl fmt::Display for NetworkStatus {
                 .as_ref()
                 .map_or("None".to_string(), |tun_device| tun_device.to_string())
         )?;
-        match &self.virtual_routes {
+        match &self.access_rules {
             Some(virtual_routes) if !virtual_routes.is_empty() => {
-                writeln!(f, "Virtual Routes:")?;
-                if let Some(virtual_routes) = &self.virtual_routes {
+                writeln!(f, "Access Rules:")?;
+                if let Some(virtual_routes) = &self.access_rules {
                     for line in virtual_routes.to_string().lines() {
                         writeln!(f, "  {}", line)?;
                     }
                 }
             }
             _ => {
-                writeln!(f, "Virtual Routes: None")?;
+                writeln!(f, "Access Rules: None")?;
             }
         }
-        match &self.physical_routes {
+        match &self.routes {
             Some(routes) if !routes.is_empty() => {
-                writeln!(f, "Physical Routes:")?;
+                writeln!(f, "Routes:")?;
                 for line in routes.to_string().lines() {
                     writeln!(f, "  {}", line)?;
                 }

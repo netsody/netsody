@@ -1,5 +1,5 @@
 use crate::network::Network;
-use crate::network::config::{NetworkConfig, PhysicalRoutingTable};
+use crate::network::config::{EffectiveRoutingList, NetworkConfig};
 use crate::node::{ChannelSink, Error, SdnNodeConfig};
 use arc_swap::ArcSwap;
 use base64::Engine;
@@ -338,7 +338,7 @@ impl SdnNodeInner {
 
         // remove physical routes
         trace!("remove physical routes");
-        let all_physical_routes: Vec<PhysicalRoutingTable> = self
+        let all_physical_routes: Vec<EffectiveRoutingList> = self
             .networks
             .values()
             .map(|network| {
@@ -347,7 +347,7 @@ impl SdnNodeInner {
                     .lock()
                     .expect("Mutex poisoned")
                     .as_ref()
-                    .map(|state| state.physical_routes.clone())
+                    .map(|state| state.routes.clone())
                     .unwrap_or_default()
             })
             .collect();
@@ -355,7 +355,7 @@ impl SdnNodeInner {
         let task = tokio::spawn(async move {
             for physical_routes in all_physical_routes {
                 trace!("Remove physical routes: {}", physical_routes);
-                Self::remove_physical_routes(routes_handle.clone(), physical_routes).await;
+                Self::remove_routes(routes_handle.clone(), physical_routes).await;
             }
         });
         futures::executor::block_on(task).unwrap();

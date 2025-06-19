@@ -1,4 +1,4 @@
-use crate::network::config::PhysicalRoutingTable;
+use crate::network::config::EffectiveRoutingList;
 use crate::network::{LocalNodeState, Network, NetworkInner, TunState};
 use crate::node::Error;
 use crate::node::inner::SdnNodeInner;
@@ -62,18 +62,18 @@ impl SdnNodeInner {
 
                 let desired = match config.ip(&inner.id.pk) {
                     Some(desired_ip) => {
-                        let desired_virtual_routing_table = config
-                            .virtual_routing_table(&inner.id.pk)
-                            .expect("Failed to get virtual routing table");
-                        let desired_physical_routing_table = config
-                            .physical_routing_table(&inner.id.pk)
-                            .expect("Failed to get physical routing table");
+                        let desired_effective_access_rule_list = config
+                            .effective_access_rule_list(&inner.id.pk)
+                            .expect("Failed to get effective access rule");
+                        let desired_effective_routing_list = config
+                            .effective_routing_list(&inner.id.pk)
+                            .expect("Failed to get effective routing list");
                         let desired_hostnames = config.hostnames(&inner.id.pk);
                         Some(LocalNodeState {
                             subnet: config.subnet,
                             ip: desired_ip,
-                            virtual_routes: desired_virtual_routing_table,
-                            physical_routes: desired_physical_routing_table,
+                            access_rules: desired_effective_access_rule_list,
+                            routes: desired_effective_routing_list,
                             hostnames: desired_hostnames,
                         })
                     }
@@ -134,19 +134,14 @@ impl SdnNodeInner {
         current: Option<LocalNodeState>,
         desired: LocalNodeState,
     ) {
-        // physical routes
-        let applied_physical_routes = match current
-            .as_ref()
-            .map(|state| state.physical_routes.clone())
-        {
-            Some(current_physical_routes) if current_physical_routes == desired.physical_routes => {
-                current_physical_routes
-            }
-            current_physical_routes => {
-                Self::update_physical_routes(
+        // routes
+        let applied_routes = match current.as_ref().map(|state| state.routes.clone()) {
+            Some(current_routes) if current_routes == desired.routes => current_routes,
+            current_routes => {
+                Self::update_routes(
                     self.routes_handle.clone(),
-                    current_physical_routes,
-                    Some(desired.physical_routes.clone()),
+                    current_routes,
+                    Some(desired.routes.clone()),
                 )
                 .await
             }
@@ -155,19 +150,19 @@ impl SdnNodeInner {
         *network.state.lock().expect("Mutex poisoned") = Some(LocalNodeState {
             subnet: desired.subnet,
             ip: desired.ip,
-            virtual_routes: desired.virtual_routes.clone(),
-            physical_routes: applied_physical_routes,
+            access_rules: desired.access_rules.clone(),
+            routes: applied_routes,
             hostnames: desired.hostnames.clone(),
         });
 
-        // virtual routes
-        match current.as_ref().map(|state| state.virtual_routes.clone()) {
-            Some(current_virtual_routes) if current_virtual_routes == desired.virtual_routes => {}
-            current_virtual_routes => {
+        // access rules
+        match current.as_ref().map(|state| state.access_rules.clone()) {
+            Some(current_access_rules) if current_access_rules == desired.access_rules => {}
+            current_access_rules => {
                 trace!(
-                    "Virtual routes change: current=\n{}; desired=\n{}",
-                    current_virtual_routes.map_or("None".to_string(), |v| v.to_string()),
-                    desired.virtual_routes
+                    "Access rules change: current=\n{}; desired=\n{}",
+                    current_access_rules.map_or("None".to_string(), |v| v.to_string()),
+                    desired.access_rules
                 );
                 self.update_tx_trie(network);
                 self.update_rx_tries(inner.clone());
@@ -187,22 +182,22 @@ impl SdnNodeInner {
     }
 
     async fn teardown_network(&self, inner: Arc<SdnNodeInner>, network: &Network) {
-        // physical routes
-        let physical_routes = {
+        // routes
+        let routes = {
             network
                 .state
                 .lock()
                 .expect("Mutex poisoned")
                 .as_ref()
-                .map(|state| state.physical_routes.clone())
+                .map(|state| state.routes.clone())
         };
-        if let Some(physical_routes) = physical_routes {
-            Self::remove_physical_routes(self.routes_handle.clone(), physical_routes).await;
+        if let Some(routes) = routes {
+            Self::remove_routes(self.routes_handle.clone(), routes).await;
         }
 
         *network.state.lock().expect("Mutex poisoned") = None;
 
-        // virtual routes
+        // access rules
         self.update_tx_trie(network);
         self.update_rx_tries(inner.clone());
 
@@ -245,18 +240,18 @@ impl SdnNodeInner {
         trace!("Update trie tx");
         let mut trie_tx: IpnetTrie<IpnetTrie<Arc<SendHandle>>> = IpnetTrie::new();
 
-        if let Some(virtual_routes) = network
+        if let Some(access_rules) = network
             .state
             .lock()
             .expect("Mutex poisoned")
             .as_ref()
-            .map(|state| state.virtual_routes.clone())
+            .map(|state| state.access_rules.clone())
         {
-            let (network_trie_tx, _) = virtual_routes.routing_tries();
+            let (network_trie_tx, _) = access_rules.routing_tries();
 
             trace!(
                 network=?network.config_url,
-                "Processing virtual routes for network"
+                "Processing access rules for network"
             );
 
             // tx
@@ -286,7 +281,7 @@ impl SdnNodeInner {
         } else {
             trace!(
                 network=?network.config_url,
-                "No virtual routes available for network"
+                "No access rules available for network"
             );
         }
 
@@ -300,12 +295,12 @@ impl SdnNodeInner {
         let mut trie_rx: IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>> = IpnetTrie::new();
 
         for (config_url, network) in inner.networks.iter() {
-            if let Some(virtual_routes) = network
+            if let Some(access_rules) = network
                 .state
                 .lock()
                 .expect("Mutex poisoned")
                 .as_ref()
-                .map(|state| state.virtual_routes.clone())
+                .map(|state| state.access_rules.clone())
             {
                 if let Some(tun_device) = network
                     .inner
@@ -315,11 +310,11 @@ impl SdnNodeInner {
                     .as_ref()
                     .map(|state| state.device.clone())
                 {
-                    let (_, network_trie_rx) = virtual_routes.routing_tries();
+                    let (_, network_trie_rx) = access_rules.routing_tries();
 
                     trace!(
                         network=?config_url,
-                        "Processing virtual routes for network"
+                        "Processing access rules for network"
                     );
 
                     // rx
@@ -346,13 +341,13 @@ impl SdnNodeInner {
                 } else {
                     trace!(
                         network=?config_url,
-                        "No TUN device available for network, skipping virtual routes"
+                        "No TUN device available for network, skipping access rules"
                     );
                 }
             } else {
                 trace!(
                     network=?config_url,
-                    "No virtual routes available for network"
+                    "No access rules available for network"
                 );
             }
         }
@@ -609,30 +604,27 @@ impl SdnNodeInner {
         }
     }
 
-    pub(crate) async fn remove_physical_routes(
-        routes_handle: Arc<Handle>,
-        physical_routes: PhysicalRoutingTable,
-    ) {
-        Self::update_physical_routes(routes_handle, Some(physical_routes), None).await;
+    pub(crate) async fn remove_routes(routes_handle: Arc<Handle>, routes: EffectiveRoutingList) {
+        Self::update_routes(routes_handle, Some(routes), None).await;
     }
 
-    async fn update_physical_routes(
+    async fn update_routes(
         routes_handle: Arc<Handle>,
-        current_physical_routes: Option<PhysicalRoutingTable>,
-        desired_physical_routes: Option<PhysicalRoutingTable>,
-    ) -> PhysicalRoutingTable {
-        let mut applied_physical_routes = PhysicalRoutingTable::default();
+        current_routes: Option<EffectiveRoutingList>,
+        desired_routes: Option<EffectiveRoutingList>,
+    ) -> EffectiveRoutingList {
+        let mut applied_routes = EffectiveRoutingList::default();
         trace!(
-            "Physical routes change: current={:?}; desired={:?}",
-            current_physical_routes, desired_physical_routes
+            "Routes change: current={:?}; desired={:?}",
+            current_routes, desired_routes
         );
 
         // clean up old routes
-        if let Some(current_physical_routes) = current_physical_routes.as_ref() {
-            for (dest, route) in current_physical_routes.iter() {
-                match desired_physical_routes.as_ref() {
-                    Some(desired_physical_routes) if desired_physical_routes.contains(dest) => {
-                        applied_physical_routes.add(route.clone());
+        if let Some(current_routes) = current_routes.as_ref() {
+            for (dest, route) in current_routes.iter() {
+                match desired_routes.as_ref() {
+                    Some(desired_routes) if desired_routes.contains(dest) => {
+                        applied_routes.add(route.clone());
                     }
                     _ => {
                         trace!("delete route: {:?}", route);
@@ -640,19 +632,19 @@ impl SdnNodeInner {
                         if let Err(e) = routes_handle.delete(&net_route).await {
                             warn!("Failed to delete route {:?}: {}", route, e);
                         } else {
-                            applied_physical_routes.add(route.clone());
+                            applied_routes.add(route.clone());
                         }
                     }
                 }
             }
         }
 
-        if let Some(desired_physical_routes) = desired_physical_routes.as_ref() {
+        if let Some(desired_routes) = desired_routes.as_ref() {
             if let Ok(existing_routes) = routes_handle.list().await {
-                for (dest, route) in desired_physical_routes.iter() {
-                    match current_physical_routes.as_ref() {
-                        Some(current_physical_routes) if current_physical_routes.contains(dest) => {
-                            applied_physical_routes.add(route.clone());
+                for (dest, route) in desired_routes.iter() {
+                    match current_routes.as_ref() {
+                        Some(current_routes) if current_routes.contains(dest) => {
+                            applied_routes.add(route.clone());
                         }
                         _ => {
                             let net_route = route.net_route();
@@ -663,13 +655,13 @@ impl SdnNodeInner {
                             });
                             if existing {
                                 trace!("route does already exist: {:?}", route);
-                                applied_physical_routes.add(route.clone());
+                                applied_routes.add(route.clone());
                             } else {
                                 trace!("add route: {:?}", route);
                                 if let Err(e) = routes_handle.add(&net_route).await {
                                     warn!("Failed to add route {:?}: {}", route, e);
                                 } else {
-                                    applied_physical_routes.add(route.clone());
+                                    applied_routes.add(route.clone());
                                 }
                             }
                         }
@@ -680,7 +672,7 @@ impl SdnNodeInner {
             }
         }
 
-        applied_physical_routes
+        applied_routes
     }
 }
 
