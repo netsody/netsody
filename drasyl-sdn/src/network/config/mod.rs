@@ -239,6 +239,7 @@ impl NetworkConfig {
                     let route = EffectiveRoute {
                         dest: *dest,
                         gw: node.ip,
+                        state: RouteState::Applied,
                     };
                     physical_route.insert(*dest, route);
                 } else {
@@ -638,15 +639,57 @@ impl Hash for NetworkPolicy {
 pub struct EffectiveRoute {
     dest: Ipv4Net,
     gw: Ipv4Addr,
+    state: RouteState,
 }
 
 impl EffectiveRoute {
+    pub(crate) fn as_pending_route(&self) -> Self {
+        Self {
+            dest: self.dest,
+            gw: self.gw,
+            state: RouteState::Pending,
+        }
+    }
+
+    pub(crate) fn as_applied_route(&self) -> Self {
+        Self {
+            dest: self.dest,
+            gw: self.gw,
+            state: RouteState::Applied,
+        }
+    }
+
+    pub(crate) fn as_removing_route(&self) -> Self {
+        Self {
+            dest: self.dest,
+            gw: self.gw,
+            state: RouteState::Removing,
+        }
+    }
+
     pub(crate) fn net_route(&self) -> net_route::Route {
         let route = net_route::Route::new(IpAddr::V4(self.dest.addr()), self.dest.prefix_len())
             .with_gateway(IpAddr::V4(self.gw));
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let route = route.with_metric(4900);
         route
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, PartialOrd, Ord)]
+pub enum RouteState {
+    Pending,
+    Applied,
+    Removing,
+}
+
+impl fmt::Display for RouteState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            RouteState::Pending => write!(f, "PENDING"),
+            RouteState::Applied => write!(f, "APPLIED"),
+            RouteState::Removing => write!(f, "REMOVING"),
+        }
     }
 }
 
@@ -673,13 +716,19 @@ impl EffectiveRoutingList {
 
 impl Display for EffectiveRoutingList {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{:<18} {:<15}", "Destination", "Gateway")?;
+        writeln!(f, "{:<18} {:<15} {:<7}", "Destination", "Gateway", "State")?;
 
         let mut entries: Vec<(&Ipv4Net, &EffectiveRoute)> = self.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
 
         for (dest, entry) in entries {
-            writeln!(f, "{:<18} {:<15}", dest.to_string(), entry.gw.to_string(),)?;
+            writeln!(
+                f,
+                "{:<18} {:<15} {:<7}",
+                dest.to_string(),
+                entry.gw.to_string(),
+                entry.state
+            )?;
         }
 
         Ok(())
