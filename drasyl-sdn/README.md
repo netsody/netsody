@@ -17,26 +17,24 @@ This will create a release binary that can be used to run an SDN node. The Prome
 
 ### Configuration
 
-The SDN node can be configured using environment variables. See `src/main.rs` for the complete list of available options. Here are some common configuration variables:
+The SDN node can be configured through a config file located at `config.toml` by default, which can be overridden using the `DRASYL_CONFIG` environment variable. The config file is created upon first start and contains the node's identity.
 
-```bash
-# Network configuration
-DRASYL_NETWORK_ID=1          # Network identifier
-DRASYL_CONFIG_URL=file:///path/to/config.toml  # Path to the configuration file
+Networks that the node should join can be defined as follows. Each network requires a configuration that can be loaded either from a local file or via HTTP for centralized control.
 
-# Identity configuration
-DRASYL_IDENTITY_FILE=sdn.identity  # Path to the identity file
-DRASYL_POW_DIFFICULTY=24     # Minimum proof of work difficulty
+Example node configuration:
+```toml
+[identity]
+sk  = "**MASKED**"
+pow = -2147483648
 
-# Prometheus configuration
-DRASYL_PROMETHEUS_PORT=9090  # Port for Prometheus metrics
+[[network]]
+config_url = "https://example.com/network.toml"
+
+[[network]]
+config_url = "file:///home/user/other-network.toml"
 ```
 
-These variables can be set before starting the node to customize its behavior.
-
-The SDN node requires a TOML configuration file that defines the network topology and policies. The configuration can be provided either as a local file or via HTTP for centralized control.
-
-Example configuration structure:
+Example network configuration:
 ```toml
 # Network configuration using Carrier-Grade NAT address space
 network = "100.64.0.0/24"  # /24 subnet for our company network
