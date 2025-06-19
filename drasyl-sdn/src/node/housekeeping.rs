@@ -624,15 +624,14 @@ impl SdnNodeInner {
             for (dest, route) in current_routes.iter() {
                 match desired_routes.as_ref() {
                     Some(desired_routes) if desired_routes.contains(dest) => {
-                        applied_routes.add(route.clone());
+                        applied_routes.add(route.as_applied_route());
                     }
                     _ => {
                         trace!("delete route: {:?}", route);
                         let net_route = route.net_route();
                         if let Err(e) = routes_handle.delete(&net_route).await {
                             warn!("Failed to delete route {:?}: {}", route, e);
-                        } else {
-                            applied_routes.add(route.clone());
+                            applied_routes.add(route.as_removing_route());
                         }
                     }
                 }
@@ -641,29 +640,23 @@ impl SdnNodeInner {
 
         if let Some(desired_routes) = desired_routes.as_ref() {
             if let Ok(existing_routes) = routes_handle.list().await {
-                for (dest, route) in desired_routes.iter() {
-                    match current_routes.as_ref() {
-                        Some(current_routes) if current_routes.contains(dest) => {
-                            applied_routes.add(route.clone());
-                        }
-                        _ => {
-                            let net_route = route.net_route();
-                            let existing = existing_routes.iter().any(|route| {
-                                net_route.destination == route.destination
-                                    && net_route.prefix == route.prefix
-                                    && net_route.gateway == route.gateway
-                            });
-                            if existing {
-                                trace!("route does already exist: {:?}", route);
-                                applied_routes.add(route.clone());
-                            } else {
-                                trace!("add route: {:?}", route);
-                                if let Err(e) = routes_handle.add(&net_route).await {
-                                    warn!("Failed to add route {:?}: {}", route, e);
-                                } else {
-                                    applied_routes.add(route.clone());
-                                }
-                            }
+                for (_, route) in desired_routes.iter() {
+                    let net_route = route.net_route();
+                    let existing = existing_routes.iter().any(|route| {
+                        net_route.destination == route.destination
+                            && net_route.prefix == route.prefix
+                            && net_route.gateway == route.gateway
+                    });
+                    if existing {
+                        trace!("route does already exist: {:?}", route);
+                        applied_routes.add(route.as_applied_route());
+                    } else {
+                        trace!("add route: {:?}", route);
+                        if let Err(e) = routes_handle.add(&net_route).await {
+                            warn!("Failed to add route {:?}: {}", route, e);
+                            applied_routes.add(route.as_pending_route());
+                        } else {
+                            applied_routes.add(route.as_applied_route());
                         }
                     }
                 }
