@@ -171,10 +171,10 @@ impl fmt::Display for Status {
         writeln!(f, "    Sockets: {}", self.opts.udp_sockets)?;
         writeln!(f, "  Arm Messages: {}", self.opts.arm_messages)?;
         writeln!(f, "  Max. Peers: {}", self.opts.max_peers)?;
-        writeln!(f, "  Min. PoW difficulty: {}", self.opts.min_pow_difficulty)?;
+        writeln!(f, "  Min. PoW Difficulty: {}", self.opts.min_pow_difficulty)?;
         writeln!(
             f,
-            "  HELLO timeout: {}",
+            "  HELLO Timeout: {}",
             format_duration(Duration::from_millis(self.opts.hello_timeout))
         )?;
         writeln!(
@@ -190,7 +190,7 @@ impl fmt::Display for Status {
         writeln!(f, "  Process UNITEs: {}", self.opts.process_unites)?;
         writeln!(
             f,
-            "  Housekeeping interval: {}",
+            "  Housekeeping Interval: {}",
             format_duration(Duration::from_millis(self.opts.housekeeping_interval))
         )?;
         writeln!(f, "  Enforce TCP: {}", self.opts.enforce_tcp)?;
@@ -522,7 +522,7 @@ impl fmt::Display for NetworkStatus {
         )?;
         writeln!(
             f,
-            "TUN device: {}",
+            "TUN Device: {}",
             self.tun_device
                 .as_ref()
                 .map_or("None".to_string(), |tun_device| tun_device.to_string())
@@ -579,7 +579,7 @@ fn format_path(path: &PeerPathInner) -> String {
 
     // Unanswered HELLO
     result.push_str(&format!(
-        "Unanswered HELLO since: {}",
+        "Unanswered HELLO Since: {}",
         match path.unanswered_hello_since {
             Some(unanswered_hello_since) if unanswered_hello_since != 0 => format!(
                 "{} ({})",
@@ -594,7 +594,7 @@ fn format_path(path: &PeerPathInner) -> String {
 
     // Last ACK time
     result.push_str(&format!(
-        "Last ACK time: {}{}",
+        "Last ACK Time: {}{}",
         format_timestamp(path.last_ack_time),
         if path.last_ack_time != 0 {
             format!(" ({} ago)", time_ago_in_words(path.last_ack_time))
@@ -606,7 +606,7 @@ fn format_path(path: &PeerPathInner) -> String {
 
     // Last ACK source
     result.push_str(&format!(
-        "Last ACK source: {}",
+        "Last ACK Source: {}",
         path.last_ack_src
             .as_ref()
             .map_or("".to_string(), |s| s.to_string())
