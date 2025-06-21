@@ -404,6 +404,7 @@ impl NodeInner {
                     // skip all endpoints in unite_endpoints whose ip addr is not in the same ip family as socket_ip
                     let local_addr = udp_binding.local_addr;
                     if new_addr.is_ipv4() != local_addr.is_ipv4() {
+                        trace!(peer=?unite.address, "Skipping endpoint candidate {new_addr} because it's not in the same ip family as {local_addr}");
                         continue;
                     }
 
