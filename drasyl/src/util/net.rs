@@ -106,6 +106,7 @@ pub fn get_addrs() -> io::Result<Vec<(String, IpAddr)>> {
                 && !iface.name.starts_with("zt")
                 && !iface.name.starts_with("drasyl")
                 && !iface.name.starts_with("docker")
+                && !iface.name.starts_with("br-")
         }) // FIXME: read from NodeOpts
         .filter_map(|iface| match iface.addr {
             IfAddr::V4(v4) if ip_is_valid_v4(&v4.ip) => Some((iface.name, IpAddr::V4(v4.ip))),
