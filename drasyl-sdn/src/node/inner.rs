@@ -34,6 +34,7 @@ type TrieRx = IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>>;
 
 pub struct SdnNodeInner {
     pub(crate) id: Identity,
+    pub(crate) auth_token: String,
     pub(crate) networks: HashMap<Url, Network>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) node: Arc<Node>,
@@ -47,6 +48,7 @@ pub struct SdnNodeInner {
 impl SdnNodeInner {
     pub(crate) fn new(
         id: Identity,
+        auth_token: String,
         networks: HashMap<Url, Network>,
         cancellation_token: CancellationToken,
         node: Arc<Node>,
@@ -56,6 +58,7 @@ impl SdnNodeInner {
     ) -> Self {
         Self {
             id,
+            auth_token,
             networks,
             cancellation_token,
             node,

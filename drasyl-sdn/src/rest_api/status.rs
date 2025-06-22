@@ -11,7 +11,6 @@ use drasyl::identity::PubKey;
 use drasyl::message::ShortId;
 use drasyl::node::{HELLO_TIMEOUT_DEFAULT, NodeOpts};
 use drasyl::peer::{NodePeer, Peer, PeerPathInner, PeerPathKey, PowStatus, SessionKeys, SuperPeer};
-use drasyl::util;
 use http::Request;
 use http_body_util::BodyExt;
 use http_body_util::Empty;
@@ -69,8 +68,7 @@ impl RestApiServer {
 impl RestApiClient {
     pub async fn status(&self) -> Result<Status, Error> {
         let client = Client::builder(TokioExecutor::new()).build_http();
-        let token_file = util::get_env("AUTH_FILE", crate::rest_api::AUTH_FILE_DEFAULT.to_string());
-        let auth_token = load_auth_token(&token_file).map_err(Error::AuthTokenReadFailed)?;
+        let auth_token = load_auth_token().map_err(Error::AuthTokenReadFailed)?;
 
         let uri = "http://localhost:22527/status"
             .parse::<hyper::Uri>()
