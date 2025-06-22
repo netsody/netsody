@@ -38,6 +38,7 @@ impl SdnNode {
 
         let inner = Arc::new(SdnNodeInner::new(
             config.id,
+            config.auth_token,
             config.networks,
             cancellation_token,
             node,

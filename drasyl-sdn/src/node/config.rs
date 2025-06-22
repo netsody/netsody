@@ -1,7 +1,10 @@
 use crate::network::Network;
 use crate::node::Error;
+use crate::rest_api::API_TOKEN_LEN_DEFAULT;
+use drasyl::crypto::random_bytes;
 use drasyl::node::Identity;
 use drasyl::util;
+use drasyl::util::bytes_to_hex;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de;
@@ -22,6 +25,7 @@ pub struct PrometheusConfig {
 pub struct SdnNodeConfig {
     #[serde(rename = "identity")]
     pub id: Identity,
+    pub auth_token: String,
     #[serde(
         skip_serializing,
         rename = "network",
@@ -34,13 +38,23 @@ pub struct SdnNodeConfig {
 }
 
 impl SdnNodeConfig {
-    pub fn new(id: Identity) -> Self {
+    pub fn new(id: Identity, auth_token: String) -> Self {
         Self {
             id,
+            auth_token,
             networks: Default::default(),
             #[cfg(feature = "prometheus")]
             prometheus: Default::default(),
         }
+    }
+
+    pub fn load(path: &str) -> Result<Self, Error> {
+        trace!("Loading SDN config from {}", path);
+        let config_content = fs::read_to_string(path)?;
+        trace!("Successfully read config file");
+        let config: SdnNodeConfig = toml::from_str(&config_content)?;
+        trace!("Successfully parsed config file");
+        Ok(config)
     }
 
     pub fn load_or_generate(path: &str) -> Result<Self, Error> {
@@ -49,20 +63,24 @@ impl SdnNodeConfig {
         // options
         let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
         trace!("Using min PoW difficulty: {}", min_pow_difficulty);
+        let token_len = util::get_env("API_TOKEN_LEN", API_TOKEN_LEN_DEFAULT);
 
         // Read and parse config.toml from current directory
         let config = if std::path::Path::new(path).exists() {
-            trace!("Config file exists, loading from {}", path);
-            let config_content = fs::read_to_string(path)?;
-            trace!("Successfully read config file");
-            toml::from_str(&config_content)?
+            Self::load(path)?
         } else {
             trace!("Config file does not exist, generating new one");
+
+            // auth_token: generate random bytes and convert to hex
+            let mut buf = vec![0u8; token_len];
+            random_bytes(&mut buf);
+            let auth_token = bytes_to_hex(&buf);
+
             // Generate new identity and create default config
             let id = Identity::generate(min_pow_difficulty)?;
             trace!("Generated new identity with public key: {}", id.pk);
 
-            let config = SdnNodeConfig::new(id);
+            let config = SdnNodeConfig::new(id, auth_token);
 
             // Serialize and save the config
             let config_content = toml::to_string_pretty(&config)?;
