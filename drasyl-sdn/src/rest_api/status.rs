@@ -375,6 +375,11 @@ impl NodePeerStatus {
             .map(|(path_key, path)| (*path_key, path.inner_store.load().as_ref().clone()))
             .collect();
 
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+
         Self {
             pow: node_peer.pow(),
             session_keys: node_peer.session_keys.clone(),
@@ -385,7 +390,7 @@ impl NodePeerStatus {
             paths,
             rx_short_id: node_peer.rx_short_id(),
             tx_short_id: node_peer.tx_short_id(),
-            reachable: node_peer.is_reachable(),
+            reachable: node_peer.is_reachable(now, HELLO_TIMEOUT_DEFAULT),
         }
     }
 }

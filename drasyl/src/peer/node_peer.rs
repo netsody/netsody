@@ -278,8 +278,11 @@ impl NodePeer {
     ///
     /// # Returns
     /// `true` if there are active paths to this peer, `false` otherwise
-    pub fn is_reachable(&self) -> bool {
-        !self.paths.pin().is_empty()
+    pub fn is_reachable(&self, time: u64, hello_timeout: u64) -> bool {
+        self.paths
+            .pin()
+            .values()
+            .any(|path| path.is_reachable(time, hello_timeout))
     }
 
     /// Check if this peer connection is new.
