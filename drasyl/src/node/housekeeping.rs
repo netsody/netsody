@@ -195,7 +195,7 @@ impl NodeInner {
                 Peer::NodePeer(node_peer) => {
                     let is_new = node_peer.is_new(time, self.opts.hello_timeout);
                     let has_handle = self.send_handles.contains_key(key);
-                    let is_active = node_peer.is_reachable()
+                    let is_active = node_peer.is_reachable(time, self.opts.hello_timeout)
                         && (node_peer.has_app_traffic(time) || self.send_handles.contains_key(key));
                     is_new || is_active || has_handle
                 }
@@ -386,7 +386,7 @@ impl NodeInner {
             node_peer.clear_app_tx_rx();
         }
 
-        if !node_peer.is_reachable() {
+        if !node_peer.is_reachable(time, self.opts.hello_timeout) {
             trace!("Node is not directly reachable.");
             if node_peer.tx_short_id().is_some() {
                 node_peer.set_tx_short_id(SHORT_ID_NONE);

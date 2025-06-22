@@ -1,7 +1,9 @@
 use crate::crypto::{ED25519_PUBLICKEYBYTES, ED25519_SECRETKEYBYTES};
 use crate::identity::{Identity, PubKey};
 use crate::node;
-use crate::node::{MessageSink, Node, NodeOpts, NodeOptsBuilder, NodeOptsBuilderError};
+use crate::node::{
+    HELLO_TIMEOUT_DEFAULT, MessageSink, Node, NodeOpts, NodeOptsBuilder, NodeOptsBuilderError,
+};
 use crate::peer;
 use crate::peer::PeersList;
 use crate::peer::SuperPeerUrl;
@@ -12,6 +14,7 @@ use std::net::IpAddr;
 use std::os::raw::{c_char, c_int};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{ptr, slice};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -617,6 +620,11 @@ pub extern "C" fn drasyl_peers_list_peers(
     peers_list: &mut &PeersList,
     peers: *mut *mut Vec<Peer>,
 ) -> c_int {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as u64;
+
     let mut result = Vec::new();
     for (pk, peer) in &peers_list.peers.pin() {
         match peer {
@@ -631,7 +639,7 @@ pub extern "C" fn drasyl_peers_list_peers(
                 result.push(Peer {
                     pk: *pk,
                     super_peer: false,
-                    reachable: node_peer.is_reachable(),
+                    reachable: node_peer.is_reachable(now, HELLO_TIMEOUT_DEFAULT),
                 });
             }
         };
