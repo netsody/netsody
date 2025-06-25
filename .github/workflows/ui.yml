@@ -1,0 +1,70 @@
+name: drasyl-ui
+
+on:
+  push:
+    branches:
+      - master
+      - ui
+  pull_request:
+    branches:
+      - master
+      - ui
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        job_name:
+          - linux-amd64
+          - macos-arm64
+
+        include:
+          - job_name: linux-amd64
+            os: ubuntu-22.04
+            path: |
+              target/release/drasyl-ui
+              target/release/*.deb
+
+          - job_name: macos-arm64
+            os: macOS-latest
+            path: |
+              target/release/drasyl-ui
+              target/release/*.app
+
+    name: Build drasyl-ui on ${{ matrix.job_name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libpango1.0-dev \
+            libxdo-dev \
+            libayatana-appindicator3-dev
+        if: startsWith(matrix.os, 'ubuntu-')
+
+      - name: Build drasyl-ui
+        run: cargo build --verbose --package drasyl-ui --release
+
+      - name: Bundle drasyl UI.app
+        run: ./drasyl-ui/bundle-macos.sh --release
+        if: success() && startsWith(matrix.os, 'macOS-')
+
+      - name: Bundle drasyl-ui.deb
+        run: ./drasyl-ui/bundle-debian.sh --release
+        if: success() && startsWith(matrix.os, 'ubuntu-')
+
+      - name: Upload drasyl-ui artifact(s)
+        uses: actions/upload-artifact@v4
+        with:
+          name: drasyl-ui-${{ matrix.job_name }}
+          path: ${{ matrix.path }}
