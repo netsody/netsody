@@ -30,6 +30,7 @@ async fn main() -> Result<(), Error> {
     let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", MIN_POW_DIFFICULTY_DEFAULT);
     let hello_timeout = util::get_env("HELLO_TIMEOUT", HELLO_TIMEOUT_DEFAULT); // milliseconds
     let hello_max_age = util::get_env("HELLO_MAX_AGE", HELLO_MAX_AGE_DEFAULT); // milliseconds
+    let peers_print_interval = util::get_env("PEERS_PRINT_INTERVAL", 5000); // milliseconds, set to 0 to disable
 
     let udp4_listen: Option<SocketAddrV4> = if udp4_listen.is_empty() {
         None
@@ -148,7 +149,7 @@ async fn main() -> Result<(), Error> {
         _ = tokio::signal::ctrl_c() => {
             println!("Shutdown initiated via Ctrl-C.");
         },
-        _ = peers_task(&super_peer) => {},
+        _ = peers_task(&super_peer, peers_print_interval) => {},
         _ = super_peer.cancelled() => {},
         _ = prometheus_server_or_never() => {},
     }
@@ -156,8 +157,14 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-async fn peers_task(super_peer: &SuperPeer) {
-    let mut interval = tokio::time::interval(Duration::from_secs(5));
+async fn peers_task(super_peer: &SuperPeer, interval_ms: u32) {
+    if interval_ms == 0 {
+        // If interval is 0, wait forever (disable peer list printing)
+        std::future::pending::<()>().await;
+        return;
+    }
+
+    let mut interval = tokio::time::interval(Duration::from_millis(interval_ms as u64));
     loop {
         interval.tick().await;
         println!("{}", super_peer.peers_list());

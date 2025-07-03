@@ -27,10 +27,10 @@ pub struct SdnNodeConfig {
     pub id: Identity,
     pub auth_token: String,
     #[serde(
-        skip_serializing,
         rename = "network",
         default,
-        deserialize_with = "deserialize_networks"
+        deserialize_with = "deserialize_networks",
+        serialize_with = "serialize_networks"
     )]
     pub networks: HashMap<Url, Network>,
     #[cfg(feature = "prometheus")]
@@ -83,10 +83,26 @@ impl SdnNodeConfig {
             let config = SdnNodeConfig::new(id, auth_token);
 
             // Serialize and save the config
-            let config_content = toml::to_string_pretty(&config)?;
-            trace!("Serialized config, writing to {}", path);
+            config.save(path)?;
 
-            // Create empty file
+            trace!("Successfully wrote config file");
+
+            config
+        };
+
+        trace!("Config loaded successfully");
+        Ok(config)
+    }
+
+    pub fn save(&self, path: &str) -> Result<(), Error> {
+        trace!("Saving SDN config to {}", path);
+
+        // Serialize the config
+        let config_content = toml::to_string_pretty(self)?;
+        trace!("Successfully serialized config");
+
+        // Create empty file if it doesn't exist
+        if !std::path::Path::new(path).exists() {
             fs::write(path, "")?;
 
             // Set restrictive file permissions (Unix only)
@@ -97,17 +113,13 @@ impl SdnNodeConfig {
                 perms.set_mode(0o600); // Read/write for owner only
                 fs::set_permissions(path, perms)?;
             }
+        }
 
-            // Write content
-            fs::write(path, &config_content)?;
+        // Write content
+        fs::write(path, &config_content)?;
+        trace!("Successfully wrote config file");
 
-            trace!("Successfully wrote config file");
-
-            config
-        };
-
-        trace!("Config loaded successfully");
-        Ok(config)
+        Ok(())
     }
 }
 
@@ -129,4 +141,26 @@ where
     }
 
     Ok(result)
+}
+
+fn serialize_networks<S>(networks: &HashMap<Url, Network>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+
+    // If networks is empty, serialize as None to omit the field entirely
+    if networks.is_empty() {
+        return serializer.serialize_none();
+    }
+
+    // sort networks alphabetically by URL
+    let mut sorted_networks: Vec<_> = networks.values().collect();
+    sorted_networks.sort_by(|a, b| a.config_url.cmp(&b.config_url));
+
+    let mut seq = serializer.serialize_seq(Some(sorted_networks.len()))?;
+    for network in sorted_networks {
+        seq.serialize_element(network)?;
+    }
+    seq.end()
 }
