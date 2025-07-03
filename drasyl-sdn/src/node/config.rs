@@ -149,6 +149,11 @@ where
 {
     use serde::ser::SerializeSeq;
 
+    // If networks is empty, serialize as None to omit the field entirely
+    if networks.is_empty() {
+        return serializer.serialize_none();
+    }
+
     // sort networks alphabetically by URL
     let mut sorted_networks: Vec<_> = networks.values().collect();
     sorted_networks.sort_by(|a, b| a.config_url.cmp(&b.config_url));
