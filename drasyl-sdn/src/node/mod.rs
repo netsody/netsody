@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{error, info, warn};
+use url::Url;
 
 pub struct SdnNode {
     pub(crate) inner: Arc<SdnNodeInner>,
@@ -86,6 +87,86 @@ impl SdnNode {
 
     pub fn drasyl_node(&self) -> Arc<Node> {
         self.inner.node.clone()
+    }
+
+    /// adds a new network
+    pub async fn add_network(&self, config_url: &str) -> Result<(), Error> {
+        let url = Url::parse(config_url).map_err(|e| Error::ConfigParseError {
+            reason: format!("Failed to parse URL: {}", e),
+        })?;
+
+        // we need this scope to ensure that the lock is released before saving the configuration
+        {
+            // check if network already exists and add it
+            let mut networks = self.inner.networks.lock().await;
+            if networks.contains_key(&url) {
+                return Err(Error::NetworkAlreadyExists {
+                    config_url: config_url.to_string(),
+                });
+            }
+
+            // add network
+            let network = crate::network::Network {
+                config_url: config_url.to_string(),
+                state: None,
+                inner: std::sync::Arc::new(crate::network::NetworkInner::default()),
+                tun_state: None,
+            };
+            networks.insert(url, network);
+        }
+
+        // persist configuration
+        self.save_config().await?;
+
+        info!("Network '{}' added successfully", config_url);
+        Ok(())
+    }
+
+    /// removes a network
+    pub async fn remove_network(&self, config_url: &str) -> Result<(), Error> {
+        let url = Url::parse(config_url).map_err(|e| Error::ConfigParseError {
+            reason: format!("Failed to parse URL: {}", e),
+        })?;
+
+        // we need this scope to ensure that the lock is released before saving the configuration
+        {
+            // check if network exists and remove it
+            let mut networks = self.inner.networks.lock().await;
+            if !networks.contains_key(&url) {
+                return Err(Error::NetworkNotFound {
+                    config_url: config_url.to_string(),
+                });
+            }
+
+            // shutdown network
+            if let Some(mut network) = networks.remove(&url) {
+                SdnNodeInner::teardown_network(&self.inner, self.inner.clone(), &mut network).await;
+            }
+        }
+
+        // TODO: we update the rx tries here because within the teardown_network we already have a lock on the networks
+        self.inner.update_rx_tries(self.inner.clone()).await;
+
+        // persist configuration
+        self.save_config().await?;
+
+        info!("Network '{}' removed successfully", config_url);
+        Ok(())
+    }
+
+    /// saves the current configuration to file
+    async fn save_config(&self) -> Result<(), Error> {
+        let config_path = util::get_env("CONFIG", "config.toml".to_string());
+
+        // load current configuration
+        let mut config = SdnNodeConfig::load(&config_path)?;
+
+        // update networks from inner state
+        let networks = self.inner.networks.lock().await;
+        config.networks = networks.clone();
+
+        // save configuration
+        config.save(&config_path)
     }
 }
 

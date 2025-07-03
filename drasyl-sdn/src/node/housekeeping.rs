@@ -47,15 +47,28 @@ impl SdnNodeInner {
     }
 
     async fn housekeeping(&self, inner: &Arc<SdnNodeInner>) -> Result<(), Error> {
-        for (_, network) in inner.networks.iter() {
-            self.housekeeping_network(inner.clone(), network).await;
+        {
+            let mut networks = inner.networks.lock().await;
+
+            for network in networks.values_mut() {
+                self.housekeeping_network(inner.clone(), network).await;
+            }
+        }
+
+        // TODO: we update the rx tries here because within the housekeeping_network we already have a lock on the networks
+        self.update_rx_tries(inner.clone()).await;
+
+        // TODO: we update the hosts file here because within the housekeeping_network we already have a lock on the networks
+        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
+        if let Err(e) = update_hosts_file(inner.clone()).await {
+            error!("failed to update /etc/hosts: {}", e);
         }
 
         Ok(())
     }
 
     #[instrument(fields(network = %network.config_url), skip_all)]
-    async fn housekeeping_network(&self, inner: Arc<SdnNodeInner>, network: &Network) {
+    async fn housekeeping_network(&self, inner: Arc<SdnNodeInner>, network: &mut Network) {
         match Self::fetch_network_config(network.config_url.as_str()).await {
             Ok(config) => {
                 trace!("Network config fetched successfully");
@@ -80,12 +93,7 @@ impl SdnNodeInner {
                     None => None,
                 };
 
-                let current = network
-                    .state
-                    .lock()
-                    .expect("Mutex poisoned")
-                    .as_ref()
-                    .cloned();
+                let current = network.state.as_ref().cloned();
 
                 match (current, desired) {
                     (Some(current), Some(desired)) if current == desired => {
@@ -129,8 +137,8 @@ impl SdnNodeInner {
 
     async fn update_routes_and_hostnames(
         &self,
-        inner: Arc<SdnNodeInner>,
-        network: &Network,
+        _inner: Arc<SdnNodeInner>,
+        network: &mut Network,
         current: Option<LocalNodeState>,
         desired: LocalNodeState,
     ) {
@@ -147,7 +155,7 @@ impl SdnNodeInner {
             }
         };
 
-        *network.state.lock().expect("Mutex poisoned") = Some(LocalNodeState {
+        network.state = Some(LocalNodeState {
             subnet: desired.subnet,
             ip: desired.ip,
             access_rules: desired.access_rules.clone(),
@@ -164,57 +172,54 @@ impl SdnNodeInner {
                     current_access_rules.map_or("None".to_string(), |v| v.to_string()),
                     desired.access_rules
                 );
-                self.update_tx_trie(network);
-                self.update_rx_tries(inner.clone());
+                self.update_tx_trie(network).await;
+                // TODO: we can't update the rx tries here because we already have a lock on the networks
+                // self.update_rx_tries(inner.clone()).await;
             }
         }
 
-        // hostnames
-        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        match current.as_ref().map(|state| state.hostnames.clone()) {
-            Some(current_hostnames) if current_hostnames == desired.hostnames => {}
-            _ => {
-                if let Err(e) = update_hosts_file(inner.clone()) {
-                    error!("failed to update /etc/hosts: {}", e);
-                }
-            }
-        }
+        // TODO: we can't update the hostnames here because we already have a lock on the networks
+        // // hostnames
+        // #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
+        // match current.as_ref().map(|state| state.hostnames.clone()) {
+        //     Some(current_hostnames) if current_hostnames == desired.hostnames => {}
+        //     _ => {
+        //         if let Err(e) = update_hosts_file(inner.clone()).await {
+        //             error!("failed to update /etc/hosts: {}", e);
+        //         }
+        //     }
+        // }
     }
 
-    async fn teardown_network(&self, inner: Arc<SdnNodeInner>, network: &Network) {
+    pub(crate) async fn teardown_network(&self, _inner: Arc<SdnNodeInner>, network: &mut Network) {
         // routes
-        let routes = {
-            network
-                .state
-                .lock()
-                .expect("Mutex poisoned")
-                .as_ref()
-                .map(|state| state.routes.clone())
-        };
+        let routes = { network.state.as_ref().map(|state| state.routes.clone()) };
         if let Some(routes) = routes {
             Self::remove_routes(self.routes_handle.clone(), routes).await;
         }
 
-        *network.state.lock().expect("Mutex poisoned") = None;
+        network.state = None;
 
         // access rules
-        self.update_tx_trie(network);
-        self.update_rx_tries(inner.clone());
+        self.update_tx_trie(network).await;
+        // TODO: we can't update the rx tries here because we already have a lock on the networks
+        // self.update_rx_tries(inner.clone()).await;
 
-        // hostnames
-        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        if let Err(e) = update_hosts_file(inner.clone()) {
-            error!("failed to update /etc/hosts: {}", e);
-        }
+        // TODO: we can't update the hostnames here because we already have a lock on the networks
+        // // hostnames
+        // #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
+        // if let Err(e) = update_hosts_file(inner.clone()).await {
+        //     error!("failed to update /etc/hosts: {}", e);
+        // }
 
         // tun device
-        self.remove_tun_device(network);
+        self.remove_tun_device(network).await;
     }
 
     async fn setup_network(
         &self,
         inner: Arc<SdnNodeInner>,
-        network: &Network,
+        network: &mut Network,
         current: Option<LocalNodeState>,
         desired: LocalNodeState,
     ) {
@@ -226,7 +231,7 @@ impl SdnNodeInner {
             Self::tun_dev_name(desired.subnet),
             network.inner.clone(),
         );
-        *network.inner.tun_state.lock().expect("Mutex poisoned") = Some(TunState {
+        network.tun_state = Some(TunState {
             cancellation_token: tun_cancellation_token,
             device: tun_device.clone(),
         });
@@ -236,14 +241,12 @@ impl SdnNodeInner {
     }
 
     #[instrument(skip_all)]
-    fn update_tx_trie(&self, network: &Network) {
+    async fn update_tx_trie(&self, network: &Network) {
         trace!("Update trie tx");
         let mut trie_tx: IpnetTrie<IpnetTrie<Arc<SendHandle>>> = IpnetTrie::new();
 
         if let Some(access_rules) = network
             .state
-            .lock()
-            .expect("Mutex poisoned")
             .as_ref()
             .map(|state| state.access_rules.clone())
         {
@@ -290,25 +293,18 @@ impl SdnNodeInner {
     }
 
     #[instrument(skip_all)]
-    fn update_rx_tries(&self, inner: Arc<SdnNodeInner>) {
+    pub(crate) async fn update_rx_tries(&self, inner: Arc<SdnNodeInner>) {
         trace!("Rebuild tries");
         let mut trie_rx: IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>> = IpnetTrie::new();
 
-        for (config_url, network) in inner.networks.iter() {
+        for (config_url, network) in inner.networks.lock().await.iter() {
             if let Some(access_rules) = network
                 .state
-                .lock()
-                .expect("Mutex poisoned")
                 .as_ref()
                 .map(|state| state.access_rules.clone())
             {
-                if let Some(tun_device) = network
-                    .inner
-                    .tun_state
-                    .lock()
-                    .expect("Mutex poisoned")
-                    .as_ref()
-                    .map(|state| state.device.clone())
+                if let Some(tun_device) =
+                    network.tun_state.as_ref().map(|state| state.device.clone())
                 {
                     let (_, network_trie_rx) = access_rules.routing_tries();
 
@@ -416,16 +412,12 @@ impl SdnNodeInner {
         (cancellation_token, tun_device)
     }
 
-    fn remove_tun_device(&self, network: &Network) {
-        let mut guard = network.inner.tun_state.lock().expect("Mutex poisoned");
-        if let Some(tun_state) = guard.as_ref() {
+    async fn remove_tun_device(&self, network: &mut Network) {
+        if let Some(tun_state) = network.tun_state.as_ref() {
             trace!("Remove existing TUN device by cancelling token");
-
-            // tun device
             tun_state.cancellation_token.cancel();
-
-            *guard = None;
         }
+        network.tun_state = None;
     }
 
     #[cfg(target_os = "linux")]
@@ -670,7 +662,7 @@ impl SdnNodeInner {
 }
 
 #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-fn update_hosts_file(inner: Arc<SdnNodeInner>) -> Result<(), Error> {
+async fn update_hosts_file(inner: Arc<SdnNodeInner>) -> Result<(), Error> {
     // read existing /etc/hosts
     let hosts_content = fs::read_to_string("/etc/hosts")?;
     trace!("read /etc/hosts");
@@ -691,14 +683,8 @@ fn update_hosts_file(inner: Arc<SdnNodeInner>) -> Result<(), Error> {
         writeln!(temp_file, "{}", line)?;
     }
 
-    for (_, network) in inner.networks.iter() {
-        if let Some(hostnames) = network
-            .state
-            .lock()
-            .expect("Mutex poisoned")
-            .as_ref()
-            .map(|state| state.hostnames.clone())
-        {
+    for (_, network) in inner.networks.lock().await.iter() {
+        if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
             for (ip, hostname) in hostnames {
                 writeln!(
                     temp_file,

@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::net::IpAddr;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, trace, warn};
 use tun_rs::AsyncDevice as TunDevice;
@@ -35,7 +36,7 @@ type TrieRx = IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>>;
 pub struct SdnNodeInner {
     pub(crate) id: Identity,
     pub(crate) auth_token: String,
-    pub(crate) networks: HashMap<Url, Network>,
+    pub(crate) networks: Arc<Mutex<HashMap<Url, Network>>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) node: Arc<Node>,
     recv_buf_rx: Arc<Receiver<(PubKey, Vec<u8>)>>,
@@ -46,6 +47,7 @@ pub struct SdnNodeInner {
 }
 
 impl SdnNodeInner {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         id: Identity,
         auth_token: String,
@@ -59,7 +61,7 @@ impl SdnNodeInner {
         Self {
             id,
             auth_token,
-            networks,
+            networks: Arc::new(Mutex::new(networks)),
             cancellation_token,
             node,
             recv_buf_rx,
@@ -341,19 +343,15 @@ impl SdnNodeInner {
 
         // remove physical routes
         trace!("remove physical routes");
-        let all_physical_routes: Vec<EffectiveRoutingList> = self
-            .networks
-            .values()
-            .map(|network| {
-                network
-                    .state
-                    .lock()
-                    .expect("Mutex poisoned")
-                    .as_ref()
-                    .map(|state| state.routes.clone())
-                    .unwrap_or_default()
-            })
-            .collect();
+        let networks = self.networks.lock().await;
+        let mut all_physical_routes: Vec<EffectiveRoutingList> = Vec::new();
+
+        for network in networks.values() {
+            if let Some(state) = network.state.as_ref() {
+                all_physical_routes.push(state.routes.clone());
+            }
+        }
+
         let routes_handle = self.routes_handle.clone();
         let task = tokio::spawn(async move {
             for physical_routes in all_physical_routes {

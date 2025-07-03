@@ -1,7 +1,7 @@
 use crate::node::SdnNode;
 use crate::rest_api::{API_LISTEN_DEFAULT, error};
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use drasyl::util;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -27,6 +27,8 @@ impl RestApiServer {
 
         let api = Router::new()
             .route("/status", get(Self::status))
+            .route("/network/add", post(Self::add_network))
+            .route("/network/remove", post(Self::remove_network))
             .with_state(self.node.clone());
         let listener = TcpListener::bind(listen)
             .await

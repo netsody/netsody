@@ -1,11 +1,13 @@
 pub mod auth;
 mod client;
 mod error;
+mod network;
 mod server;
 mod status;
 
 pub use auth::*;
 pub use client::*;
+pub use network::*;
 pub use server::*;
 pub use status::*;
 
