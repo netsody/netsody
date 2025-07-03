@@ -137,7 +137,7 @@ impl SdnNodeInner {
 
     async fn update_routes_and_hostnames(
         &self,
-        inner: Arc<SdnNodeInner>,
+        _inner: Arc<SdnNodeInner>,
         network: &mut Network,
         current: Option<LocalNodeState>,
         desired: LocalNodeState,
@@ -191,7 +191,7 @@ impl SdnNodeInner {
         // }
     }
 
-    pub(crate) async fn teardown_network(&self, inner: Arc<SdnNodeInner>, network: &mut Network) {
+    pub(crate) async fn teardown_network(&self, _inner: Arc<SdnNodeInner>, network: &mut Network) {
         // routes
         let routes = { network.state.as_ref().map(|state| state.routes.clone()) };
         if let Some(routes) = routes {
