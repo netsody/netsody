@@ -58,6 +58,12 @@ impl SdnNodeInner {
         // TODO: we update the rx tries here because within the housekeeping_network we already have a lock on the networks
         self.update_rx_tries(inner.clone()).await;
 
+        // TODO: we update the hosts file here because within the housekeeping_network we already have a lock on the networks
+        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
+        if let Err(e) = update_hosts_file(inner.clone()).await {
+            error!("failed to update /etc/hosts: {}", e);
+        }
+
         Ok(())
     }
 
@@ -172,16 +178,17 @@ impl SdnNodeInner {
             }
         }
 
-        // hostnames
-        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        match current.as_ref().map(|state| state.hostnames.clone()) {
-            Some(current_hostnames) if current_hostnames == desired.hostnames => {}
-            _ => {
-                if let Err(e) = update_hosts_file(inner.clone()).await {
-                    error!("failed to update /etc/hosts: {}", e);
-                }
-            }
-        }
+        // TODO: we can't update the hostnames here because we already have a lock on the networks
+        // // hostnames
+        // #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
+        // match current.as_ref().map(|state| state.hostnames.clone()) {
+        //     Some(current_hostnames) if current_hostnames == desired.hostnames => {}
+        //     _ => {
+        //         if let Err(e) = update_hosts_file(inner.clone()).await {
+        //             error!("failed to update /etc/hosts: {}", e);
+        //         }
+        //     }
+        // }
     }
 
     pub(crate) async fn teardown_network(&self, inner: Arc<SdnNodeInner>, network: &mut Network) {
@@ -198,11 +205,12 @@ impl SdnNodeInner {
         // TODO: we can't update the rx tries here because we already have a lock on the networks
         // self.update_rx_tries(inner.clone()).await;
 
-        // hostnames
-        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        if let Err(e) = update_hosts_file(inner.clone()).await {
-            error!("failed to update /etc/hosts: {}", e);
-        }
+        // TODO: we can't update the hostnames here because we already have a lock on the networks
+        // // hostnames
+        // #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
+        // if let Err(e) = update_hosts_file(inner.clone()).await {
+        //     error!("failed to update /etc/hosts: {}", e);
+        // }
 
         // tun device
         self.remove_tun_device(network).await;
