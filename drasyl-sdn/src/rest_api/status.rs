@@ -1,9 +1,9 @@
 use crate::network::{EffectiveAccessRuleList, EffectiveRoutingList, Network};
 use crate::node::SdnNode;
+use crate::rest_api::RestApiClient;
 use crate::rest_api::auth::AuthToken;
 use crate::rest_api::error::Error;
 use crate::rest_api::server::RestApiServer;
-use crate::rest_api::{RestApiClient, load_auth_token};
 use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Local, Utc};
@@ -11,12 +11,7 @@ use drasyl::identity::PubKey;
 use drasyl::message::ShortId;
 use drasyl::node::{HELLO_TIMEOUT_DEFAULT, NodeOpts};
 use drasyl::peer::{NodePeer, Peer, PeerPathInner, PeerPathKey, PowStatus, SessionKeys, SuperPeer};
-use http::Request;
-use http_body_util::BodyExt;
-use http_body_util::Empty;
 use humantime::format_duration;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
 use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -50,8 +45,8 @@ impl RestApiServer {
 
         // networks
         let mut networks = HashMap::new();
-        for (config_url, network) in &sdn_node.inner.networks {
-            networks.insert(config_url.clone(), NetworkStatus::new(network));
+        for (config_url, network) in &*sdn_node.inner.networks.lock().await {
+            networks.insert(config_url.clone(), NetworkStatus::new(network).await);
         }
 
         let status = Status {
@@ -67,55 +62,7 @@ impl RestApiServer {
 
 impl RestApiClient {
     pub async fn status(&self) -> Result<Status, Error> {
-        let client = Client::builder(TokioExecutor::new()).build_http();
-        let auth_token = load_auth_token().map_err(Error::AuthTokenReadFailed)?;
-
-        let uri = "http://localhost:22527/status"
-            .parse::<hyper::Uri>()
-            .map_err(|e| Error::StatusRequestFailed {
-                reason: format!("Failed to parse URI: {}", e),
-            })?;
-        let req = Request::builder()
-            .method("GET")
-            .uri(uri)
-            .header("Authorization", format!("Bearer {}", auth_token))
-            .body(Empty::<bytes::Bytes>::new())
-            .map_err(|e| Error::StatusRequestFailed {
-                reason: format!("Failed to build request: {}", e),
-            })?;
-
-        let response = client
-            .request(req)
-            .await
-            .map_err(|e| Error::StatusRequestFailed {
-                reason: format!("HTTP request failed: {}", e),
-            })?;
-        let status_code = response.status();
-
-        if status_code.is_success() {
-            let body_bytes = response
-                .into_body()
-                .collect()
-                .await
-                .map_err(|e| Error::StatusRequestFailed {
-                    reason: format!("Failed to collect response body: {}", e),
-                })?
-                .to_bytes();
-            let body_str =
-                String::from_utf8(body_bytes.to_vec()).map_err(|e| Error::StatusRequestFailed {
-                    reason: format!("Failed to parse response body as UTF-8: {}", e),
-                })?;
-            let status: Status =
-                serde_json::from_str(&body_str).map_err(|e| Error::StatusRequestFailed {
-                    reason: format!("Failed to parse response as JSON: {}", e),
-                })?;
-
-            Ok(status)
-        } else {
-            Err(Error::StatusRequestFailed {
-                reason: format!("Server returned error status: {}", status_code),
-            })
-        }
+        self.get("/status").await
     }
 }
 
@@ -488,19 +435,18 @@ struct NetworkStatus {
 }
 
 impl NetworkStatus {
-    fn new(network: &Network) -> Self {
-        let guard = network.state.lock().expect("Mutex poisoned");
+    async fn new(network: &Network) -> Self {
         Self {
-            subnet: guard.as_ref().map(|state| state.subnet),
-            ip: guard.as_ref().map(|state| state.ip),
-            access_rules: guard.as_ref().map(|state| state.access_rules.clone()),
-            routes: guard.as_ref().map(|state| state.routes.clone()),
-            hostnames: guard.as_ref().map(|state| state.hostnames.clone()),
+            subnet: network.state.as_ref().map(|state| state.subnet),
+            ip: network.state.as_ref().map(|state| state.ip),
+            access_rules: network
+                .state
+                .as_ref()
+                .map(|state| state.access_rules.clone()),
+            routes: network.state.as_ref().map(|state| state.routes.clone()),
+            hostnames: network.state.as_ref().map(|state| state.hostnames.clone()),
             tun_device: network
-                .inner
                 .tun_state
-                .lock()
-                .expect("Mutex poisoned")
                 .as_ref()
                 .and_then(|tun| tun.device.name().ok()),
         }

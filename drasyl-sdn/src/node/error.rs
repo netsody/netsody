@@ -38,4 +38,13 @@ pub enum Error {
 
     #[error("TOML serialization error: {0}")]
     TomlSerError(#[from] toml::ser::Error),
+
+    #[error("Configuration parse error: {reason}")]
+    ConfigParseError { reason: String },
+
+    #[error("Network already exists: {config_url}")]
+    NetworkAlreadyExists { config_url: String },
+
+    #[error("Network not found: {config_url}")]
+    NetworkNotFound { config_url: String },
 }
