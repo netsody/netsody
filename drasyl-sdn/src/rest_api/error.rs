@@ -35,4 +35,20 @@ pub enum Error {
     /// Failed to serve the REST API due to server error
     #[error("Failed to serve REST API: {0}")]
     Serve(io::Error),
+
+    /// Invalid configuration URL provided
+    #[error("Invalid configuration URL: {reason}")]
+    InvalidConfigUrl { reason: String },
+
+    /// Network configuration fetch failed
+    #[error("Failed to fetch network configuration: {reason}")]
+    NetworkConfigFetchFailed { reason: String },
+
+    /// Network already exists
+    #[error("Network already exists: {config_url}")]
+    NetworkAlreadyExists { config_url: String },
+
+    /// Network not found
+    #[error("Network not found: {config_url}")]
+    NetworkNotFound { config_url: String },
 }

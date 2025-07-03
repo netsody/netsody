@@ -20,6 +20,16 @@ enum Commands {
     Run,
     /// Shows the status of the running SDN node
     Status,
+    /// Adds a network to the running SDN node
+    Add {
+        /// The configuration URL of the network to add
+        config_url: String,
+    },
+    /// Removes a network from the running SDN node
+    Remove {
+        /// The configuration URL of the network to remove
+        config_url: String,
+    },
 }
 
 #[tokio::main]
@@ -31,6 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     match cli.command {
         Commands::Run => run_sdn_node().await,
         Commands::Status => show_status().await,
+        Commands::Add { config_url } => add_network(&config_url).await,
+        Commands::Remove { config_url } => remove_network(&config_url).await,
     }
 }
 
@@ -100,6 +112,52 @@ async fn show_status() -> Result<(), Box<dyn std::error::Error + Send + Sync + '
         }
         Err(e) => {
             eprintln!("Failed to retrieve status: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+async fn add_network(
+    config_url: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let client = RestApiClient::new();
+
+    match client.add_network(config_url).await {
+        Ok(response) => {
+            if response.success {
+                println!("{}", response.message);
+            } else {
+                eprintln!("{}", response.message);
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to add network: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+async fn remove_network(
+    config_url: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let client = RestApiClient::new();
+
+    match client.remove_network(config_url).await {
+        Ok(response) => {
+            if response.success {
+                println!("{}", response.message);
+            } else {
+                eprintln!("{}", response.message);
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to remove network: {e}");
             std::process::exit(1);
         }
     }
