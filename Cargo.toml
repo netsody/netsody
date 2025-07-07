@@ -2,7 +2,7 @@
 members = [
     "drasyl",
     "drasyl-sdn"
-, "drasyl-sp", "drasyl-bench"]
+, "drasyl-sp", "drasyl-bench", "drasyl-ui"]
 resolver = "3"
 
 [workspace.dependencies]
