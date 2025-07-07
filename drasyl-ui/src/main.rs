@@ -24,6 +24,7 @@ struct DrasylUi {
     tray_icon: Option<TrayIcon>,
     status: Option<Result<Status, String>>,
     address_item: Option<MenuItem>,
+    add_network_item: Option<MenuItem>,
 }
 
 impl DrasylUi {
@@ -33,6 +34,7 @@ impl DrasylUi {
             tray_icon: None,
             status: None,
             address_item: None,
+            add_network_item: None,
         }
     }
 
@@ -45,13 +47,46 @@ impl DrasylUi {
         )
     }
 
-    fn new_tray_icon(address_item: &MenuItem) -> TrayIcon {
+    fn new_add_network_item() -> MenuItem {
+        MenuItem::with_id("add_network", "Add Network…", false, None)
+    }
+
+    fn update_menu_items(
+        address_item: &MenuItem,
+        add_network_item: &MenuItem,
+        result: &Result<Status, String>,
+    ) {
+        match result {
+            Ok(status) => {
+                // address
+                let pk = status.opts.id.pk;
+                address_item.set_text(format!("Public key: {}", pk));
+                address_item.set_enabled(true);
+
+                // add network
+                add_network_item.set_enabled(true);
+            }
+            Err(e) => {
+                // address
+                address_item.set_text(e);
+                address_item.set_enabled(false);
+
+                // add network
+                add_network_item.set_enabled(false);
+            }
+        }
+    }
+
+    fn new_tray_icon(address_item: &MenuItem, add_network_item: &MenuItem) -> TrayIcon {
         // Embed the tray icon directly in the binary
         let icon_bytes = include_bytes!("../resources/tray-icon.png");
         let icon = load_icon_from_bytes(icon_bytes);
 
         TrayIconBuilder::new()
-            .with_menu(Box::new(Self::new_tray_menu(address_item)))
+            .with_menu(Box::new(Self::new_tray_menu(
+                address_item,
+                add_network_item,
+            )))
             .with_tooltip("drasyl")
             .with_icon(icon)
             .with_icon_as_template(true)
@@ -59,13 +94,19 @@ impl DrasylUi {
             .unwrap()
     }
 
-    fn new_tray_menu(address_item: &MenuItem) -> Menu {
+    fn new_tray_menu(address_item: &MenuItem, add_network_item: &MenuItem) -> Menu {
         trace!("Creating tray menu");
         let menu = Menu::new();
 
         // address
         trace!("Adding address item");
         if let Err(e) = menu.append(address_item) {
+            panic!("{e:?}");
+        }
+
+        // add network
+        trace!("Adding add network item");
+        if let Err(e) = menu.append(add_network_item) {
             panic!("{e:?}");
         }
 
@@ -111,7 +152,11 @@ impl ApplicationHandler<UserEvent> for DrasylUi {
             #[cfg(not(target_os = "linux"))]
             {
                 self.address_item = Some(DrasylUi::new_address_item());
-                self.tray_icon = Some(DrasylUi::new_tray_icon(self.address_item.as_ref().unwrap()));
+                self.add_network_item = Some(DrasylUi::new_add_network_item());
+                self.tray_icon = Some(DrasylUi::new_tray_icon(
+                    self.address_item.as_ref().unwrap(),
+                    self.add_network_item.as_ref().unwrap(),
+                ));
             }
 
             // We have to request a redraw here to have the icon actually show up.
@@ -137,6 +182,9 @@ impl ApplicationHandler<UserEvent> for DrasylUi {
                         }
                     }
                 }
+                id if id == MenuId::new("add_network") => {
+                    trace!("Add network item clicked");
+                }
                 id if id == MenuId::new("quit") => {
                     trace!("Quit item clicked");
                     let _ = self.sender.try_send(UserEvent::Quit);
@@ -144,18 +192,10 @@ impl ApplicationHandler<UserEvent> for DrasylUi {
                 _ => {}
             },
             UserEvent::Status(result) => {
-                if let Some(address_item) = self.address_item.as_ref() {
-                    match &result {
-                        Ok(status) => {
-                            let pk = status.opts.id.pk;
-                            address_item.set_text(format!("Public key: {}", pk));
-                            address_item.set_enabled(true);
-                        }
-                        Err(e) => {
-                            address_item.set_text(e);
-                            address_item.set_enabled(false);
-                        }
-                    }
+                if let (Some(address_item), Some(add_network_item)) =
+                    (self.address_item.as_ref(), self.add_network_item.as_ref())
+                {
+                    DrasylUi::update_menu_items(address_item, add_network_item, &result);
                 }
                 self.status = Some(result);
             }
@@ -224,7 +264,8 @@ fn main() {
         std::thread::spawn(move || {
             gtk::init().unwrap();
             let address_item = DrasylUi::new_address_item();
-            let _tray_icon = DrasylUi::new_tray_icon(&address_item);
+            let add_network_item = DrasylUi::new_add_network_item();
+            let _tray_icon = DrasylUi::new_tray_icon(&address_item, &add_network_item);
             trace!("Starting gtk main loop");
 
             loop {
@@ -235,14 +276,8 @@ fn main() {
 
                 // Process commands from channel
                 match rx.try_recv() {
-                    Ok(UserEvent::Status(Ok(status))) => {
-                        let pk = status.opts.id.pk;
-                        address_item.set_text(format!("Public key: {}", pk));
-                        address_item.set_enabled(true);
-                    }
-                    Ok(UserEvent::Status(Err(e))) => {
-                        address_item.set_text(e);
-                        address_item.set_enabled(false);
+                    Ok(UserEvent::Status(result)) => {
+                        DrasylUi::update_menu_items(&address_item, &add_network_item, &result);
                     }
                     Ok(UserEvent::Quit) => {
                         break;
