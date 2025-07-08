@@ -20,6 +20,8 @@ enum Commands {
     Run,
     /// Shows the status of the running SDN node
     Status,
+    /// Shows the version of drasyl-sdn
+    Version,
     /// Adds a network to the running SDN node
     Add {
         /// The configuration URL of the network to add
@@ -41,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     match cli.command {
         Commands::Run => run_sdn_node().await,
         Commands::Status => show_status().await,
+        Commands::Version => show_version(),
         Commands::Add { config_url } => add_network(&config_url).await,
         Commands::Remove { config_url } => remove_network(&config_url).await,
     }
@@ -103,12 +106,41 @@ async fn run_sdn_node() -> Result<(), Box<dyn std::error::Error + Send + Sync + 
     Ok(())
 }
 
+/// display detailed version information for the drasyl-sdn application
+fn show_version() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    // extract version information from build-time environment variables
+    let version = env!("CARGO_PKG_VERSION");
+    let git_commit = env!("VERGEN_GIT_SHA");
+    let git_dirty = env!("VERGEN_GIT_DIRTY");
+    let build_timestamp = env!("VERGEN_BUILD_TIMESTAMP");
+    let debug = env!("VERGEN_CARGO_DEBUG");
+    let features = env!("VERGEN_CARGO_FEATURES");
+
+    // combine git commit hash with dirty flag
+    let full_commit = if git_dirty == "true" {
+        format!("{git_commit}-dirty")
+    } else {
+        git_commit.to_string()
+    };
+
+    // determine build profile (debug or release)
+    let profile = if debug == "true" { "debug" } else { "release" };
+
+    // format and output version information
+    println!("drasyl-sdn {version} ({full_commit})");
+    println!("Built    : {build_timestamp}");
+    println!("Profile  : {profile}");
+    println!("Features : {features}");
+
+    Ok(())
+}
+
 async fn show_status() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let client = RestApiClient::new();
 
     match client.status().await {
         Ok(status) => {
-            println!("{}", status);
+            println!("{status}");
         }
         Err(e) => {
             eprintln!("Failed to retrieve status: {e}");
