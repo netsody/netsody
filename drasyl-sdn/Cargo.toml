@@ -3,6 +3,9 @@ name = "drasyl-sdn"
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+vergen-git2 = { version = "1.0.0", features = ["build", "cargo"] }
+
 [dependencies]
 drasyl = { path = "../drasyl", features = ["serde"] }
 tracing = { workspace = true }
@@ -36,6 +39,7 @@ serde_json = "1.0.140"
 axum-extra = { version = "0.10.1", features = ["typed-header"] }
 chrono = { version = "0.4" }
 humantime = "2.2.0"
+anyhow = "1.0.98"
 
 [features]
 dns = []
