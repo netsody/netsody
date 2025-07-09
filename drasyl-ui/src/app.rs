@@ -103,6 +103,30 @@ impl App {
                                 positions_to_delete.push(position);
                             }
                         },
+                        id if id == &MenuId::new("about") => {
+                            submenu.items().iter_mut().for_each(|kind| {
+                                if let MenuItemKind::MenuItem(item) = kind {
+                                    let id = item.id();
+                                    match id {
+                                        id if id == &MenuId::new("version_daemon") => {
+                                            match result {
+                                                Ok(status) => {
+                                                    item.set_text(format!(
+                                                        "Daemon:\t{0} ({1})",
+                                                        status.version_info.version,
+                                                        status.version_info.full_commit()
+                                                    ));
+                                                }
+                                                Err(_) => {
+                                                    item.set_text("Daemon:");
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -195,7 +219,7 @@ impl App {
         trace!("Adding address item");
         let item = MenuItem::with_id(
             "address",
-            "Waiting for drasyl service to become available…",
+            "Waiting for drasyl daemon to become available…",
             false,
             Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyC)),
         );
@@ -250,11 +274,22 @@ impl App {
 
         let item = MenuItem::with_id(
             "version_ui",
-            format!("UI:   {version} ({full_commit})"),
+            format!("UI:\t\t{version} ({full_commit})"),
             false,
             None,
         );
         if let Err(e) = about.append(&item) {
+            panic!("{e:?}");
+        }
+
+        let item = MenuItem::with_id("version_daemon", "Daemon:", false, None);
+        if let Err(e) = about.append(&item) {
+            panic!("{e:?}");
+        }
+
+        // separator
+        trace!("Adding separator");
+        if let Err(e) = about.append(&PredefinedMenuItem::separator()) {
             panic!("{e:?}");
         }
 
@@ -329,9 +364,6 @@ impl ApplicationHandler<UserEvent> for App {
                 self.egui_glow.as_mut().unwrap().run(
                     self.gl_window.as_mut().unwrap().window(),
                     |egui_ctx| {
-                        // set UI scaling for larger elements
-                        egui_ctx.set_pixels_per_point(1.25); // 1.25x larger
-
                         egui::CentralPanel::default().show(egui_ctx, |ui| {
                             // URL input field
                             ui.label("Network configuration URL (https:// or file://):");
