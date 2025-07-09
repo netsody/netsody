@@ -380,16 +380,16 @@ impl ApplicationHandler<UserEvent> for App {
                     self.egui_glow.take();
                     return;
                 } else {
-                    event_loop.set_control_flow(if self.repaint_delay.is_zero() {
-                        self.gl_window.as_mut().unwrap().window().request_redraw();
-                        winit::event_loop::ControlFlow::Poll
-                    } else if let Some(repaint_after_instant) =
-                        std::time::Instant::now().checked_add(self.repaint_delay)
-                    {
-                        winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant)
-                    } else {
-                        winit::event_loop::ControlFlow::Wait
-                    });
+                    // event_loop.set_control_flow(if self.repaint_delay.is_zero() {
+                    //     self.gl_window.as_mut().unwrap().window().request_redraw();
+                    //     winit::event_loop::ControlFlow::Poll
+                    // } else if let Some(repaint_after_instant) =
+                    //     std::time::Instant::now().checked_add(self.repaint_delay)
+                    // {
+                    //     winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant)
+                    // } else {
+                    //     winit::event_loop::ControlFlow::Wait
+                    // });
                 }
 
                 {
