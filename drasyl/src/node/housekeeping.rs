@@ -370,7 +370,7 @@ impl NodeInner {
                 match self.udp_socket_for(&src) {
                     Some(udp_socket) => {
                         if let Err(e) = udp_socket.send_to(&hello, dst).await {
-                            error!("Failed to send HELLO to node peer via {}: {}", path_key, e);
+                            warn!("Failed to send HELLO to node peer via {}: {}", path_key, e);
                         } else {
                             trace!("Sent HELLO to node peer via {}.", path_key);
                         }
