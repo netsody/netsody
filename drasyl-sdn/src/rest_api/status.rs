@@ -4,6 +4,7 @@ use crate::rest_api::RestApiClient;
 use crate::rest_api::auth::AuthToken;
 use crate::rest_api::error::Error;
 use crate::rest_api::server::RestApiServer;
+use crate::version_info::VersionInfo;
 use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Local, Utc};
@@ -50,6 +51,7 @@ impl RestApiServer {
         }
 
         let status = Status {
+            version_info: VersionInfo::new(),
             opts,
             default_route,
             super_peers,
@@ -68,6 +70,7 @@ impl RestApiClient {
 
 #[derive(Serialize, Deserialize)]
 pub struct Status {
+    version_info: VersionInfo,
     // drasyl
     pub opts: NodeOpts,
     default_route: PubKey,
@@ -79,6 +82,14 @@ pub struct Status {
 
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // version info
+        let info = &self.version_info;
+        writeln!(f, "Info:")?;
+        writeln!(f, "  Version: {0} ({1})", info.version, info.full_commit())?;
+        writeln!(f, "  Built: {0}", info.build_timestamp)?;
+        writeln!(f, "  Profile: {0}", info.profile())?;
+        writeln!(f, "  Features: {0}", info.features)?;
+
         // opts
         writeln!(f, "Options:")?;
         writeln!(f, "  Identity:")?;
