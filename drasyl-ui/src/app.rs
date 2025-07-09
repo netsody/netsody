@@ -324,7 +324,6 @@ impl ApplicationHandler<UserEvent> for App {
                 self.egui_glow.take();
             }
             WindowEvent::RedrawRequested => {
-                let mut add = None;
                 let mut cancel = false;
 
                 self.egui_glow.as_mut().unwrap().run(
@@ -354,7 +353,11 @@ impl ApplicationHandler<UserEvent> for App {
                                         if ui.button("Add").clicked() {
                                             let url = self.config_url.clone();
                                             if Url::parse(url.trim()).is_ok() {
-                                                add = Some(url);
+                                                // send event for processing
+                                                self.proxy
+                                                    .send_event(UserEvent::AddNetwork(url))
+                                                    .expect("Failed to send event");
+
                                                 cancel = true;
                                             }
                                         }
@@ -369,13 +372,6 @@ impl ApplicationHandler<UserEvent> for App {
                         });
                     },
                 );
-
-                if let Some(add) = add {
-                    // send event for processing
-                    self.proxy
-                        .send_event(UserEvent::AddNetwork(add))
-                        .expect("Failed to send event");
-                }
 
                 if cancel {
                     self.config_url.clear();
