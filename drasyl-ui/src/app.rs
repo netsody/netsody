@@ -318,6 +318,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::CloseRequested => {
                 trace!("Window close requested");
+                self.config_url.clear();
                 self.gl_window.take();
                 self.gl.take();
                 self.egui_glow.take();
@@ -377,6 +378,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
 
                 if cancel {
+                    self.config_url.clear();
                     self.gl_window.take();
                     self.gl.take();
                     self.egui_glow.take();
