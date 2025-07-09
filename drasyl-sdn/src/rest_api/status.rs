@@ -74,7 +74,7 @@ pub struct Status {
     super_peers: HashMap<PubKey, SuperPeerStatus>,
     node_peers: HashMap<PubKey, NodePeerStatus>,
     // drasyl-sdn
-    networks: HashMap<Url, NetworkStatus>,
+    pub networks: HashMap<Url, NetworkStatus>,
 }
 
 impl fmt::Display for Status {
@@ -425,7 +425,7 @@ impl fmt::Display for NodePeerStatus {
 }
 
 #[derive(Serialize, Deserialize)]
-struct NetworkStatus {
+pub struct NetworkStatus {
     subnet: Option<Ipv4Net>,
     ip: Option<Ipv4Addr>,
     access_rules: Option<EffectiveAccessRuleList>,
@@ -622,7 +622,7 @@ fn time_ago_in_words(timestamp_micros: u64) -> String {
 }
 
 /// mask secrets in a network config url
-fn mask_url(url: &Url) -> String {
+pub fn mask_url(url: &Url) -> String {
     if !url.username().is_empty() || url.password().is_some() {
         let mut masked_url = url.clone();
         masked_url.set_username("****").unwrap();
