@@ -10,7 +10,7 @@ tracing = { version = "0.1.41"}
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "fmt", "ansi", "time", "local-time"] }
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
 tokio-util = "0.7.15"
-ahash = "0.8.11"
+ahash = "0.8.12"
 thiserror = "2.0.12"
 serde = { version = "1.0", features = ["derive"] }
 derive_builder = "0.20.2"
