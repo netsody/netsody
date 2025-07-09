@@ -89,6 +89,7 @@ impl fmt::Display for Status {
         writeln!(f, "  Built: {0}", info.build_timestamp)?;
         writeln!(f, "  Profile: {0}", info.profile())?;
         writeln!(f, "  Features: {0}", info.features)?;
+        writeln!(f)?;
 
         // opts
         writeln!(f, "Options:")?;
