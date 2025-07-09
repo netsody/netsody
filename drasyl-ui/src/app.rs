@@ -475,10 +475,13 @@ impl ApplicationHandler<UserEvent> for App {
                         trace!("Add network item clicked");
 
                         // create window if it doesn't exist yet
-                        if self.gl_window.is_none() {
+                        if let Some(gl_window) = self.gl_window.as_mut() {
+                            gl_window.window().focus_window();
+                        } else {
                             let (gl_window, gl) = crate::glow_tools::create_display(event_loop);
                             let gl = Arc::new(gl);
                             gl_window.window().set_visible(true);
+                            gl_window.window().focus_window();
 
                             let egui_glow =
                                 egui_glow::EguiGlow::new(event_loop, gl.clone(), None, None, true);
