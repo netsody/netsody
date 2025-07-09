@@ -1,23 +1,25 @@
 # drasyl-sdn
 
-**drasyl-sdn** is a lightweight library for creating secure, software-defined overlay networks on top of drasyl. It supports both centralized and distributed control planes. The library provides membership management through authentication and enables fine-grained access control between nodes. Nodes can be configured as gateways to provide access to external networks via the overlay. Both centralized and distributed control plane architectures are supported. Built on top of the [drasyl](../drasyl) library, all communication is encrypted and routed via the most local physical path available, bypassing typical network barriers such as NATs and stateful firewalls.
+**drasyl-sdn** provides a secure software-defined overlay network on top of drasyl. It supports both centralized and distributed control planes. The daemon provides membership management through authentication and enables fine-grained access control between nodes. Nodes can be configured as gateways to provide access to external networks via the overlay. Both centralized and distributed control plane architectures are supported. Built on top of the [drasyl](../drasyl) library, all communication is encrypted and routed via the most local physical path available, bypassing typical network barriers such as NATs and stateful firewalls.
+
+To integrate an device into the software-defined overlay network, the drasyl daemon must be running on that device. The daemon handles the secure communication, routing, and access control for the device within the overlay network.
 
 ## Development
 
 ### Building
 
-To build the SDN node with Prometheus metrics and DNS support:
+To build the drasyl-sdn daemon with Prometheus metrics and DNS support:
 
 ```bash
 # From the repository root
 cargo build --package drasyl-sdn --release --features "prometheus dns"
 ```
 
-This will create a release binary that can be used to run an SDN node. The Prometheus feature enables detailed monitoring of the node's performance and network statistics. The DNS feature allows nodes to be addressed by hostnames (e.g., `$hostname` or `$hostname.drasyl.network`). Note that DNS support is only available on macOS and Linux.
+This will create a release binary that can be used to run the drasyl-sdn daemon. The Prometheus feature enables detailed monitoring of the daemon's performance and network statistics. The DNS feature allows nodes to be addressed by hostnames (e.g., `$hostname` or `$hostname.drasyl.network`). Note that DNS support is only available on macOS and Linux.
 
 ### Configuration
 
-The SDN node can be configured through a config file located at `config.toml` by default, which can be overridden using the `DRASYL_CONFIG` environment variable. The config file is created upon first start and contains the node's identity.
+The drasyl-sdn daemon can be configured through a config file located at `config.toml` by default, which can be overridden using the `DRASYL_CONFIG` environment variable. The config file is created upon first start and contains the daemon's identity.
 
 Networks that the node should join can be defined as follows. Each network requires a configuration that can be loaded either from a local file or via HTTP for centralized control.
 
@@ -120,16 +122,16 @@ To enable routing on the gateway node, the following steps are required:
    sudo bash -c iptables-save > /etc/iptables/rules.v4
    ```
 
-## Running SDN Node as a Service
+## Running drasyl-sdn Daemon as a Service
 
-To ensure your SDN node runs automatically on system startup, follow the instructions for your operating system below. 
+To ensure your drasyl-sdn daemon runs automatically on system startup, follow the instructions for your operating system below. 
 
 ### macOS (LaunchDaemon)
 
 The following configuration assumes that `target/release/drasyl` has been moved to `/usr/local/bin/drasyl`.
 
 1. **Create the LaunchDaemon configuration file**  
-   This file tells macOS to start the SDN node automatically at boot.
+   This file tells macOS to start the drasyl-sdn daemon automatically at boot.
    ```bash
    sudo tee /Library/LaunchDaemons/drasyl.plist > /dev/null <<EOF
    <?xml version="1.0" encoding="UTF-8"?>
@@ -188,7 +190,7 @@ The following configuration assumes that `target/release/drasyl` has been moved 
 ### Linux (systemd)
 
 1. **Create the systemd service file**  
-   This file defines how the SDN node is started as a service.
+   This file defines how the drasyl-sdn daemon is started as a service.
    ```bash
    sudo cat <<EOF > /etc/systemd/system/drasyl.service
    [Unit]
@@ -230,7 +232,7 @@ The following configuration assumes that `target/release/drasyl` has been moved 
 
 ## Accessing REST API
 
-The SDN node provides a REST API accessible at `http://127.0.0.1:22527`. The API is protected by a bearer authentication token, which is stored in the working directory as `auth.token` and is only readable by the root user.
+The drasyl-sdn daemon provides a REST API accessible at `http://127.0.0.1:22527`. The API is protected by a bearer authentication token, which is stored in the working directory as `auth.token` and is only readable by the root user.
 
 You can access the API using curl:
 ```bash
