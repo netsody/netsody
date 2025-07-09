@@ -70,7 +70,7 @@ impl RestApiClient {
 
 #[derive(Serialize, Deserialize)]
 pub struct Status {
-    version_info: VersionInfo,
+    pub version_info: VersionInfo,
     // drasyl
     pub opts: NodeOpts,
     default_route: PubKey,
