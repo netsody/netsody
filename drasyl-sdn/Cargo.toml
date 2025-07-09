@@ -22,7 +22,7 @@ hyper-util = { workspace = true, features = ["http1", "client"] }
 arc-swap = { workspace = true }
 futures = { workspace = true }
 hyper-rustls = { version = "0.27.5", features = ["webpki-roots"] }
-etherparse = "0.17.0"
+etherparse = "0.18.0"
 flume = { version = "0.11.1", default-features = false, features = ["async"] }
 ipnet = { version = "2.11.0", features = ["serde"] }
 net-route = "0.4.6"
