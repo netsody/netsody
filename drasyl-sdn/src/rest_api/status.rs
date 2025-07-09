@@ -82,7 +82,7 @@ impl fmt::Display for Status {
         // opts
         writeln!(f, "Options:")?;
         writeln!(f, "  Identity:")?;
-        // writeln!(f, "    Secret Key: {}", self.opts.id.sk)?;
+        writeln!(f, "    Secret Key: {}", self.opts.id.sk)?;
         writeln!(f, "    Public Key: {}", self.opts.id.pk)?;
         writeln!(f, "    PoW: {}", self.opts.id.pow)?;
         writeln!(
@@ -129,7 +129,7 @@ impl fmt::Display for Status {
         )?;
         writeln!(f, "  Super Peers:")?;
         for super_peer in &self.opts.super_peers {
-            writeln!(f, "    {}", super_peer)?;
+            writeln!(f, "    {super_peer}")?;
         }
         writeln!(f, "  MTU: {}", self.opts.mtu)?;
         writeln!(f, "  Process UNITEs: {}", self.opts.process_unites)?;
@@ -148,7 +148,7 @@ impl fmt::Display for Status {
                 self.opts
                     .prometheus_url
                     .as_ref()
-                    .map_or("None".to_string(), |url| url.to_string())
+                    .unwrap_or(&"None".to_string())
             )?;
             writeln!(
                 f,
@@ -156,7 +156,7 @@ impl fmt::Display for Status {
                 self.opts
                     .prometheus_user
                     .as_ref()
-                    .map_or("None".to_string(), |_| "****".to_string())
+                    .unwrap_or(&"None".to_string())
             )?;
             writeln!(
                 f,
@@ -175,18 +175,18 @@ impl fmt::Display for Status {
         let mut super_peers: Vec<_> = self.super_peers.iter().collect();
         super_peers.sort_by(|a, b| a.0.cmp(b.0));
         for (pk, super_peer) in super_peers {
-            writeln!(f, "  {}:", pk)?;
+            writeln!(f, "  {pk}:")?;
             for line in super_peer.to_string().lines() {
-                writeln!(f, "    {}", line)?;
+                writeln!(f, "    {line}")?;
             }
         }
         writeln!(f, "Node Peers:")?;
         let mut node_peers: Vec<_> = self.node_peers.iter().collect();
         node_peers.sort_by(|a, b| a.0.cmp(b.0));
         for (pk, node_peer) in node_peers {
-            writeln!(f, "  {}:", pk)?;
+            writeln!(f, "  {pk}:")?;
             for line in node_peer.to_string().lines() {
-                writeln!(f, "    {}", line)?;
+                writeln!(f, "    {line}")?;
             }
         }
         writeln!(f)?;
@@ -196,9 +196,10 @@ impl fmt::Display for Status {
         let mut networks: Vec<_> = self.networks.iter().collect();
         networks.sort_by(|a, b| a.0.cmp(b.0));
         for (config_url, network) in networks {
-            writeln!(f, "  {}:", mask_url(config_url))?;
+            // writeln!(f, "  {}:", mask_url(config_url))?;
+            writeln!(f, "  {config_url}:")?;
             for line in network.to_string().lines() {
-                writeln!(f, "    {}", line)?;
+                writeln!(f, "    {line}")?;
             }
         }
 
@@ -253,7 +254,7 @@ impl fmt::Display for SuperPeerStatus {
             Some(path) => {
                 writeln!(f, "  Connection: Established")?;
                 for line in format_path(path).lines() {
-                    writeln!(f, "  {}", line)?;
+                    writeln!(f, "  {line}")?;
                 }
             }
             None => writeln!(f, "  Connection: Not present")?,
@@ -271,7 +272,7 @@ impl fmt::Display for SuperPeerStatus {
             Some(resolved_addrs) => {
                 writeln!(f, "Resolved Addresses:")?;
                 for addr in resolved_addrs {
-                    writeln!(f, "  {}", addr)?;
+                    writeln!(f, "  {addr}")?;
                 }
             }
             None => {
@@ -288,9 +289,9 @@ impl fmt::Display for SuperPeerStatus {
         )?;
         writeln!(f, "  Paths:")?;
         for (key, path) in &self.udp_paths {
-            writeln!(f, "    {}:", key)?;
+            writeln!(f, "    {key}:")?;
             for line in format_path(path).lines() {
-                writeln!(f, "      {}", line)?;
+                writeln!(f, "      {line}")?;
             }
         }
         writeln!(f, "[Reachable: {}]", self.reachable)?;
@@ -403,9 +404,9 @@ impl fmt::Display for NodePeerStatus {
         if !self.paths.is_empty() {
             writeln!(f, "Paths:")?;
             for (key, path) in &self.paths {
-                writeln!(f, "  {}:", key)?;
+                writeln!(f, "  {key}:")?;
                 for line in format_path(path).lines() {
-                    writeln!(f, "    {}", line)?;
+                    writeln!(f, "    {line}")?;
                 }
             }
         } else {
@@ -481,7 +482,7 @@ impl fmt::Display for NetworkStatus {
                 writeln!(f, "Access Rules:")?;
                 if let Some(virtual_routes) = &self.access_rules {
                     for line in virtual_routes.to_string().lines() {
-                        writeln!(f, "  {}", line)?;
+                        writeln!(f, "  {line}")?;
                     }
                 }
             }
@@ -493,7 +494,7 @@ impl fmt::Display for NetworkStatus {
             Some(routes) if !routes.is_empty() => {
                 writeln!(f, "Routes:")?;
                 for line in routes.to_string().lines() {
-                    writeln!(f, "  {}", line)?;
+                    writeln!(f, "  {line}")?;
                 }
             }
             _ => {
@@ -509,7 +510,7 @@ impl fmt::Display for NetworkStatus {
                         let mut entries: Vec<_> = hostnames.iter().collect();
                         entries.sort_by(|a, b| a.0.cmp(b.0));
                         for (ip_addr, hostname) in entries {
-                            writeln!(f, "  {:<15} {}", ip_addr, hostname)?;
+                            writeln!(f, "  {ip_addr:<15} {hostname}")?;
                         }
                     }
                 }
@@ -604,7 +605,7 @@ fn format_timestamp(timestamp: u64) -> String {
                 let local_dt: DateTime<Local> = dt.with_timezone(&Local);
                 local_dt.to_rfc3339()
             }
-            None => format!("Invalid timestamp ({})", timestamp),
+            None => format!("Invalid timestamp ({timestamp})"),
         }
     }
 }
