@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
-use tracing::trace;
 use tracing::{error, instrument};
+use tracing::{trace, warn};
 
 impl NodeInner {
     // from phantun/phantun/src/utils.rs
@@ -69,7 +69,7 @@ impl NodeInner {
                         .on_udp_datagram(src, &mut buf[..size], &mut response_buf, udp_binding.clone())
                         .await
                     {
-                        error!("Error processing packet: {e}");
+                        warn!("Error processing packet: {e}");
                         continue;
                     }
                 }
