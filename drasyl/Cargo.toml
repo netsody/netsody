@@ -15,7 +15,7 @@ serde = { workspace = true, optional = true }
 lazy_static = { workspace = true }
 arc-swap = { workspace = true }
 futures = { workspace = true }
-if-addrs = "0.13.3"
+if-addrs = "0.14.0"
 libsodium-sys-stable = { version = "1.22.2", features = ["minimal", "optimized"] }
 aegis = "0.9.0"
 rand_chacha = { version = "0.9.0", features = ["os_rng"] }
