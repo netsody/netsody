@@ -140,7 +140,9 @@ impl SdnNode {
 
             // shutdown network
             if let Some(mut network) = networks.remove(&url) {
-                SdnNodeInner::teardown_network(&self.inner, self.inner.clone(), &mut network).await;
+                self.inner
+                    .teardown_network(self.inner.clone(), &mut network)
+                    .await;
             }
         }
 
