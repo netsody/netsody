@@ -112,7 +112,7 @@ impl App {
                                             match result {
                                                 Ok(status) => {
                                                     item.set_text(format!(
-                                                        "Daemon:\t{0} ({1})",
+                                                        "Daemon:\t  {0} ({1})",
                                                         status.version_info.version,
                                                         status.version_info.full_commit()
                                                     ));
@@ -272,9 +272,14 @@ impl App {
             git_commit.to_string()
         };
 
+        let tabs = if cfg!(target_os = "linux") {
+            "\t\t\t  "
+        } else {
+            "\t\t  "
+        };
         let item = MenuItem::with_id(
             "version_ui",
-            format!("UI:\t\t{version} ({full_commit})"),
+            format!("UI:{}{version} ({full_commit})", tabs),
             false,
             None,
         );
