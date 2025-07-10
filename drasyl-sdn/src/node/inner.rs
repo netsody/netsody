@@ -35,7 +35,6 @@ type TrieRx = IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>>;
 
 pub struct SdnNodeInner {
     pub(crate) id: Identity,
-    pub(crate) auth_token: String,
     pub(crate) networks: Arc<Mutex<HashMap<Url, Network>>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) node: Arc<Node>,
@@ -50,7 +49,6 @@ impl SdnNodeInner {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         id: Identity,
-        auth_token: String,
         networks: HashMap<Url, Network>,
         cancellation_token: CancellationToken,
         node: Arc<Node>,
@@ -60,7 +58,6 @@ impl SdnNodeInner {
     ) -> Self {
         Self {
             id,
-            auth_token,
             networks: Arc::new(Mutex::new(networks)),
             cancellation_token,
             node,
@@ -324,7 +321,7 @@ impl SdnNodeInner {
             let password = parsed_url.password();
             if !username.is_empty() && password.is_some() {
                 let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
-                request = request.header("Authorization", format!("Basic {}", auth));
+                request = request.header("Authorization", format!("Basic {auth}"));
             }
 
             let request = request.body(Empty::new())?;
