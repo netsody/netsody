@@ -176,7 +176,7 @@ impl fmt::Display for Status {
                 self.opts
                     .prometheus_pass
                     .as_ref()
-                    .map_or("None".to_string(), |_| "****".to_string())
+                    .unwrap_or(&"None".to_string())
             )?;
         }
         writeln!(f)?;
