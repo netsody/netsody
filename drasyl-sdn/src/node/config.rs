@@ -1,10 +1,7 @@
 use crate::network::Network;
 use crate::node::Error;
-use crate::rest_api::API_TOKEN_LEN_DEFAULT;
-use drasyl::crypto::random_bytes;
 use drasyl::node::Identity;
 use drasyl::util;
-use drasyl::util::bytes_to_hex;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de;
@@ -25,7 +22,6 @@ pub struct PrometheusConfig {
 pub struct SdnNodeConfig {
     #[serde(rename = "identity")]
     pub id: Identity,
-    pub auth_token: String,
     #[serde(
         rename = "network",
         default,
@@ -38,10 +34,9 @@ pub struct SdnNodeConfig {
 }
 
 impl SdnNodeConfig {
-    pub fn new(id: Identity, auth_token: String) -> Self {
+    pub fn new(id: Identity) -> Self {
         Self {
             id,
-            auth_token,
             networks: Default::default(),
             #[cfg(feature = "prometheus")]
             prometheus: Default::default(),
@@ -63,7 +58,6 @@ impl SdnNodeConfig {
         // options
         let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
         trace!("Using min PoW difficulty: {}", min_pow_difficulty);
-        let token_len = util::get_env("API_TOKEN_LEN", API_TOKEN_LEN_DEFAULT);
 
         // Read and parse config.toml from current directory
         let config = if std::path::Path::new(path).exists() {
@@ -71,16 +65,11 @@ impl SdnNodeConfig {
         } else {
             trace!("Config file does not exist, generating new one");
 
-            // auth_token: generate random bytes and convert to hex
-            let mut buf = vec![0u8; token_len];
-            random_bytes(&mut buf);
-            let auth_token = bytes_to_hex(&buf);
-
             // Generate new identity and create default config
             let id = Identity::generate(min_pow_difficulty)?;
             trace!("Generated new identity with public key: {}", id.pk);
 
-            let config = SdnNodeConfig::new(id, auth_token);
+            let config = SdnNodeConfig::new(id);
 
             // Serialize and save the config
             config.save(path)?;
@@ -134,8 +123,7 @@ where
         let config_url = Url::parse(network.config_url.as_str()).map_err(de::Error::custom)?;
         if result.insert(config_url.clone(), network).is_some() {
             return Err(de::Error::custom(format!(
-                "duplicate network URL: {}",
-                config_url
+                "duplicate network URL: {config_url}"
             )));
         }
     }
