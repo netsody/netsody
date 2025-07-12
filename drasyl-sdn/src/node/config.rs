@@ -63,7 +63,9 @@ impl SdnNodeConfig {
         let config = if std::path::Path::new(path).exists() {
             Self::load(path)?
         } else {
-            trace!("Config file does not exist, generating new one");
+            trace!(
+                "Config file does not exist, generating new one (this might take some time due to the PoW)"
+            );
 
             // Generate new identity and create default config
             let id = Identity::generate(min_pow_difficulty)?;
@@ -73,8 +75,6 @@ impl SdnNodeConfig {
 
             // Serialize and save the config
             config.save(path)?;
-
-            trace!("Successfully wrote config file");
 
             config
         };
