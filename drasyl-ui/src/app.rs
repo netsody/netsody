@@ -519,9 +519,17 @@ impl ApplicationHandler<UserEvent> for App {
                     id if id == MenuId::new("address") => {
                         trace!("Address item clicked");
                         if let Some(Ok(status)) = self.status.as_ref() {
-                            if let Err(e) = self.clipboard.set_text(status.opts.id.pk.to_string()) {
+                            let address = status.opts.id.pk.to_string();
+                            if let Err(e) = self.clipboard.set_text(address) {
                                 warn!("Failed to copy address to clipboard: {}", e);
+                            } else {
+                                trace!(
+                                    "Copied address to clipboard: {}",
+                                    status.opts.id.pk.to_string()
+                                );
                             }
+                        } else {
+                            trace!("Status is not yet available");
                         }
                     }
                     id if id == MenuId::new("add_network") => {
@@ -581,6 +589,8 @@ impl ApplicationHandler<UserEvent> for App {
 
                         if let Err(e) = self.clipboard.set_text(url) {
                             warn!("Failed to network URL to clipboard: {}", e);
+                        } else {
+                            trace!("Copied network URL to clipboard: {}", url);
                         }
                     }
                     id if id == MenuId::new("website") => {
