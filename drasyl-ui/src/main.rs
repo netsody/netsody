@@ -74,6 +74,7 @@ fn main() {
     // where we initialize gtk and create the tray_icon
     #[cfg(target_os = "linux")]
     {
+        let status = app.status.clone();
         std::thread::spawn(move || {
             gtk::init().unwrap();
             let (_tray_icon, menu) = App::new_tray_icon();
@@ -89,6 +90,7 @@ fn main() {
                 match rx.try_recv() {
                     Ok(UserEvent::Status(result)) => {
                         App::update_menu_items(&menu, &result);
+                        status.lock().expect("Mutex poisoned").replace(result);
                     }
                     Ok(UserEvent::Quit) => {
                         break;

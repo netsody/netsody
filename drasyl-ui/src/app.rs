@@ -3,7 +3,7 @@ use crate::user_event::UserEvent;
 use arboard::Clipboard;
 use drasyl_sdn::rest_api;
 use drasyl_sdn::rest_api::{Status, mask_url};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::Sender;
 use tracing::{trace, warn};
@@ -18,7 +18,7 @@ pub struct App {
     sender: Sender<UserEvent>,
     tray_icon: Option<TrayIcon>,
     menu: Option<Menu>,
-    status: Option<Result<Status, String>>,
+    pub(crate) status: Arc<Mutex<Option<Result<Status, String>>>>,
     proxy: winit::event_loop::EventLoopProxy<UserEvent>,
     rt: Arc<Runtime>,
     clipboard: Clipboard,
@@ -41,7 +41,7 @@ impl App {
             sender,
             tray_icon: None,
             menu: None,
-            status: None,
+            status: Arc::new(Mutex::new(None)),
             proxy,
             rt,
             clipboard,
@@ -518,7 +518,10 @@ impl ApplicationHandler<UserEvent> for App {
                 match menu_event.id {
                     id if id == MenuId::new("address") => {
                         trace!("Address item clicked");
-                        if let Some(Ok(status)) = self.status.as_ref() {
+
+                        if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
                             let address = status.opts.id.pk.to_string();
                             if let Err(e) = self.clipboard.set_text(address) {
                                 warn!("Failed to copy address to clipboard: {}", e);
@@ -612,7 +615,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(menu) = self.menu.as_ref() {
                     App::update_menu_items(menu, &result);
                 }
-                self.status = Some(result);
+                self.status.lock().expect("Mutex poisoned").replace(result);
             }
             UserEvent::AddNetwork(url) => {
                 trace!("Adding network with URL: {}", url);
