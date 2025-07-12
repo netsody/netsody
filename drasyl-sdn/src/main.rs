@@ -96,6 +96,7 @@ async fn run_sdn_node() -> Result<(), Box<dyn std::error::Error + Send + Sync + 
                 }
                 Err(e) => {
                     error!("rest_api failed to bind: {}", e);
+                    std::process::exit(1);
                 }
             }
         }
