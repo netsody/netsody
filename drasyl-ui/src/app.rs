@@ -153,11 +153,29 @@ impl App {
                     continue;
                 }
 
-                let submenu = Submenu::with_id(
-                    format!("network {config_url_str}"),
-                    mask_url(config_url),
-                    true,
-                );
+                let display_text = mask_url(config_url);
+                // On Linux, underscores need to be masked as they are interpreted as mnemonics
+                let display_text = if cfg!(target_os = "linux") {
+                    let mut result = String::with_capacity(display_text.len());
+                    let chars: Vec<_> = display_text.chars().collect();
+
+                    for i in 0..chars.len() {
+                        if chars[i] == '_'
+                             && (i == 0 || chars[i - 1] != '_') // no previous underscore
+                             && (i + 1 == chars.len() || chars[i + 1] != '_')
+                        // no next underscore
+                        {
+                            result.push_str("__"); // standalone -> double
+                        } else {
+                            result.push(chars[i]);
+                        }
+                    }
+                    result
+                } else {
+                    display_text
+                };
+                let submenu =
+                    Submenu::with_id(format!("network {config_url_str}"), display_text, true);
 
                 // copy action
                 let copy = MenuItem::with_id(
@@ -279,7 +297,7 @@ impl App {
         };
         let item = MenuItem::with_id(
             "version_ui",
-            format!("UI:{}{version} ({full_commit})", tabs),
+            format!("UI:{tabs}{version} ({full_commit})"),
             false,
             None,
         );
