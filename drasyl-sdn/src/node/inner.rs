@@ -85,6 +85,8 @@ impl SdnNodeInner {
         let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
         let network_id = util::get_env("NETWORK_ID", 1i32).to_be_bytes();
         let arm_messages = util::get_env("ARM_MESSAGES", true);
+        let udp_addrs = util::get_env("UDP_ADDRS", String::new());
+        let udp_port = util::get_env("UDP_PORT", String::new());
         let max_peers = util::get_env("MAX_PEERS", 8192); // set to 0 removes peers limit
         let hello_timeout = util::get_env("HELLO_TIMEOUT", 30 * 1000); // milliseconds
         let hello_max_age = util::get_env("HELLO_MAX_AGE", 60_000); // milliseconds
@@ -101,6 +103,18 @@ impl SdnNodeInner {
             .id(config.id.clone())
             .network_id(network_id)
             .arm_messages(arm_messages)
+            .udp_addrs(
+                udp_addrs
+                    .split_whitespace()
+                    .map(str::parse::<IpAddr>)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("Invalid udp addresses"),
+            )
+            .udp_port(if udp_port.trim().is_empty() {
+                None
+            } else {
+                udp_port.parse::<u16>().ok()
+            })
             .max_peers(max_peers)
             .min_pow_difficulty(min_pow_difficulty)
             .hello_timeout(hello_timeout)
