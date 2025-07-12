@@ -2,9 +2,9 @@ name: drasyl-sdn
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "win-arm" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "master", "win-arm" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,6 +20,7 @@ jobs:
           - macos-amd64
           - macos-arm64
           - windows-amd64
+          - windows-arm64
 
         include:
           - job_name: linux-amd64
@@ -40,6 +41,10 @@ jobs:
 
           - job_name: windows-amd64
             os: windows-latest
+            path: target/release/drasyl.exe
+
+          - job_name: windows-arm64
+            os: windows-11-arm
             path: target/release/drasyl.exe
 
     name: Build drasyl-sdn on ${{ matrix.job_name }}
