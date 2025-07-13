@@ -530,11 +530,11 @@ impl<'de> Deserialize<'de> for EffectiveAccessRuleListEntryKey {
 
         let source = parts[1]
             .parse::<Ipv4Net>()
-            .map_err(|e| serde::de::Error::custom(format!("Invalid source network: {}", e)))?;
+            .map_err(|e| serde::de::Error::custom(format!("Invalid source network: {e}")))?;
 
         let dest = parts[2]
             .parse::<Ipv4Net>()
-            .map_err(|e| serde::de::Error::custom(format!("Invalid destination network: {}", e)))?;
+            .map_err(|e| serde::de::Error::custom(format!("Invalid destination network: {e}")))?;
 
         Ok(EffectiveAccessRuleListEntryKey {
             direction,
@@ -667,11 +667,14 @@ impl EffectiveRoute {
         }
     }
 
-    pub(crate) fn net_route(&self) -> net_route::Route {
+    #[allow(unused_variables)]
+    pub(crate) fn net_route(&self, if_index: Option<u32>) -> net_route::Route {
         let route = net_route::Route::new(IpAddr::V4(self.dest.addr()), self.dest.prefix_len())
             .with_gateway(IpAddr::V4(self.gw));
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let route = route.with_metric(4900);
+        #[cfg(target_os = "windows")]
+        let route = route.with_ifindex(if_index.expect("Interface index is required"));
         route
     }
 }
@@ -1105,17 +1108,16 @@ mod tests {
                 [[node]]
                 pk = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
                 ip = "192.168.1.1"
-                hostname = "{}"
-                "#,
-                hostname
+                hostname = "{hostname}"
+                "#
             );
 
             let result = NetworkConfig::try_from(toml_str.as_str());
             match hostname {
                 "host-name" | "host--name" => {
-                    assert!(result.is_ok(), "{} should be valid", description)
+                    assert!(result.is_ok(), "{description} should be valid")
                 }
-                _ => assert!(result.is_err(), "{} should be invalid", description),
+                _ => assert!(result.is_err(), "{description} should be invalid"),
             }
         }
     }
