@@ -355,19 +355,25 @@ impl SdnNodeInner {
         // remove physical routes
         trace!("remove physical routes");
         let networks = self.networks.lock().await;
-        let mut all_physical_routes: Vec<EffectiveRoutingList> = Vec::new();
+        let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
 
         for network in networks.values() {
             if let Some(state) = network.state.as_ref() {
-                all_physical_routes.push(state.routes.clone());
+                all_physical_routes.push((
+                    network
+                        .tun_state
+                        .as_ref()
+                        .and_then(|tun| tun.device.if_index().ok()),
+                    state.routes.clone(),
+                ));
             }
         }
 
         let routes_handle = self.routes_handle.clone();
         let task = tokio::spawn(async move {
-            for physical_routes in all_physical_routes {
+            for (if_index, physical_routes) in all_physical_routes {
                 trace!("Remove physical routes: {}", physical_routes);
-                Self::remove_routes(routes_handle.clone(), physical_routes).await;
+                Self::remove_routes(routes_handle.clone(), physical_routes, if_index).await;
             }
         });
         futures::executor::block_on(task).unwrap();
