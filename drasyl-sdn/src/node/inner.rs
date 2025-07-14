@@ -94,7 +94,12 @@ impl SdnNodeInner {
         let process_unites = util::get_env("PROCESS_UNITES", true);
         let housekeeping_interval = util::get_env("HOUSEKEEPING_INTERVAL", 5 * 1000); // milliseconds
         let enforce_tcp = util::get_env("ENFORCE_TCP", false);
-        let udp_sockets = util::get_env("UDP_SOCKETS", 3);
+        let udp_sockets = if !cfg!(target_os = "windows") {
+            util::get_env("UDP_SOCKETS", 3)
+        } else {
+            // only one udp socket is allowed on Windows
+            1
+        };
 
         // build node
         let (recv_buf_tx, recv_buf_rx) = flume::bounded::<(PubKey, Vec<u8>)>(recv_buf_cap);
