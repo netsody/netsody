@@ -50,7 +50,7 @@ impl RestApiServer {
         // networks
         let mut networks = HashMap::new();
         for (config_url, network) in &*sdn_node.inner.networks.lock().await {
-            networks.insert(config_url.clone(), NetworkStatus::new(network).await);
+            networks.insert(config_url.clone(), NetworkStatus::new(network));
         }
 
         let status = Status {
@@ -451,7 +451,7 @@ pub struct NetworkStatus {
 }
 
 impl NetworkStatus {
-    async fn new(network: &Network) -> Self {
+    fn new(network: &Network) -> Self {
         Self {
             subnet: network.state.as_ref().map(|state| state.subnet),
             ip: network.state.as_ref().map(|state| state.ip),
