@@ -21,11 +21,14 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tracing::trace;
 use url;
 use url::Url;
 
 impl RestApiServer {
     pub(crate) async fn status(State(sdn_node): State<Arc<SdnNode>>, _: AuthToken) -> Json<Status> {
+        trace!("Status request received");
+
         // opts
         let opts = sdn_node.drasyl_node().opts().clone();
 
