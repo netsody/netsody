@@ -9,7 +9,6 @@ use drasyl::message::LONG_HEADER_LEN;
 use drasyl::message::SHORT_HEADER_LEN;
 use drasyl::node::SendHandle;
 use drasyl::util;
-use drasyl::util::bytes_to_hex;
 use etherparse::Ipv4HeaderSlice;
 use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
@@ -525,10 +524,11 @@ impl SdnNodeInner {
                                     trace!(
                                         src=?ip_hdr.source_addr(),
                                         dst=?ip_hdr.destination_addr(),
-                                        "Forwarding packet from TUN device to drasyl: {} -> {} (debug: https://hpd.gasmi.net/?data={}&force=ipv4)",
+                                        payload_len=?buf.len(),
+                                        "Forwarding packet from TUN device to drasyl: {} -> {} ({} bytes)",
                                         ip_hdr.source_addr(),
                                         ip_hdr.destination_addr(),
-                                        bytes_to_hex(buf)
+                                        buf.len()
                                     );
                                 }
 
