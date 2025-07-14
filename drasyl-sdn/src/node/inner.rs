@@ -10,7 +10,6 @@ use drasyl::message::LONG_HEADER_MAGIC_NUMBER;
 use drasyl::node::{Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT, SendHandle};
 use drasyl::peer::SuperPeerUrl;
 use drasyl::util;
-use drasyl::util::bytes_to_hex;
 use etherparse::Ipv4HeaderSlice;
 use flume::{Receiver, Sender};
 use http::Request;
@@ -185,10 +184,11 @@ impl SdnNodeInner {
                                             peer=?sender_key,
                                             src=?ip_hdr.source_addr(),
                                             dst=?ip_hdr.destination_addr(),
-                                            "Forwarding packet from drasyl to TUN device: {} -> {} (debug: https://hpd.gasmi.net/?data={}&force=ipv4)",
+                                            payload_len=?buf.len(),
+                                            "Forwarding packet from drasyl to TUN device: {} -> {} ({} bytes)",
                                             ip_hdr.source_addr(),
                                             ip_hdr.destination_addr(),
-                                            bytes_to_hex(&buf)
+                                            buf.len()
                                         );
                                     }
 
