@@ -4,11 +4,11 @@ on:
   push:
     branches:
       - master
-      - ui
+      - windows
   pull_request:
     branches:
       - master
-      - ui
+      - windows
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,6 +21,7 @@ jobs:
         job_name:
           - linux-amd64
           - macos-arm64
+          - windows-amd64
 
         include:
           - job_name: linux-amd64
@@ -34,6 +35,10 @@ jobs:
             path: |
               target/release/drasyl-ui
               target/release/*.app
+
+          - job_name: windows-amd64
+            os: windows-latest
+            path: target/release/drasyl-ui.exe
 
     name: Build drasyl-ui on ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
