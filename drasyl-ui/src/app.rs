@@ -215,7 +215,11 @@ impl App {
 
     pub(crate) fn new_tray_icon() -> (TrayIcon, Menu) {
         // Embed the tray icon directly in the binary
-        let icon_bytes = include_bytes!("../resources/tray-icon.png");
+        let icon_bytes: &[u8] = if !cfg!(target_os = "windows") {
+            include_bytes!("../resources/tray-icon.png")
+        } else {
+            include_bytes!("../resources/tray-icon-windows.png")
+        };
         let icon = Self::load_icon_from_bytes(icon_bytes);
 
         let menu = Self::new_tray_menu();
