@@ -93,7 +93,12 @@ impl SdnNodeInner {
         let process_unites = util::get_env("PROCESS_UNITES", true);
         let housekeeping_interval = util::get_env("HOUSEKEEPING_INTERVAL", 5 * 1000); // milliseconds
         let enforce_tcp = util::get_env("ENFORCE_TCP", false);
-        let udp_sockets = util::get_env("UDP_SOCKETS", 3);
+        let udp_sockets = if !cfg!(target_os = "windows") {
+            util::get_env("UDP_SOCKETS", 3)
+        } else {
+            // only one udp socket is allowed on Windows
+            1
+        };
 
         // build node
         let (recv_buf_tx, recv_buf_rx) = flume::bounded::<(PubKey, Vec<u8>)>(recv_buf_cap);
@@ -355,19 +360,25 @@ impl SdnNodeInner {
         // remove physical routes
         trace!("remove physical routes");
         let networks = self.networks.lock().await;
-        let mut all_physical_routes: Vec<EffectiveRoutingList> = Vec::new();
+        let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
 
         for network in networks.values() {
             if let Some(state) = network.state.as_ref() {
-                all_physical_routes.push(state.routes.clone());
+                all_physical_routes.push((
+                    network
+                        .tun_state
+                        .as_ref()
+                        .and_then(|tun| tun.device.if_index().ok()),
+                    state.routes.clone(),
+                ));
             }
         }
 
         let routes_handle = self.routes_handle.clone();
         let task = tokio::spawn(async move {
-            for physical_routes in all_physical_routes {
+            for (if_index, physical_routes) in all_physical_routes {
                 trace!("Remove physical routes: {}", physical_routes);
-                Self::remove_routes(routes_handle.clone(), physical_routes).await;
+                Self::remove_routes(routes_handle.clone(), physical_routes, if_index).await;
             }
         });
         futures::executor::block_on(task).unwrap();
