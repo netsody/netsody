@@ -215,7 +215,11 @@ impl App {
 
     pub(crate) fn new_tray_icon() -> (TrayIcon, Menu) {
         // Embed the tray icon directly in the binary
-        let icon_bytes = include_bytes!("../resources/tray-icon.png");
+        let icon_bytes: &[u8] = if !cfg!(target_os = "windows") {
+            include_bytes!("../resources/tray-icon.png")
+        } else {
+            include_bytes!("../resources/tray-icon-windows.png")
+        };
         let icon = Self::load_icon_from_bytes(icon_bytes);
 
         let menu = Self::new_tray_menu();
@@ -338,12 +342,16 @@ impl App {
 
         // quit
         trace!("Adding quit item");
-        #[cfg(target_os = "linux")]
-        let quit_item = &MenuItem::with_id("quit", "Quit drasyl UI", true, None);
-        #[cfg(not(target_os = "linux"))]
-        let quit_item = &PredefinedMenuItem::quit(Some("Quit drasyl UI"));
-        if let Err(e) = menu.append(quit_item) {
-            panic!("{e:?}");
+        if cfg!(target_os = "windows") || cfg!(target_os = "linux") {
+            let quit_item = MenuItem::with_id("quit", "Quit drasyl UI", true, None);
+            if let Err(e) = menu.append(&quit_item) {
+                panic!("{e:?}");
+            }
+        } else {
+            let quit_item = PredefinedMenuItem::quit(Some("Quit drasyl UI"));
+            if let Err(e) = menu.append(&quit_item) {
+                panic!("{e:?}");
+            }
         }
 
         menu
@@ -566,7 +574,11 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     id if id == MenuId::new("quit") => {
                         trace!("Quit item clicked");
-                        let _ = self.sender.try_send(UserEvent::Quit);
+                        if cfg!(target_os = "linux") {
+                            let _ = self.sender.try_send(UserEvent::Quit);
+                        } else {
+                            std::process::exit(0);
+                        }
                     }
                     id if id.0.starts_with("remove_network ") => {
                         let url = id.0.split_once(' ').unwrap().1;
