@@ -18,6 +18,7 @@ jobs:
       matrix:
         job_name:
           - linux-amd64
+          - macos-amd64
           - macos-arm64
           - windows-amd64
 
@@ -27,6 +28,12 @@ jobs:
             path: |
               target/release/drasyl-ui
               target/release/*.deb
+
+          - job_name: macos-amd64
+            os: macOS-13
+            path: |
+              target/release/drasyl-ui
+              target/release/*.app
 
           - job_name: macos-arm64
             os: macOS-latest
