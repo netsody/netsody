@@ -9,7 +9,7 @@ tokio = { workspace = true }
 tracing-subscriber  = { workspace = true }
 tracing = { workspace = true }
 iroh = { version = "0.34" }
-iroh-base = { version = "0.34", features = ["ticket"] }
+iroh-base = { version = "0.90", features = ["ticket"] }
 rand = "0.8.5"
 
 [[bin]]
