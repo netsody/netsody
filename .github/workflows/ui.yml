@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - master
-      - windows
   pull_request:
     branches:
       - master
-      - windows
 
 env:
   CARGO_TERM_COLOR: always
