@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 mod app;
 mod glow_tools;
 mod user_event;
