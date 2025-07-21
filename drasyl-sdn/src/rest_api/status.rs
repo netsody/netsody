@@ -33,6 +33,7 @@ impl RestApiServer {
         let opts = sdn_node.drasyl_node().opts().clone();
 
         // peers
+        trace!("Getting peers");
         let default_route = *sdn_node.drasyl_node().peers_list().default_route();
         let mut super_peers = HashMap::new();
         let mut node_peers = HashMap::new();
@@ -48,10 +49,15 @@ impl RestApiServer {
         }
 
         // networks
+        trace!("Getting networks");
         let mut networks = HashMap::new();
-        for (config_url, network) in &*sdn_node.inner.networks.lock().await {
-            networks.insert(config_url.clone(), NetworkStatus::new(network));
+        {
+            let guard = sdn_node.inner.networks.lock().await;
+            for (config_url, network) in &*guard {
+                networks.insert(config_url.clone(), NetworkStatus::new(network));
+            }
         }
+        trace!("Networks retrieved");
 
         let status = Status {
             version_info: VersionInfo::new(),
@@ -61,6 +67,8 @@ impl RestApiServer {
             node_peers,
             networks,
         };
+        trace!("Status request completed");
+
         Json(status)
     }
 }
