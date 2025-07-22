@@ -7,6 +7,7 @@ mod user_event;
 use app::App;
 use arboard::Clipboard;
 use drasyl_sdn::rest_api;
+use rest_api::RestApiClient;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::time::{self, Duration};
@@ -56,7 +57,7 @@ fn main() {
         loop {
             interval.tick().await;
 
-            let client = rest_api::RestApiClient::new();
+            let client = RestApiClient::new("auth.token".to_string());
             let event = match client.status().await {
                 Ok(status) => UserEvent::Status(Ok(status)),
                 Err(e) => {
