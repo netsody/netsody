@@ -1,10 +1,9 @@
-use crate::rest_api::AUTH_FILE_DEFAULT;
+use crate::node::SdnNode;
 use axum::extract::FromRequestParts;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, RequestPartsExt};
 use axum_extra::TypedHeader;
 use drasyl::crypto::random_bytes;
-use drasyl::util;
 use drasyl::util::bytes_to_hex;
 use headers::Authorization;
 use headers::authorization::Bearer;
@@ -15,6 +14,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Arc;
 use tracing::{error, info, trace};
 
 /// Load an existing REST API token from file.
@@ -110,16 +110,15 @@ pub(crate) fn create_auth_token(
     Ok(token)
 }
 
-impl<S> FromRequestParts<S> for AuthToken
-where
-    S: Send + Sync,
-{
+impl FromRequestParts<Arc<SdnNode>> for AuthToken {
     type Rejection = AuthError;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<SdnNode>,
+    ) -> Result<Self, Self::Rejection> {
         // load existing API token
-        let token_file = util::get_env("AUTH_FILE", AUTH_FILE_DEFAULT.to_string());
-        let expected_token = load_auth_token(&token_file).map_err(|e| {
+        let expected_token = load_auth_token(&state.inner.token_path).map_err(|e| {
             error!("Failed to load API token: {}", e);
             AuthError::TokenFileNotFound
         })?;

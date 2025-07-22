@@ -54,20 +54,33 @@ enum Commands {
         /// Path to config file
         #[arg(long, value_name = "file", default_value = "config.toml")]
         config: PathBuf,
+        /// Path to authentication token file
+        #[arg(long, value_name = "file", default_value = "auth.token")]
+        token: PathBuf,
     },
     /// Shows the status of the running drasyl daemon
-    Status,
+    Status {
+        /// Path to authentication token file
+        #[arg(long, value_name = "file", default_value = "auth.token")]
+        token: PathBuf,
+    },
     /// Shows the version of the drasyl daemon
     Version,
     /// Adds a network to the running drasyl daemon
     Add {
-        /// The configuration URL of the network to add
-        config_url: String,
+        /// Path to authentication token file
+        #[arg(long, value_name = "file", default_value = "auth.token")]
+        token: PathBuf,
+        /// The URL of the network to add
+        url: String,
     },
     /// Removes a network from the running drasyl daemon
     Remove {
-        /// The configuration URL of the network to remove
-        config_url: String,
+        /// Path to authentication token file
+        #[arg(long, value_name = "file", default_value = "auth.token")]
+        token: PathBuf,
+        /// The URL of the network to remove
+        url: String,
     },
 }
 
@@ -106,16 +119,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     }
 
     match cli.command {
-        Commands::Run { config } => run_sdn_node(&config).await,
-        Commands::Status => show_status().await,
+        Commands::Run { config, token } => run_sdn_node(config, token).await,
+        Commands::Status { token } => show_status(token).await,
         Commands::Version => show_version(),
-        Commands::Add { config_url } => add_network(&config_url).await,
-        Commands::Remove { config_url } => remove_network(&config_url).await,
+        Commands::Add { token, url } => add_network(token, &url).await,
+        Commands::Remove { token, url } => remove_network(token, &url).await,
     }
 }
 
 async fn run_sdn_node(
-    config_path: &PathBuf,
+    config_path: PathBuf,
+    token_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     // config
     let config = SdnNodeConfig::load_or_generate(config_path.to_str().unwrap())
@@ -124,7 +138,8 @@ async fn run_sdn_node(
     // identity
     info!("I am {}", config.id.pk);
 
-    let node = Arc::new(SdnNode::start(config).await);
+    let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+    let node = Arc::new(SdnNode::start(config, token_path).await);
     let rest_api = RestApiServer::new(node.clone());
 
     let node_clone = node.clone();
@@ -188,8 +203,11 @@ fn show_version() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'stati
     Ok(())
 }
 
-async fn show_status() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let client = RestApiClient::new();
+async fn show_status(
+    token_path: PathBuf,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+    let client = RestApiClient::new(token_path);
 
     match client.status().await {
         Ok(status) => {
@@ -205,11 +223,13 @@ async fn show_status() -> Result<(), Box<dyn std::error::Error + Send + Sync + '
 }
 
 async fn add_network(
-    config_url: &str,
+    token_path: PathBuf,
+    url: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let client = RestApiClient::new();
+    let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+    let client = RestApiClient::new(token_path);
 
-    match client.add_network(config_url).await {
+    match client.add_network(url).await {
         Ok(response) => {
             if response.success {
                 println!("{}", response.message);
@@ -228,11 +248,13 @@ async fn add_network(
 }
 
 async fn remove_network(
-    config_url: &str,
+    token_path: PathBuf,
+    url: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let client = RestApiClient::new();
+    let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+    let client = RestApiClient::new(token_path);
 
-    match client.remove_network(config_url).await {
+    match client.remove_network(url).await {
         Ok(response) => {
             if response.success {
                 println!("{}", response.message);
