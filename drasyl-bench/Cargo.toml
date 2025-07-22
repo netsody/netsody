@@ -8,7 +8,7 @@ drasyl = { path = "../drasyl" }
 tokio = { workspace = true }
 tracing-subscriber  = { workspace = true }
 tracing = { workspace = true }
-iroh = { version = "0.34" }
+iroh = { version = "0.90" }
 iroh-base = { version = "0.34", features = ["ticket"] }
 rand = "0.8.5"
 
