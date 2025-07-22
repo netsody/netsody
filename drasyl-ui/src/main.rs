@@ -35,7 +35,14 @@ fn main() {
 
     let clipboard = Clipboard::new().expect("Failed to create clipboard");
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(tx.clone(), proxy, rt.clone(), clipboard);
+    let token_path = if !cfg!(target_os = "windows") {
+        "auth.token".to_string()
+    } else {
+        std::env::var("PROGRAMDATA")
+            .map(|pd| format!(r"{pd}\drasyl\auth.token"))
+            .unwrap_or_else(|_| "auth.token".into())
+    };
+    let mut app = App::new(tx.clone(), proxy, rt.clone(), clipboard, token_path.clone());
 
     // set a tray event handler that forwards the event and wakes up the event loop
     let proxy = event_loop.create_proxy();
@@ -57,7 +64,7 @@ fn main() {
         loop {
             interval.tick().await;
 
-            let client = RestApiClient::new("auth.token".to_string());
+            let client = RestApiClient::new(token_path.clone());
             let event = match client.status().await {
                 Ok(status) => UserEvent::Status(Ok(status)),
                 Err(e) => {
