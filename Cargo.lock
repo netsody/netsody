@@ -1654,7 +1654,6 @@ name = "drasyl-sdn"
 version = "0.1.0"
 dependencies = [
  "ahash",
- "anyhow",
  "arc-swap",
  "axum",
  "axum-extra",
@@ -1687,6 +1686,7 @@ dependencies = [
  "tun-rs",
  "url",
  "vergen-git2",
+ "windows-service",
 ]
 
 [[package]]
@@ -7775,6 +7775,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c64fd11a4fd95df68efcfee5f44a294fe71b8bc6a91993e2791938abcc712252"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "windows-service"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "193cae8e647981c35bc947fdd57ba7928b1fa0d4a79305f6dd2dc55221ac35ac"
+dependencies = [
+ "bitflags 2.9.0",
+ "widestring",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
