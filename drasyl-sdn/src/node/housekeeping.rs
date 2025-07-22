@@ -9,20 +9,22 @@ use drasyl::message::LONG_HEADER_LEN;
 use drasyl::message::SHORT_HEADER_LEN;
 use drasyl::node::SendHandle;
 use drasyl::util;
-use drasyl::util::bytes_to_hex;
 use etherparse::Ipv4HeaderSlice;
 use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
 use net_route::Handle;
+use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::MutexGuard;
 use tokio::task;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, instrument, trace, warn};
 use tun_rs::{AsyncDevice as TunDevice, AsyncDevice, DeviceBuilder as TunDeviceBuilder};
+use url::Url;
 #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
 use {std::fs, std::io::Write};
 
@@ -47,197 +49,228 @@ impl SdnNodeInner {
     }
 
     async fn housekeeping(&self, inner: &Arc<SdnNodeInner>) -> Result<(), Error> {
-        {
-            let mut networks = inner.networks.lock().await;
+        let urls: Vec<Url> = {
+            let networks = inner.networks.lock().await;
+            networks.keys().cloned().collect()
+        };
 
-            for network in networks.values_mut() {
-                self.housekeeping_network(inner.clone(), network).await;
-            }
-        }
-
-        // TODO: we update the rx tries here because within the housekeeping_network we already have a lock on the networks
-        self.update_rx_tries(inner.clone()).await;
-
-        // TODO: we update the hosts file here because within the housekeeping_network we already have a lock on the networks
-        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        if let Err(e) = update_hosts_file(inner.clone()).await {
-            error!("failed to update /etc/hosts: {}", e);
+        let mut networks = self.networks.lock().await;
+        for url in urls {
+            self.housekeeping_network(inner.clone(), url, &mut networks)
+                .await;
         }
 
         Ok(())
     }
 
-    #[instrument(fields(network = %network.config_url), skip_all)]
-    async fn housekeeping_network(&self, inner: Arc<SdnNodeInner>, network: &mut Network) {
-        match Self::fetch_network_config(network.config_url.as_str()).await {
-            Ok(config) => {
-                trace!("Network config fetched successfully");
+    #[instrument(fields(network = %config_url), skip_all)]
+    async fn housekeeping_network(
+        &self,
+        inner: Arc<SdnNodeInner>,
+        config_url: Url,
+        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
+    ) {
+        if let Some(network) = networks.get_mut(&config_url) {
+            match Self::fetch_network_config(network.config_url.as_str()).await {
+                Ok(config) => {
+                    trace!("Network config fetched successfully");
 
-                let desired = match config.ip(&inner.id.pk) {
-                    Some(desired_ip) => {
-                        let desired_effective_access_rule_list = config
-                            .effective_access_rule_list(&inner.id.pk)
-                            .expect("Failed to get effective access rule");
-                        let desired_effective_routing_list = config
-                            .effective_routing_list(&inner.id.pk)
-                            .expect("Failed to get effective routing list");
-                        let desired_hostnames = config.hostnames(&inner.id.pk);
-                        Some(LocalNodeState {
-                            subnet: config.subnet,
-                            ip: desired_ip,
-                            access_rules: desired_effective_access_rule_list,
-                            routes: desired_effective_routing_list,
-                            hostnames: desired_hostnames,
-                        })
-                    }
-                    None => None,
-                };
-
-                let current = network.state.as_ref().cloned();
-
-                match (current, desired) {
-                    (Some(current), Some(desired)) if current == desired => {
-                        trace!("Network is already in desired state");
-                    }
-                    (Some(current), Some(desired))
-                        if current.tun_state() == desired.tun_state() =>
-                    {
-                        trace!("TUN is in desired state");
-                        self.update_routes_and_hostnames(
-                            inner.clone(),
-                            network,
-                            Some(current),
-                            desired,
-                        )
-                        .await;
-                    }
-                    (current, Some(desired)) => {
-                        if current.is_some() {
-                            trace!(
-                                "TUN is not in desired state. We need to teardown everything and then setup everything again."
-                            );
-                            self.teardown_network(inner.clone(), network).await;
-                        } else {
-                            trace!("TUN device does not exist. We need to setup everything.");
+                    let desired = match config.ip(&inner.id.pk) {
+                        Some(desired_ip) => {
+                            let desired_effective_access_rule_list = config
+                                .effective_access_rule_list(&inner.id.pk)
+                                .expect("Failed to get effective access rule");
+                            let desired_effective_routing_list = config
+                                .effective_routing_list(&inner.id.pk)
+                                .expect("Failed to get effective routing list");
+                            let desired_hostnames = config.hostnames(&inner.id.pk);
+                            Some(LocalNodeState {
+                                subnet: config.subnet,
+                                ip: desired_ip,
+                                access_rules: desired_effective_access_rule_list,
+                                routes: desired_effective_routing_list,
+                                hostnames: desired_hostnames,
+                            })
                         }
-                        self.setup_network(inner.clone(), network, current, desired)
+                        None => None,
+                    };
+
+                    let current = network.state.as_ref().cloned();
+
+                    match (current, desired) {
+                        (Some(current), Some(desired)) if current == desired => {
+                            trace!("Network is already in desired state");
+                        }
+                        (Some(current), Some(desired))
+                            if current.tun_state() == desired.tun_state() =>
+                        {
+                            trace!("TUN is in desired state");
+                            self.update_routes_and_hostnames(
+                                inner.clone(),
+                                config_url,
+                                networks,
+                                Some(current),
+                                desired,
+                            )
                             .await;
-                    }
-                    (_, None) => {
-                        trace!("I'm not part of this network.");
-                        self.teardown_network(inner.clone(), network).await;
+                        }
+                        (current, Some(desired)) => {
+                            if current.is_some() {
+                                trace!(
+                                    "TUN is not in desired state. We need to teardown everything and then setup everything again."
+                                );
+                                self.teardown_network(inner.clone(), config_url.clone(), networks)
+                                    .await;
+                            } else {
+                                trace!("TUN device does not exist. We need to setup everything.");
+                            }
+                            self.setup_network(
+                                inner.clone(),
+                                config_url,
+                                networks,
+                                current,
+                                desired,
+                            )
+                            .await;
+                        }
+                        (_, None) => {
+                            trace!("I'm not part of this network.");
+                            self.teardown_network(inner.clone(), config_url, networks)
+                                .await;
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                warn!("Failed to fetch network config: {}", e);
+                Err(e) => {
+                    warn!("Failed to fetch network config: {}", e);
+                }
             }
         }
     }
 
     async fn update_routes_and_hostnames(
         &self,
-        _inner: Arc<SdnNodeInner>,
-        network: &mut Network,
+        inner: Arc<SdnNodeInner>,
+        config_url: Url,
+        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
         current: Option<LocalNodeState>,
         desired: LocalNodeState,
     ) {
-        // routes
-        let applied_routes = match current.as_ref().map(|state| state.routes.clone()) {
-            Some(current_routes) if current_routes == desired.routes => current_routes,
-            current_routes => {
-                Self::update_routes(
-                    self.routes_handle.clone(),
-                    current_routes,
-                    Some(desired.routes.clone()),
-                )
-                .await
+        if let Some(network) = networks.get_mut(&config_url) {
+            // routes
+            let applied_routes = match current.as_ref().map(|state| state.routes.clone()) {
+                Some(current_routes) if current_routes == desired.routes => current_routes,
+                current_routes => {
+                    Self::update_routes(
+                        self.routes_handle.clone(),
+                        current_routes,
+                        Some(desired.routes.clone()),
+                        network
+                            .tun_state
+                            .as_ref()
+                            .and_then(|tun| tun.device.if_index().ok()),
+                    )
+                    .await
+                }
+            };
+
+            network.state = Some(LocalNodeState {
+                subnet: desired.subnet,
+                ip: desired.ip,
+                access_rules: desired.access_rules.clone(),
+                routes: applied_routes,
+                hostnames: desired.hostnames.clone(),
+            });
+
+            // access rules
+            match current.as_ref().map(|state| state.access_rules.clone()) {
+                Some(current_access_rules) if current_access_rules == desired.access_rules => {}
+                current_access_rules => {
+                    trace!(
+                        "Access rules change: current=\n{}; desired=\n{}",
+                        current_access_rules.map_or("None".to_string(), |v| v.to_string()),
+                        desired.access_rules
+                    );
+                    self.update_tx_trie(network).await;
+                    self.update_rx_tries(inner.clone(), networks).await;
+                }
             }
-        };
 
-        network.state = Some(LocalNodeState {
-            subnet: desired.subnet,
-            ip: desired.ip,
-            access_rules: desired.access_rules.clone(),
-            routes: applied_routes,
-            hostnames: desired.hostnames.clone(),
-        });
-
-        // access rules
-        match current.as_ref().map(|state| state.access_rules.clone()) {
-            Some(current_access_rules) if current_access_rules == desired.access_rules => {}
-            current_access_rules => {
-                trace!(
-                    "Access rules change: current=\n{}; desired=\n{}",
-                    current_access_rules.map_or("None".to_string(), |v| v.to_string()),
-                    desired.access_rules
-                );
-                self.update_tx_trie(network).await;
-                // TODO: we can't update the rx tries here because we already have a lock on the networks
-                // self.update_rx_tries(inner.clone()).await;
+            // hostnames
+            #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
+            match current.as_ref().map(|state| state.hostnames.clone()) {
+                Some(current_hostnames) if current_hostnames == desired.hostnames => {}
+                _ => {
+                    if let Err(e) = update_hosts_file(networks).await {
+                        error!("failed to update /etc/hosts: {}", e);
+                    }
+                }
             }
         }
-
-        // TODO: we can't update the hostnames here because we already have a lock on the networks
-        // // hostnames
-        // #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        // match current.as_ref().map(|state| state.hostnames.clone()) {
-        //     Some(current_hostnames) if current_hostnames == desired.hostnames => {}
-        //     _ => {
-        //         if let Err(e) = update_hosts_file(inner.clone()).await {
-        //             error!("failed to update /etc/hosts: {}", e);
-        //         }
-        //     }
-        // }
     }
 
-    pub(crate) async fn teardown_network(&self, _inner: Arc<SdnNodeInner>, network: &mut Network) {
-        // routes
-        let routes = { network.state.as_ref().map(|state| state.routes.clone()) };
-        if let Some(routes) = routes {
-            Self::remove_routes(self.routes_handle.clone(), routes).await;
+    pub(crate) async fn teardown_network(
+        &self,
+        inner: Arc<SdnNodeInner>,
+        config_url: Url,
+        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
+    ) {
+        if let Some(network) = networks.get_mut(&config_url) {
+            // routes
+            let routes = { network.state.as_ref().map(|state| state.routes.clone()) };
+            if let Some(routes) = routes {
+                Self::remove_routes(
+                    self.routes_handle.clone(),
+                    routes,
+                    network
+                        .tun_state
+                        .as_ref()
+                        .and_then(|tun| tun.device.if_index().ok()),
+                )
+                .await;
+            }
+
+            network.state = None;
+
+            // tun device
+            self.remove_tun_device(network).await;
+
+            // access rules
+            self.update_tx_trie(network).await;
+            self.update_rx_tries(inner.clone(), networks).await;
+
+            // hostnames
+            #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
+            if let Err(e) = update_hosts_file(networks).await {
+                error!("failed to update /etc/hosts: {}", e);
+            }
         }
-
-        network.state = None;
-
-        // access rules
-        self.update_tx_trie(network).await;
-        // TODO: we can't update the rx tries here because we already have a lock on the networks
-        // self.update_rx_tries(inner.clone()).await;
-
-        // TODO: we can't update the hostnames here because we already have a lock on the networks
-        // // hostnames
-        // #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        // if let Err(e) = update_hosts_file(inner.clone()).await {
-        //     error!("failed to update /etc/hosts: {}", e);
-        // }
-
-        // tun device
-        self.remove_tun_device(network).await;
     }
 
     async fn setup_network(
         &self,
         inner: Arc<SdnNodeInner>,
-        network: &mut Network,
+        config_url: Url,
+        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
         current: Option<LocalNodeState>,
         desired: LocalNodeState,
     ) {
-        // tun device
-        let (tun_cancellation_token, tun_device) = self.create_tun_device(
-            inner.clone(),
-            desired.ip,
-            desired.subnet.prefix_len(),
-            Self::tun_dev_name(desired.subnet),
-            network.inner.clone(),
-        );
-        network.tun_state = Some(TunState {
-            cancellation_token: tun_cancellation_token,
-            device: tun_device.clone(),
-        });
+        if let Some(network) = networks.get_mut(&config_url) {
+            // tun device
+            let (tun_cancellation_token, tun_device) = self.create_tun_device(
+                inner.clone(),
+                desired.ip,
+                desired.subnet.prefix_len(),
+                Self::tun_dev_name(desired.subnet),
+                network.inner.clone(),
+            );
+            network.tun_state = Some(TunState {
+                cancellation_token: tun_cancellation_token,
+                device: tun_device.clone(),
+            });
 
-        self.update_routes_and_hostnames(inner.clone(), network, current, desired)
-            .await;
+            self.update_routes_and_hostnames(inner.clone(), config_url, networks, current, desired)
+                .await;
+        }
     }
 
     #[instrument(skip_all)]
@@ -293,11 +326,15 @@ impl SdnNodeInner {
     }
 
     #[instrument(skip_all)]
-    pub(crate) async fn update_rx_tries(&self, inner: Arc<SdnNodeInner>) {
+    pub(crate) async fn update_rx_tries(
+        &self,
+        inner: Arc<SdnNodeInner>,
+        networks: &MutexGuard<'_, HashMap<Url, Network>>,
+    ) {
         trace!("Rebuild tries");
         let mut trie_rx: IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>> = IpnetTrie::new();
 
-        for (config_url, network) in inner.networks.lock().await.iter() {
+        for (config_url, network) in networks.iter() {
             if let Some(access_rules) = network
                 .state
                 .as_ref()
@@ -376,7 +413,14 @@ impl SdnNodeInner {
 
         // create tun device
         trace!("Create TUN device");
-        let mut dev_builder = TunDeviceBuilder::new().ipv4(ip, netmask, Some(ip)).mtu(mtu);
+        let destination = if !cfg!(target_os = "windows") {
+            Some(ip)
+        } else {
+            None
+        };
+        let mut dev_builder = TunDeviceBuilder::new()
+            .ipv4(ip, netmask, destination)
+            .mtu(mtu);
         if let Some(name) = &name {
             dev_builder = dev_builder.name(name);
         }
@@ -499,10 +543,11 @@ impl SdnNodeInner {
                                     trace!(
                                         src=?ip_hdr.source_addr(),
                                         dst=?ip_hdr.destination_addr(),
-                                        "Forwarding packet from TUN device to drasyl: {} -> {} (debug: https://hpd.gasmi.net/?data={}&force=ipv4)",
+                                        payload_len=?buf.len(),
+                                        "Forwarding packet from TUN device to drasyl: {} -> {} ({} bytes)",
                                         ip_hdr.source_addr(),
                                         ip_hdr.destination_addr(),
-                                        bytes_to_hex(buf)
+                                        buf.len()
                                     );
                                 }
 
@@ -596,14 +641,19 @@ impl SdnNodeInner {
         }
     }
 
-    pub(crate) async fn remove_routes(routes_handle: Arc<Handle>, routes: EffectiveRoutingList) {
-        Self::update_routes(routes_handle, Some(routes), None).await;
+    pub(crate) async fn remove_routes(
+        routes_handle: Arc<Handle>,
+        routes: EffectiveRoutingList,
+        if_index: Option<u32>,
+    ) {
+        Self::update_routes(routes_handle, Some(routes), None, if_index).await;
     }
 
     async fn update_routes(
         routes_handle: Arc<Handle>,
         current_routes: Option<EffectiveRoutingList>,
         desired_routes: Option<EffectiveRoutingList>,
+        if_index: Option<u32>,
     ) -> EffectiveRoutingList {
         let mut applied_routes = EffectiveRoutingList::default();
         trace!(
@@ -620,7 +670,7 @@ impl SdnNodeInner {
                     }
                     _ => {
                         trace!("delete route: {:?}", route);
-                        let net_route = route.net_route();
+                        let net_route = route.net_route(if_index);
                         if let Err(e) = routes_handle.delete(&net_route).await {
                             warn!("Failed to delete route {:?}: {}", route, e);
                             applied_routes.add(route.as_removing_route());
@@ -633,7 +683,7 @@ impl SdnNodeInner {
         if let Some(desired_routes) = desired_routes.as_ref() {
             if let Ok(existing_routes) = routes_handle.list().await {
                 for (_, route) in desired_routes.iter() {
-                    let net_route = route.net_route();
+                    let net_route = route.net_route(if_index);
                     let existing = existing_routes.iter().any(|route| {
                         net_route.destination == route.destination
                             && net_route.prefix == route.prefix
@@ -662,7 +712,7 @@ impl SdnNodeInner {
 }
 
 #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-async fn update_hosts_file(inner: Arc<SdnNodeInner>) -> Result<(), Error> {
+async fn update_hosts_file(networks: &MutexGuard<'_, HashMap<Url, Network>>) -> Result<(), Error> {
     // read existing /etc/hosts
     let hosts_content = fs::read_to_string("/etc/hosts")?;
     trace!("read /etc/hosts");
@@ -680,16 +730,15 @@ async fn update_hosts_file(inner: Arc<SdnNodeInner>) -> Result<(), Error> {
 
     // write existing entries
     for line in lines {
-        writeln!(temp_file, "{}", line)?;
+        writeln!(temp_file, "{line}")?;
     }
 
-    for (_, network) in inner.networks.lock().await.iter() {
+    for (_, network) in networks.iter() {
         if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
             for (ip, hostname) in hostnames {
                 writeln!(
                     temp_file,
-                    "{:<15} {} {}.drasyl.network   # managed by drasyl",
-                    ip, hostname, hostname
+                    "{ip:<15} {hostname} {hostname}.drasyl.network   # managed by drasyl"
                 )?;
             }
         }
@@ -722,7 +771,7 @@ pub(crate) fn cleanup_hosts_file() -> Result<(), Error> {
 
     // write remaining entries
     for line in lines {
-        writeln!(temp_file, "{}", line)?;
+        writeln!(temp_file, "{line}")?;
     }
 
     // write file directly

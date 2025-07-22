@@ -1,10 +1,11 @@
-use crate::node::SdnNode;
-use crate::node::SdnNodeConfig;
+use crate::rest_api::AUTH_FILE_DEFAULT;
 use axum::extract::FromRequestParts;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, RequestPartsExt};
 use axum_extra::TypedHeader;
+use drasyl::crypto::random_bytes;
 use drasyl::util;
+use drasyl::util::bytes_to_hex;
 use headers::Authorization;
 use headers::authorization::Bearer;
 use http::StatusCode;
@@ -12,81 +13,116 @@ use http::request::Parts;
 use serde_json::json;
 use std::env;
 use std::fs;
-use std::io::{self};
-use std::sync::Arc;
-use tracing::trace;
+use std::io::{self, Write};
+use std::path::Path;
+use tracing::{error, info, trace};
 
 /// Load an existing REST API token from file.
 ///
 /// # Returns
 /// The API token as a string, or an error if the file doesn't exist or can't be read
-pub fn load_auth_token() -> Result<String, io::Error> {
-    let config_path = util::get_env("CONFIG", "config.toml".to_string());
+pub fn load_auth_token(token_file: &String) -> Result<String, io::Error> {
+    let token_path = Path::new(token_file);
 
-    // First, try to load from config.toml
-    let config_result = SdnNodeConfig::load(&config_path);
+    // Try to read the main token file first
+    let main_result = if token_path.exists() {
+        fs::read_to_string(token_path)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Token file {token_path:?} does not exist"),
+        ))
+    };
 
-    match config_result {
-        Ok(config) => {
-            trace!("Loaded REST API token from {}", config_path);
-            Ok(config.auth_token)
-        }
-        Err(e) => {
-            // Check if it's an IO error and only fallback on NotFound or PermissionDenied
-            if let crate::node::Error::IOError(io_err) = e {
-                if io_err.kind() != io::ErrorKind::NotFound
-                    && io_err.kind() != io::ErrorKind::PermissionDenied
-                {
-                    return Err(io_err);
-                }
-                trace!(
-                    "{} not found or permission denied, trying fallback path",
-                    config_path
-                );
-
-                // Fallback: try the fallback path
-                if let Some(home_dir) = env::home_dir() {
-                    let fallback_path = home_dir.join(".drasyl").join("auth.token");
-                    trace!("Trying fallback path: {}", fallback_path.display());
-                    if fallback_path.exists() {
-                        let fallback_path_clone = fallback_path.clone();
-                        if let Ok(token) = fs::read_to_string(fallback_path) {
-                            let token = token.trim().to_string();
-                            trace!(
-                                "Loaded REST API token from fallback path {}",
-                                fallback_path_clone.display()
-                            );
-                            return Ok(token);
-                        }
-                    } else {
+    // On NotFound or PermissionDenied, try the fallback path
+    if let Err(e) = &main_result {
+        if e.kind() == io::ErrorKind::NotFound || e.kind() == io::ErrorKind::PermissionDenied {
+            if let Some(home_dir) = env::home_dir() {
+                let fallback_path = home_dir.join(".drasyl").join("auth.token");
+                if fallback_path.exists() {
+                    let fallback_path_clone = fallback_path.clone();
+                    if let Ok(token) = fs::read_to_string(fallback_path) {
+                        let token = token.trim().to_string();
                         trace!(
-                            "REST API token not found at fallback path {}",
-                            fallback_path.display()
+                            "Loaded REST API token from fallback path {}",
+                            fallback_path_clone.display()
                         );
+                        return Ok(token);
                     }
+                } else {
+                    trace!(
+                        "REST API token not found at fallback path {}",
+                        fallback_path.display()
+                    );
                 }
-
-                // If no fallback was possible, return an error
-                Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "No auth token found in config.toml or fallback location",
-                ))
-            } else {
-                // For non-IO errors, convert to io::Error
-                Err(io::Error::other(e))
             }
         }
     }
+
+    // If main file was read successfully or no fallback was possible
+    match main_result {
+        Ok(token) => {
+            let token = token.trim().to_string();
+            trace!("Loaded REST API token from {}", token_file);
+            Ok(token)
+        }
+        Err(e) => Err(e),
+    }
 }
 
-impl FromRequestParts<Arc<SdnNode>> for AuthToken {
+/// Create a new cryptographically secure REST API token and save it to file.
+///
+/// # Returns
+/// The newly generated API token as a string, or an error if file operations fail
+pub(crate) fn create_auth_token(
+    token_file: &String,
+    token_len: usize,
+) -> Result<String, io::Error> {
+    let token_path = Path::new(token_file);
+
+    // generate random bytes and convert to hex
+    let mut buf = vec![0u8; token_len];
+    random_bytes(&mut buf);
+    let token = bytes_to_hex(&buf);
+
+    // write token to file with restrictive permissions
+    match fs::File::create(token_path) {
+        Ok(mut file) => {
+            // set restrictive file permissions (Unix only)
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = file.metadata()?.permissions();
+                perms.set_mode(0o600); // read/write for owner only
+                fs::set_permissions(token_path, perms)?;
+            }
+
+            file.write_all(token.as_bytes())?;
+            file.flush()?;
+            info!("Created new REST API token and saved to {}", token_file);
+        }
+        Err(e) => {
+            error!("Failed to write REST API token to {}: {}", token_file, e);
+            return Err(e);
+        }
+    }
+
+    Ok(token)
+}
+
+impl<S> FromRequestParts<S> for AuthToken
+where
+    S: Send + Sync,
+{
     type Rejection = AuthError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<SdnNode>,
-    ) -> Result<Self, Self::Rejection> {
-        let expected_token = state.inner.auth_token.clone();
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // load existing API token
+        let token_file = util::get_env("AUTH_FILE", AUTH_FILE_DEFAULT.to_string());
+        let expected_token = load_auth_token(&token_file).map_err(|e| {
+            error!("Failed to load API token: {}", e);
+            AuthError::TokenFileNotFound
+        })?;
 
         // extract the token from the authorization header
         let TypedHeader(Authorization(bearer)) = parts

@@ -2,13 +2,14 @@ use clap::{Parser, Subcommand};
 use drasyl::util;
 use drasyl_sdn::node::{SdnNode, SdnNodeConfig};
 use drasyl_sdn::rest_api::{RestApiClient, RestApiServer};
+use drasyl_sdn::version_info::VersionInfo;
 use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info, trace};
 
 #[derive(Parser, Debug)]
-#[command(name = "drasyl-sdn")]
-#[command(about = "An SDN client for the drasyl network")]
+#[command(name = "drasyl")]
+#[command(about = "drasyl provides secure, software-defined overlay networks")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -16,18 +17,18 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Runs the SDN node
+    /// Runs the drasyl daemon
     Run,
-    /// Shows the status of the running SDN node
+    /// Shows the status of the running drasyl daemon
     Status,
-    /// Shows the version of drasyl-sdn
+    /// Shows the version of the drasyl daemon
     Version,
-    /// Adds a network to the running SDN node
+    /// Adds a network to the running drasyl daemon
     Add {
         /// The configuration URL of the network to add
         config_url: String,
     },
-    /// Removes a network from the running SDN node
+    /// Removes a network from the running drasyl daemon
     Remove {
         /// The configuration URL of the network to remove
         config_url: String,
@@ -94,7 +95,9 @@ async fn run_sdn_node() -> Result<(), Box<dyn std::error::Error + Send + Sync + 
                     trace!("rest_api shut down");
                 }
                 Err(e) => {
-                    error!("rest_api failed to bind: {}", e);
+                    let msg = format!("rest_api failed to bind: {e}");
+                    error!("{}", msg);
+                    return Err(msg.into());
                 }
             }
         }
@@ -108,29 +111,13 @@ async fn run_sdn_node() -> Result<(), Box<dyn std::error::Error + Send + Sync + 
 
 /// display detailed version information for the drasyl-sdn application
 fn show_version() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    // extract version information from build-time environment variables
-    let version = env!("CARGO_PKG_VERSION");
-    let git_commit = env!("VERGEN_GIT_SHA");
-    let git_dirty = env!("VERGEN_GIT_DIRTY");
-    let build_timestamp = env!("VERGEN_BUILD_TIMESTAMP");
-    let debug = env!("VERGEN_CARGO_DEBUG");
-    let features = env!("VERGEN_CARGO_FEATURES");
-
-    // combine git commit hash with dirty flag
-    let full_commit = if git_dirty == "true" {
-        format!("{git_commit}-dirty")
-    } else {
-        git_commit.to_string()
-    };
-
-    // determine build profile (debug or release)
-    let profile = if debug == "true" { "debug" } else { "release" };
+    let info = VersionInfo::new();
 
     // format and output version information
-    println!("drasyl-sdn {version} ({full_commit})");
-    println!("Built    : {build_timestamp}");
-    println!("Profile  : {profile}");
-    println!("Features : {features}");
+    println!("Version  : {0} ({1})", info.version, info.full_commit());
+    println!("Built    : {0}", info.build_timestamp);
+    println!("Profile  : {0}", info.profile());
+    println!("Features : {0}", info.features);
 
     Ok(())
 }

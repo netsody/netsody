@@ -3,6 +3,7 @@ use drasyl::node::{MessageSink, Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT};
 use drasyl::peer::SuperPeerUrl;
 use drasyl::util;
 use std::io::{Write, stdin, stdout};
+use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +17,7 @@ async fn main() {
     let identity_file = util::get_env("IDENTITY_FILE", "node.identity".to_string());
     let network_id = util::get_env("NETWORK_ID", 1i32).to_be_bytes();
     let arm_messages = util::get_env("ARM_MESSAGES", true);
+    let udp_addrs = util::get_env("UDP_ADDRS", String::new());
     let udp_port = util::get_env("UDP_PORT", String::new());
     let max_peers = util::get_env("MAX_PEERS", 8192); // set to 0 removes peers limit
     let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
@@ -46,6 +48,13 @@ async fn main() {
         .id(id)
         .network_id(network_id)
         .arm_messages(arm_messages)
+        .udp_addrs(
+            udp_addrs
+                .split_whitespace()
+                .map(str::parse::<IpAddr>)
+                .collect::<Result<Vec<_>, _>>()
+                .expect("Invalid udp addresses"),
+        )
         .udp_port(if udp_port.trim().is_empty() {
             None
         } else {

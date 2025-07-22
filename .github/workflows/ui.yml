@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - master
-      - ui
   pull_request:
     branches:
       - master
-      - ui
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,7 +18,9 @@ jobs:
       matrix:
         job_name:
           - linux-amd64
+          - macos-amd64
           - macos-arm64
+          - windows-amd64
 
         include:
           - job_name: linux-amd64
@@ -29,11 +29,23 @@ jobs:
               target/release/drasyl-ui
               target/release/*.deb
 
+          - job_name: macos-amd64
+            os: macOS-13
+            path: |
+              target/release/drasyl-ui
+              target/release/*.app
+              target/release/*.pkg
+
           - job_name: macos-arm64
             os: macOS-latest
             path: |
               target/release/drasyl-ui
               target/release/*.app
+              target/release/*.pkg
+
+          - job_name: windows-amd64
+            os: windows-latest
+            path: target/release/drasyl-ui.exe
 
     name: Build drasyl-ui on ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
@@ -57,6 +69,14 @@ jobs:
 
       - name: Bundle drasyl UI.app
         run: ./drasyl-ui/bundle-macos.sh --release
+        if: success() && startsWith(matrix.os, 'macOS-')
+
+      - name: Build drasyl-sdn
+        run: cargo build --verbose --package drasyl-sdn --features prometheus,dns --release
+        if: startsWith(matrix.os, 'macOS-')
+
+      - name: Create macOS Installer
+        run: ./drasyl-ui/installer-macos.sh --release
         if: success() && startsWith(matrix.os, 'macOS-')
 
       - name: Bundle drasyl-ui.deb

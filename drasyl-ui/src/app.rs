@@ -3,7 +3,7 @@ use crate::user_event::UserEvent;
 use arboard::Clipboard;
 use drasyl_sdn::rest_api;
 use drasyl_sdn::rest_api::{Status, mask_url};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::Sender;
 use tracing::{trace, warn};
@@ -18,7 +18,7 @@ pub struct App {
     sender: Sender<UserEvent>,
     tray_icon: Option<TrayIcon>,
     menu: Option<Menu>,
-    status: Option<Result<Status, String>>,
+    pub(crate) status: Arc<Mutex<Option<Result<Status, String>>>>,
     proxy: winit::event_loop::EventLoopProxy<UserEvent>,
     rt: Arc<Runtime>,
     clipboard: Clipboard,
@@ -41,7 +41,7 @@ impl App {
             sender,
             tray_icon: None,
             menu: None,
-            status: None,
+            status: Arc::new(Mutex::new(None)),
             proxy,
             rt,
             clipboard,
@@ -103,6 +103,30 @@ impl App {
                                 positions_to_delete.push(position);
                             }
                         },
+                        id if id == &MenuId::new("about") => {
+                            submenu.items().iter_mut().for_each(|kind| {
+                                if let MenuItemKind::MenuItem(item) = kind {
+                                    let id = item.id();
+                                    match id {
+                                        id if id == &MenuId::new("version_daemon") => {
+                                            match result {
+                                                Ok(status) => {
+                                                    item.set_text(format!(
+                                                        "Daemon:\t  {0} ({1})",
+                                                        status.version_info.version,
+                                                        status.version_info.full_commit()
+                                                    ));
+                                                }
+                                                Err(_) => {
+                                                    item.set_text("Daemon:");
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -129,11 +153,29 @@ impl App {
                     continue;
                 }
 
-                let submenu = Submenu::with_id(
-                    format!("network {config_url_str}"),
-                    mask_url(config_url),
-                    true,
-                );
+                let display_text = mask_url(config_url);
+                // On Linux, underscores need to be masked as they are interpreted as mnemonics
+                let display_text = if cfg!(target_os = "linux") {
+                    let mut result = String::with_capacity(display_text.len());
+                    let chars: Vec<_> = display_text.chars().collect();
+
+                    for i in 0..chars.len() {
+                        if chars[i] == '_'
+                             && (i == 0 || chars[i - 1] != '_') // no previous underscore
+                             && (i + 1 == chars.len() || chars[i + 1] != '_')
+                        // no next underscore
+                        {
+                            result.push_str("__"); // standalone -> double
+                        } else {
+                            result.push(chars[i]);
+                        }
+                    }
+                    result
+                } else {
+                    display_text
+                };
+                let submenu =
+                    Submenu::with_id(format!("network {config_url_str}"), display_text, true);
 
                 // copy action
                 let copy = MenuItem::with_id(
@@ -173,7 +215,11 @@ impl App {
 
     pub(crate) fn new_tray_icon() -> (TrayIcon, Menu) {
         // Embed the tray icon directly in the binary
-        let icon_bytes = include_bytes!("../resources/tray-icon.png");
+        let icon_bytes: &[u8] = if !cfg!(target_os = "windows") {
+            include_bytes!("../resources/tray-icon.png")
+        } else {
+            include_bytes!("../resources/tray-icon-windows.png")
+        };
         let icon = Self::load_icon_from_bytes(icon_bytes);
 
         let menu = Self::new_tray_menu();
@@ -195,7 +241,7 @@ impl App {
         trace!("Adding address item");
         let item = MenuItem::with_id(
             "address",
-            "Waiting for drasyl service to become available…",
+            "Waiting for drasyl daemon to become available…",
             false,
             Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyC)),
         );
@@ -248,13 +294,29 @@ impl App {
             git_commit.to_string()
         };
 
+        let tabs = if cfg!(target_os = "linux") {
+            "\t\t\t  "
+        } else {
+            "\t\t  "
+        };
         let item = MenuItem::with_id(
             "version_ui",
-            format!("UI:   {version} ({full_commit})"),
+            format!("UI:{tabs}{version} ({full_commit})"),
             false,
             None,
         );
         if let Err(e) = about.append(&item) {
+            panic!("{e:?}");
+        }
+
+        let item = MenuItem::with_id("version_daemon", "Daemon:", false, None);
+        if let Err(e) = about.append(&item) {
+            panic!("{e:?}");
+        }
+
+        // separator
+        trace!("Adding separator");
+        if let Err(e) = about.append(&PredefinedMenuItem::separator()) {
             panic!("{e:?}");
         }
 
@@ -280,12 +342,16 @@ impl App {
 
         // quit
         trace!("Adding quit item");
-        #[cfg(target_os = "linux")]
-        let quit_item = &MenuItem::with_id("quit", "Quit drasyl UI", true, None);
-        #[cfg(not(target_os = "linux"))]
-        let quit_item = &PredefinedMenuItem::quit(Some("Quit drasyl UI"));
-        if let Err(e) = menu.append(quit_item) {
-            panic!("{e:?}");
+        if cfg!(target_os = "windows") || cfg!(target_os = "linux") {
+            let quit_item = MenuItem::with_id("quit", "Quit drasyl UI", true, None);
+            if let Err(e) = menu.append(&quit_item) {
+                panic!("{e:?}");
+            }
+        } else {
+            let quit_item = PredefinedMenuItem::quit(Some("Quit drasyl UI"));
+            if let Err(e) = menu.append(&quit_item) {
+                panic!("{e:?}");
+            }
         }
 
         menu
@@ -309,9 +375,9 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn window_event(
         &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        _event_loop: &winit::event_loop::ActiveEventLoop,
         _window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
+        event: WindowEvent,
     ) {
         trace!("Window event: {:?}", event);
 
@@ -329,9 +395,6 @@ impl ApplicationHandler<UserEvent> for App {
                 self.egui_glow.as_mut().unwrap().run(
                     self.gl_window.as_mut().unwrap().window(),
                     |egui_ctx| {
-                        // set UI scaling for larger elements
-                        egui_ctx.set_pixels_per_point(1.25); // 1.25x larger
-
                         egui::CentralPanel::default().show(egui_ctx, |ui| {
                             // URL input field
                             ui.label("Network configuration URL (https:// or file://):");
@@ -463,10 +526,21 @@ impl ApplicationHandler<UserEvent> for App {
                 match menu_event.id {
                     id if id == MenuId::new("address") => {
                         trace!("Address item clicked");
-                        if let Some(Ok(status)) = self.status.as_ref() {
-                            if let Err(e) = self.clipboard.set_text(status.opts.id.pk.to_string()) {
+
+                        if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
+                            let address = status.opts.id.pk.to_string();
+                            if let Err(e) = self.clipboard.set_text(address) {
                                 warn!("Failed to copy address to clipboard: {}", e);
+                            } else {
+                                trace!(
+                                    "Copied address to clipboard: {}",
+                                    status.opts.id.pk.to_string()
+                                );
                             }
+                        } else {
+                            trace!("Status is not yet available");
                         }
                     }
                     id if id == MenuId::new("add_network") => {
@@ -500,7 +574,11 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     id if id == MenuId::new("quit") => {
                         trace!("Quit item clicked");
-                        let _ = self.sender.try_send(UserEvent::Quit);
+                        if cfg!(target_os = "linux") {
+                            let _ = self.sender.try_send(UserEvent::Quit);
+                        } else {
+                            std::process::exit(0);
+                        }
                     }
                     id if id.0.starts_with("remove_network ") => {
                         let url = id.0.split_once(' ').unwrap().1;
@@ -526,6 +604,8 @@ impl ApplicationHandler<UserEvent> for App {
 
                         if let Err(e) = self.clipboard.set_text(url) {
                             warn!("Failed to network URL to clipboard: {}", e);
+                        } else {
+                            trace!("Copied network URL to clipboard: {}", url);
                         }
                     }
                     id if id == MenuId::new("website") => {
@@ -547,7 +627,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(menu) = self.menu.as_ref() {
                     App::update_menu_items(menu, &result);
                 }
-                self.status = Some(result);
+                self.status.lock().expect("Mutex poisoned").replace(result);
             }
             UserEvent::AddNetwork(url) => {
                 trace!("Adding network with URL: {}", url);
