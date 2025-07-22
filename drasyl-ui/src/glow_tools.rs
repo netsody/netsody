@@ -40,7 +40,7 @@ impl GlutinWindowContext {
         let winit_window_builder = winit::window::WindowAttributes::default()
             .with_resizable(true)
             .with_inner_size(winit::dpi::LogicalSize {
-                width: 750.0,
+                width: 500.0,
                 height: 100.0,
             })
             .with_title("Add Network") // Keep hidden until we've painted something. See https://github.com/emilk/egui/pull/2279

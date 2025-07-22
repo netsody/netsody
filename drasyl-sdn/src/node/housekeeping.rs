@@ -9,7 +9,6 @@ use drasyl::message::LONG_HEADER_LEN;
 use drasyl::message::SHORT_HEADER_LEN;
 use drasyl::node::SendHandle;
 use drasyl::util;
-use drasyl::util::bytes_to_hex;
 use etherparse::Ipv4HeaderSlice;
 use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
@@ -165,6 +164,10 @@ impl SdnNodeInner {
                         self.routes_handle.clone(),
                         current_routes,
                         Some(desired.routes.clone()),
+                        network
+                            .tun_state
+                            .as_ref()
+                            .and_then(|tun| tun.device.if_index().ok()),
                     )
                     .await
                 }
@@ -215,7 +218,15 @@ impl SdnNodeInner {
             // routes
             let routes = { network.state.as_ref().map(|state| state.routes.clone()) };
             if let Some(routes) = routes {
-                Self::remove_routes(self.routes_handle.clone(), routes).await;
+                Self::remove_routes(
+                    self.routes_handle.clone(),
+                    routes,
+                    network
+                        .tun_state
+                        .as_ref()
+                        .and_then(|tun| tun.device.if_index().ok()),
+                )
+                .await;
             }
 
             network.state = None;
@@ -402,7 +413,14 @@ impl SdnNodeInner {
 
         // create tun device
         trace!("Create TUN device");
-        let mut dev_builder = TunDeviceBuilder::new().ipv4(ip, netmask, Some(ip)).mtu(mtu);
+        let destination = if !cfg!(target_os = "windows") {
+            Some(ip)
+        } else {
+            None
+        };
+        let mut dev_builder = TunDeviceBuilder::new()
+            .ipv4(ip, netmask, destination)
+            .mtu(mtu);
         if let Some(name) = &name {
             dev_builder = dev_builder.name(name);
         }
@@ -525,10 +543,11 @@ impl SdnNodeInner {
                                     trace!(
                                         src=?ip_hdr.source_addr(),
                                         dst=?ip_hdr.destination_addr(),
-                                        "Forwarding packet from TUN device to drasyl: {} -> {} (debug: https://hpd.gasmi.net/?data={}&force=ipv4)",
+                                        payload_len=?buf.len(),
+                                        "Forwarding packet from TUN device to drasyl: {} -> {} ({} bytes)",
                                         ip_hdr.source_addr(),
                                         ip_hdr.destination_addr(),
-                                        bytes_to_hex(buf)
+                                        buf.len()
                                     );
                                 }
 
@@ -622,14 +641,19 @@ impl SdnNodeInner {
         }
     }
 
-    pub(crate) async fn remove_routes(routes_handle: Arc<Handle>, routes: EffectiveRoutingList) {
-        Self::update_routes(routes_handle, Some(routes), None).await;
+    pub(crate) async fn remove_routes(
+        routes_handle: Arc<Handle>,
+        routes: EffectiveRoutingList,
+        if_index: Option<u32>,
+    ) {
+        Self::update_routes(routes_handle, Some(routes), None, if_index).await;
     }
 
     async fn update_routes(
         routes_handle: Arc<Handle>,
         current_routes: Option<EffectiveRoutingList>,
         desired_routes: Option<EffectiveRoutingList>,
+        if_index: Option<u32>,
     ) -> EffectiveRoutingList {
         let mut applied_routes = EffectiveRoutingList::default();
         trace!(
@@ -646,7 +670,7 @@ impl SdnNodeInner {
                     }
                     _ => {
                         trace!("delete route: {:?}", route);
-                        let net_route = route.net_route();
+                        let net_route = route.net_route(if_index);
                         if let Err(e) = routes_handle.delete(&net_route).await {
                             warn!("Failed to delete route {:?}: {}", route, e);
                             applied_routes.add(route.as_removing_route());
@@ -659,7 +683,7 @@ impl SdnNodeInner {
         if let Some(desired_routes) = desired_routes.as_ref() {
             if let Ok(existing_routes) = routes_handle.list().await {
                 for (_, route) in desired_routes.iter() {
-                    let net_route = route.net_route();
+                    let net_route = route.net_route(if_index);
                     let existing = existing_routes.iter().any(|route| {
                         net_route.destination == route.destination
                             && net_route.prefix == route.prefix
