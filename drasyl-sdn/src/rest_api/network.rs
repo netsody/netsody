@@ -5,13 +5,14 @@ use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::trace;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AddNetworkRequest {
     pub config_url: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RemoveNetworkRequest {
     pub config_url: String,
 }
@@ -28,6 +29,7 @@ impl RestApiServer {
         _: AuthToken,
         Json(request): Json<AddNetworkRequest>,
     ) -> Json<NetworkResponse> {
+        trace!("Add network request received: {:?}", request);
         match Self::add_network_internal(sdn_node, &request.config_url).await {
             Ok(_) => Json(NetworkResponse {
                 success: true,
@@ -45,6 +47,7 @@ impl RestApiServer {
         _: auth::AuthToken,
         Json(request): Json<RemoveNetworkRequest>,
     ) -> Json<NetworkResponse> {
+        trace!("Remove network request received: {:?}", request);
         match Self::remove_network_internal(sdn_node, &request.config_url).await {
             Ok(_) => Json(NetworkResponse {
                 success: true,

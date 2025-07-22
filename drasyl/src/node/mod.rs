@@ -186,6 +186,7 @@ impl Node {
                 .map(|ip| (String::new(), ip))
                 .collect()
         };
+        trace!("UDP addresses: {:?}", udp_addrs);
 
         // port we bind to
         let udp_port = if let Some(udp_port) = opts.udp_port {
@@ -193,6 +194,7 @@ impl Node {
         } else {
             opts.id.pk.udp_port()
         };
+        trace!("UDP port: {}", udp_port);
 
         // node cancellation token
         let cancellation_token = CancellationToken::new();

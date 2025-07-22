@@ -21,11 +21,14 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tracing::trace;
 use url;
 use url::Url;
 
 impl RestApiServer {
     pub(crate) async fn status(State(sdn_node): State<Arc<SdnNode>>, _: AuthToken) -> Json<Status> {
+        trace!("Status request received");
+
         // opts
         let opts = sdn_node.drasyl_node().opts().clone();
 
@@ -47,7 +50,7 @@ impl RestApiServer {
         // networks
         let mut networks = HashMap::new();
         for (config_url, network) in &*sdn_node.inner.networks.lock().await {
-            networks.insert(config_url.clone(), NetworkStatus::new(network).await);
+            networks.insert(config_url.clone(), NetworkStatus::new(network));
         }
 
         let status = Status {
@@ -70,7 +73,7 @@ impl RestApiClient {
 
 #[derive(Serialize, Deserialize)]
 pub struct Status {
-    version_info: VersionInfo,
+    pub version_info: VersionInfo,
     // drasyl
     pub opts: NodeOpts,
     default_route: PubKey,
@@ -89,6 +92,7 @@ impl fmt::Display for Status {
         writeln!(f, "  Built: {0}", info.build_timestamp)?;
         writeln!(f, "  Profile: {0}", info.profile())?;
         writeln!(f, "  Features: {0}", info.features)?;
+        writeln!(f)?;
 
         // opts
         writeln!(f, "Options:")?;
@@ -175,7 +179,7 @@ impl fmt::Display for Status {
                 self.opts
                     .prometheus_pass
                     .as_ref()
-                    .map_or("None".to_string(), |_| "****".to_string())
+                    .unwrap_or(&"None".to_string())
             )?;
         }
         writeln!(f)?;
@@ -447,7 +451,7 @@ pub struct NetworkStatus {
 }
 
 impl NetworkStatus {
-    async fn new(network: &Network) -> Self {
+    fn new(network: &Network) -> Self {
         Self {
             subnet: network.state.as_ref().map(|state| state.subnet),
             ip: network.state.as_ref().map(|state| state.ip),

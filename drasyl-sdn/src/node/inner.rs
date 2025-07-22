@@ -10,7 +10,6 @@ use drasyl::message::LONG_HEADER_MAGIC_NUMBER;
 use drasyl::node::{Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT, SendHandle};
 use drasyl::peer::SuperPeerUrl;
 use drasyl::util;
-use drasyl::util::bytes_to_hex;
 use etherparse::Ipv4HeaderSlice;
 use flume::{Receiver, Sender};
 use http::Request;
@@ -35,7 +34,6 @@ type TrieRx = IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>>;
 
 pub struct SdnNodeInner {
     pub(crate) id: Identity,
-    pub(crate) auth_token: String,
     pub(crate) networks: Arc<Mutex<HashMap<Url, Network>>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) node: Arc<Node>,
@@ -50,7 +48,6 @@ impl SdnNodeInner {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         id: Identity,
-        auth_token: String,
         networks: HashMap<Url, Network>,
         cancellation_token: CancellationToken,
         node: Arc<Node>,
@@ -60,7 +57,6 @@ impl SdnNodeInner {
     ) -> Self {
         Self {
             id,
-            auth_token,
             networks: Arc::new(Mutex::new(networks)),
             cancellation_token,
             node,
@@ -88,6 +84,8 @@ impl SdnNodeInner {
         let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
         let network_id = util::get_env("NETWORK_ID", 1i32).to_be_bytes();
         let arm_messages = util::get_env("ARM_MESSAGES", true);
+        let udp_addrs = util::get_env("UDP_ADDRS", String::new());
+        let udp_port = util::get_env("UDP_PORT", String::new());
         let max_peers = util::get_env("MAX_PEERS", 8192); // set to 0 removes peers limit
         let hello_timeout = util::get_env("HELLO_TIMEOUT", 30 * 1000); // milliseconds
         let hello_max_age = util::get_env("HELLO_MAX_AGE", 60_000); // milliseconds
@@ -95,7 +93,12 @@ impl SdnNodeInner {
         let process_unites = util::get_env("PROCESS_UNITES", true);
         let housekeeping_interval = util::get_env("HOUSEKEEPING_INTERVAL", 5 * 1000); // milliseconds
         let enforce_tcp = util::get_env("ENFORCE_TCP", false);
-        let udp_sockets = util::get_env("UDP_SOCKETS", 3);
+        let udp_sockets = if !cfg!(target_os = "windows") {
+            util::get_env("UDP_SOCKETS", 3)
+        } else {
+            // only one udp socket is allowed on Windows
+            1
+        };
 
         // build node
         let (recv_buf_tx, recv_buf_rx) = flume::bounded::<(PubKey, Vec<u8>)>(recv_buf_cap);
@@ -104,6 +107,18 @@ impl SdnNodeInner {
             .id(config.id.clone())
             .network_id(network_id)
             .arm_messages(arm_messages)
+            .udp_addrs(
+                udp_addrs
+                    .split_whitespace()
+                    .map(str::parse::<IpAddr>)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("Invalid udp addresses"),
+            )
+            .udp_port(if udp_port.trim().is_empty() {
+                None
+            } else {
+                udp_port.parse::<u16>().ok()
+            })
             .max_peers(max_peers)
             .min_pow_difficulty(min_pow_difficulty)
             .hello_timeout(hello_timeout)
@@ -174,10 +189,11 @@ impl SdnNodeInner {
                                             peer=?sender_key,
                                             src=?ip_hdr.source_addr(),
                                             dst=?ip_hdr.destination_addr(),
-                                            "Forwarding packet from drasyl to TUN device: {} -> {} (debug: https://hpd.gasmi.net/?data={}&force=ipv4)",
+                                            payload_len=?buf.len(),
+                                            "Forwarding packet from drasyl to TUN device: {} -> {} ({} bytes)",
                                             ip_hdr.source_addr(),
                                             ip_hdr.destination_addr(),
-                                            bytes_to_hex(&buf)
+                                            buf.len()
                                         );
                                     }
 
@@ -324,7 +340,7 @@ impl SdnNodeInner {
             let password = parsed_url.password();
             if !username.is_empty() && password.is_some() {
                 let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
-                request = request.header("Authorization", format!("Basic {}", auth));
+                request = request.header("Authorization", format!("Basic {auth}"));
             }
 
             let request = request.body(Empty::new())?;
@@ -344,19 +360,25 @@ impl SdnNodeInner {
         // remove physical routes
         trace!("remove physical routes");
         let networks = self.networks.lock().await;
-        let mut all_physical_routes: Vec<EffectiveRoutingList> = Vec::new();
+        let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
 
         for network in networks.values() {
             if let Some(state) = network.state.as_ref() {
-                all_physical_routes.push(state.routes.clone());
+                all_physical_routes.push((
+                    network
+                        .tun_state
+                        .as_ref()
+                        .and_then(|tun| tun.device.if_index().ok()),
+                    state.routes.clone(),
+                ));
             }
         }
 
         let routes_handle = self.routes_handle.clone();
         let task = tokio::spawn(async move {
-            for physical_routes in all_physical_routes {
+            for (if_index, physical_routes) in all_physical_routes {
                 trace!("Remove physical routes: {}", physical_routes);
-                Self::remove_routes(routes_handle.clone(), physical_routes).await;
+                Self::remove_routes(routes_handle.clone(), physical_routes, if_index).await;
             }
         });
         futures::executor::block_on(task).unwrap();
