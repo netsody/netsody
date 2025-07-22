@@ -146,9 +146,6 @@ The following configuration assumes that `target/release/drasyl` has been moved 
        <array>
            <string>/usr/local/bin/drasyl</string>
            <string>run</string>
-           <string>NETWORK_URL1</string>
-           <string>NETWORK_URL2</string>
-           <string>...</string>
        </array>
        <key>WorkingDirectory</key>
        <string>/etc/drasyl/</string>
@@ -158,15 +155,6 @@ The following configuration assumes that `target/release/drasyl` has been moved 
        <string>/var/log/drasyl.err.log</string>
        <key>KeepAlive</key>
        <true/>
-       <key>EnvironmentVariables</key>
-       <dict>
-           <key>RUST_LOG</key>
-           <string>debug</string>
-           <key>RUST_BACKTRACE</key>
-           <string>full</string>
-           <key>DRASYL_IDENTITY_FILE</key>
-           <string>drasyl.identity</string>
-       </dict>
    </dict>
    </plist>
    EOF

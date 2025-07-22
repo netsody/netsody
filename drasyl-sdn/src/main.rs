@@ -1,16 +1,48 @@
+use clap::arg;
 use clap::{Parser, Subcommand};
-use drasyl::util;
 use drasyl_sdn::node::{SdnNode, SdnNodeConfig};
 use drasyl_sdn::rest_api::{RestApiClient, RestApiServer};
 use drasyl_sdn::version_info::VersionInfo;
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::signal;
 use tracing::{error, info, trace};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
+
+// Custom writer for file logging
+struct FileWriter(Arc<Mutex<File>>);
+
+impl Write for FileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().unwrap().flush()
+    }
+}
+
+impl Clone for FileWriter {
+    fn clone(&self) -> Self {
+        FileWriter(self.0.clone())
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "drasyl")]
 #[command(about = "drasyl provides secure, software-defined overlay networks")]
 struct Cli {
+    /// Path to a log file [defaults to stdout]
+    #[arg(long, value_name = "file", global = true)]
+    log_file: Option<PathBuf>,
+    /// Log filter in `RUST_LOG` syntax (e.g. `info`, or `drasyl=warn,drasyl_sdn=trace`).
+    /// If set, this overrides `RUST_LOG`.
+    #[arg(long, value_name = "level", default_value = "info", global = true)]
+    log_level: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -18,7 +50,11 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Runs the drasyl daemon
-    Run,
+    Run {
+        /// Path to config file
+        #[arg(long, value_name = "file", default_value = "config.toml")]
+        config: PathBuf,
+    },
     /// Shows the status of the running drasyl daemon
     Status,
     /// Shows the version of the drasyl daemon
@@ -37,12 +73,40 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    tracing_subscriber::fmt::init();
-
     let cli = Cli::parse();
 
+    let filter = if let Some(f) = cli.log_level {
+        EnvFilter::try_new(f)?
+    } else {
+        EnvFilter::from_default_env()
+    };
+
+    // Optional path to the log file (e.g. from LOG_FILE env var)
+    let maybe_file = cli
+        .log_file
+        .and_then(|path| OpenOptions::new().append(true).create(true).open(path).ok());
+
+    // Configure subscriber: file logger if available, otherwise console
+    if let Some(file) = maybe_file {
+        // Wrap the file handle in Arc<Mutex<...>> for thread-safe sharing
+        let file = Arc::new(Mutex::new(file));
+        // Create a writer factory that returns a BufWriter<FileWriter>
+        let make_writer = {
+            let file = file.clone();
+            move || BufWriter::new(FileWriter(file.clone()))
+        };
+
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(BoxMakeWriter::new(make_writer))
+            .init();
+    } else {
+        // Fallback to console logger
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    }
+
     match cli.command {
-        Commands::Run => run_sdn_node().await,
+        Commands::Run { config } => run_sdn_node(&config).await,
         Commands::Status => show_status().await,
         Commands::Version => show_version(),
         Commands::Add { config_url } => add_network(&config_url).await,
@@ -50,10 +114,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     }
 }
 
-async fn run_sdn_node() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+async fn run_sdn_node(
+    config_path: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     // config
-    let config_path = util::get_env("CONFIG", "config.toml".to_string());
-    let config = SdnNodeConfig::load_or_generate(&config_path).expect("Failed to load SDN config");
+    let config = SdnNodeConfig::load_or_generate(config_path.to_str().unwrap())
+        .expect("Failed to load SDN config");
 
     // identity
     info!("I am {}", config.id.pk);
