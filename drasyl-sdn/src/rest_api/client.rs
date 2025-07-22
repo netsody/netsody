@@ -2,24 +2,19 @@ use crate::rest_api::error;
 use crate::rest_api::error::Error;
 use crate::rest_api::load_auth_token;
 use bytes::Bytes;
-use drasyl::util;
 use http::Request;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde::{Serialize, de::DeserializeOwned};
 
-pub struct RestApiClient {}
-
-impl Default for RestApiClient {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct RestApiClient {
+    token_path: String,
 }
 
 impl RestApiClient {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(token_path: String) -> Self {
+        Self { token_path }
     }
 
     /// performs a GET request to the REST API
@@ -28,8 +23,7 @@ impl RestApiClient {
         R: DeserializeOwned,
     {
         let client = Client::builder(TokioExecutor::new()).build_http();
-        let token_file = util::get_env("AUTH_FILE", crate::rest_api::AUTH_FILE_DEFAULT.to_string());
-        let auth_token = load_auth_token(&token_file).map_err(Error::AuthTokenReadFailed)?;
+        let auth_token = load_auth_token(&self.token_path).map_err(Error::AuthTokenReadFailed)?;
 
         let uri = format!("http://localhost:22527{path}")
             .parse::<hyper::Uri>()
@@ -89,8 +83,7 @@ impl RestApiClient {
         R: DeserializeOwned,
     {
         let client = Client::builder(TokioExecutor::new()).build_http();
-        let token_file = util::get_env("AUTH_FILE", crate::rest_api::AUTH_FILE_DEFAULT.to_string());
-        let auth_token = load_auth_token(&token_file).map_err(Error::AuthTokenReadFailed)?;
+        let auth_token = load_auth_token(&self.token_path).map_err(Error::AuthTokenReadFailed)?;
 
         let uri = format!("http://localhost:22527{path}")
             .parse::<hyper::Uri>()

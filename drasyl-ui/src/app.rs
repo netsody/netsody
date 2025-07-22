@@ -3,6 +3,7 @@ use crate::user_event::UserEvent;
 use arboard::Clipboard;
 use drasyl_sdn::rest_api;
 use drasyl_sdn::rest_api::{Status, mask_url};
+use rest_api::RestApiClient;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::Sender;
@@ -586,7 +587,7 @@ impl ApplicationHandler<UserEvent> for App {
                         trace!("Removing network with URL: {}", url);
 
                         self.rt.block_on(async {
-                            let client = rest_api::RestApiClient::new();
+                            let client = RestApiClient::new("auth.token".to_string());
                             match client.remove_network(url).await {
                                 Ok(_) => {
                                     trace!("Removed network: {url}");
@@ -633,7 +634,7 @@ impl ApplicationHandler<UserEvent> for App {
                 trace!("Adding network with URL: {}", url);
 
                 self.rt.block_on(async {
-                    let client = rest_api::RestApiClient::new();
+                    let client = RestApiClient::new("auth.token".to_string());
                     match client.add_network(&url).await {
                         Ok(_) => {
                             trace!("Added network: {url}");

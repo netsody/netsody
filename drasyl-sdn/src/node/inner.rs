@@ -42,6 +42,7 @@ pub struct SdnNodeInner {
     pub(crate) trie_rx: ArcSwap<TrieRx>,
     pub(crate) tun_tx: Arc<Sender<(Vec<u8>, Arc<SendHandle>)>>,
     drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
+    pub(crate) token_path: String,
 }
 
 impl SdnNodeInner {
@@ -54,6 +55,7 @@ impl SdnNodeInner {
         recv_buf_rx: Arc<Receiver<(PubKey, Vec<u8>)>>,
         tun_tx: Arc<Sender<(Vec<u8>, Arc<SendHandle>)>>,
         drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
+        token_path: String,
     ) -> Self {
         Self {
             id,
@@ -65,6 +67,7 @@ impl SdnNodeInner {
             trie_rx: ArcSwap::new(Arc::new(IpnetTrie::new())),
             tun_tx,
             drasyl_rx,
+            token_path,
         }
     }
 
