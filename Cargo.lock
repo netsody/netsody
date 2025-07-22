@@ -7042,9 +7042,9 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 
 [[package]]
 name = "tun-rs"
-version = "2.0.9"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2106dc7cb4e484ea50df4485153a8f824560aa36d33cc052c05974a15bfbdc10"
+checksum = "06ac849a6001375dcdbe1395b959f934d38705a1eb1afded62e0e981a35f5875"
 dependencies = [
  "bitflags 2.9.0",
  "blocking",
