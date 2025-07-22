@@ -29,6 +29,7 @@ pub struct App {
     egui_glow: Option<egui_glow::EguiGlow>,
     config_url: String,
     repaint_delay: std::time::Duration,
+    token_path: String,
 }
 
 impl App {
@@ -37,6 +38,7 @@ impl App {
         proxy: winit::event_loop::EventLoopProxy<UserEvent>,
         rt: Arc<Runtime>,
         clipboard: Clipboard,
+        token_path: String,
     ) -> Self {
         Self {
             sender,
@@ -51,6 +53,7 @@ impl App {
             egui_glow: None,
             config_url: String::new(),
             repaint_delay: std::time::Duration::MAX,
+            token_path,
         }
     }
 
@@ -587,7 +590,7 @@ impl ApplicationHandler<UserEvent> for App {
                         trace!("Removing network with URL: {}", url);
 
                         self.rt.block_on(async {
-                            let client = RestApiClient::new("auth.token".to_string());
+                            let client = RestApiClient::new(self.token_path.clone());
                             match client.remove_network(url).await {
                                 Ok(_) => {
                                     trace!("Removed network: {url}");
@@ -634,7 +637,7 @@ impl ApplicationHandler<UserEvent> for App {
                 trace!("Adding network with URL: {}", url);
 
                 self.rt.block_on(async {
-                    let client = RestApiClient::new("auth.token".to_string());
+                    let client = RestApiClient::new(self.token_path.clone());
                     match client.add_network(&url).await {
                         Ok(_) => {
                             trace!("Added network: {url}");
