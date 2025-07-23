@@ -3,15 +3,32 @@ use clap::{Parser, Subcommand};
 use drasyl_sdn::node::{SdnNode, SdnNodeConfig};
 use drasyl_sdn::rest_api::{RestApiClient, RestApiServer};
 use drasyl_sdn::version_info::VersionInfo;
+#[cfg(target_os = "windows")]
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(target_os = "windows")]
+use std::time::Duration;
+use tokio::runtime::Runtime;
 use tokio::signal;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, trace};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
+#[cfg(target_os = "windows")]
+use windows_service::{
+    define_windows_service,
+    service::{
+        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+        ServiceType,
+    },
+    service_control_handler,
+    service_control_handler::ServiceControlHandlerResult,
+    service_dispatcher,
+};
 
 // Custom writer for file logging
 struct FileWriter(Arc<Mutex<File>>);
@@ -58,6 +75,16 @@ enum Commands {
         #[arg(long, value_name = "file", default_value = "auth.token")]
         token: PathBuf,
     },
+    #[cfg(target_os = "windows")]
+    /// Runs the drasyl daemon as a Windows service
+    RunService {
+        /// Path to config file
+        #[arg(long, value_name = "file", default_value = "config.toml")]
+        config: PathBuf,
+        /// Path to authentication token file
+        #[arg(long, value_name = "file", default_value = "auth.token")]
+        token: PathBuf,
+    },
     /// Shows the status of the running drasyl daemon
     Status {
         /// Path to authentication token file
@@ -84,20 +111,21 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let cli = Cli::parse();
-
-    let filter = if let Some(f) = cli.log_level {
+fn setup_logging(
+    log_file: Option<PathBuf>,
+    log_level: Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let filter = if let Some(f) = log_level {
         EnvFilter::try_new(f)?
     } else {
         EnvFilter::from_default_env()
     };
 
     // Optional path to the log file (e.g. from LOG_FILE env var)
-    let maybe_file = cli
-        .log_file
-        .and_then(|path| OpenOptions::new().append(true).create(true).open(path).ok());
+    let maybe_file =
+        log_file.and_then(|path| OpenOptions::new().append(true).create(true).open(path).ok());
+
+    let ansi = !cfg!(target_os = "windows");
 
     // Configure subscriber: file logger if available, otherwise console
     if let Some(file) = maybe_file {
@@ -112,24 +140,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(BoxMakeWriter::new(make_writer))
+            .with_ansi(ansi)
             .init();
     } else {
         // Fallback to console logger
-        tracing_subscriber::fmt().with_env_filter(filter).init();
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(ansi)
+            .init();
     }
 
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let cli = Cli::parse();
+
+    setup_logging(cli.log_file, cli.log_level)?;
+
     match cli.command {
-        Commands::Run { config, token } => run_sdn_node(config, token).await,
-        Commands::Status { token } => show_status(token).await,
+        Commands::Run { config, token } => run_sdn_node(config, token, None),
+        #[cfg(target_os = "windows")]
+        Commands::RunService { config, token } => run_sdn_node_win(config, token),
+        Commands::Status { token } => show_status(token),
         Commands::Version => show_version(),
-        Commands::Add { token, url } => add_network(token, &url).await,
-        Commands::Remove { token, url } => remove_network(token, &url).await,
+        Commands::Add { token, url } => add_network(token, &url),
+        Commands::Remove { token, url } => remove_network(token, &url),
     }
 }
 
-async fn run_sdn_node(
+fn run_sdn_node(
     config_path: PathBuf,
     token_path: PathBuf,
+    cancellation_token: Option<CancellationToken>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     // config
     let config = SdnNodeConfig::load_or_generate(config_path.to_str().unwrap())
@@ -138,54 +181,161 @@ async fn run_sdn_node(
     // identity
     info!("I am {}", config.id.pk);
 
-    let token_path = token_path.to_str().expect("Invalid token path").to_owned();
-    let node = Arc::new(SdnNode::start(config, token_path).await);
-    let rest_api = RestApiServer::new(node.clone());
+    let rt = Runtime::new().unwrap();
 
-    let node_clone = node.clone();
+    rt.block_on(async {
+        let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+        let node = Arc::new(SdnNode::start(config, token_path).await);
+        let rest_api = RestApiServer::new(node.clone());
 
-    tokio::select! {
-        biased;
-        _ = async {
-            #[cfg(unix)]
-            {
-                let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())?;
-                let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())?;
-                tokio::select! {
-                    _ = sigterm.recv() => {
-                        info!("Shutdown initiated via SIGTERM.");
+        let node_clone = node.clone();
+        let cancellation_token = cancellation_token.unwrap_or_default();
+
+        tokio::select! {
+            biased;
+            _ = async {
+                #[cfg(unix)]
+                {
+                    let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())?;
+                    let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())?;
+                    tokio::select! {
+                        _ = sigterm.recv() => {
+                            info!("Shutdown initiated via SIGTERM.");
+                        }
+                        _ = sigint.recv() => {
+                            info!("Shutdown initiated via SIGINT.");
+                        }
                     }
-                    _ = sigint.recv() => {
-                        info!("Shutdown initiated via SIGINT.");
+                }
+                #[cfg(not(unix))]
+                {
+                    signal::ctrl_c().await?;
+                    info!("Shutdown initiated via Ctrl+C.");
+                }
+                Ok::<_, std::io::Error>(())
+            } => {
+                trace!("Shutdown initiated via SIGTERM.");
+                node_clone.shutdown().await;
+            }
+            res = rest_api.bind() => {
+                match res {
+                    Ok(_) => {
+                        trace!("rest_api shut down");
+                    }
+                    Err(e) => {
+                        let msg = format!("rest_api failed to bind: {e}");
+                        error!("{}", msg);
+                        return Err(msg.into());
                     }
                 }
             }
-            #[cfg(not(unix))]
-            {
-                signal::ctrl_c().await?;
-                info!("Shutdown initiated via Ctrl+C.");
-            }
-            Ok::<_, std::io::Error>(())
-        } => {
-            trace!("Shutdown initiated via SIGTERM.");
-            node_clone.shutdown().await;
-        }
-        res = rest_api.bind() => {
-            match res {
-                Ok(_) => {
-                    trace!("rest_api shut down");
-                }
-                Err(e) => {
-                    let msg = format!("rest_api failed to bind: {e}");
-                    error!("{}", msg);
-                    return Err(msg.into());
-                }
+            _ = node.cancelled() => {
+                trace!("Node cancelled.");
+            },
+            _ = cancellation_token.cancelled() => {
+                trace!("Cancellation token cancelled");
             }
         }
-        _ = node.cancelled() => {
-            trace!("Node cancelled.");
-        },
+
+        Ok(())
+    })
+}
+
+#[cfg(target_os = "windows")]
+define_windows_service!(ffi_service_main, run_sdn_node_win_entry);
+
+#[cfg(target_os = "windows")]
+fn run_sdn_node_win_entry(arguments: Vec<OsString>) {
+    let cancellation_token = CancellationToken::new();
+    let child_token = cancellation_token.child_token();
+
+    let event_handler = move |control_event| -> ServiceControlHandlerResult {
+        match control_event {
+            ServiceControl::Stop => {
+                // Handle stop event and return control back to the system.
+                cancellation_token.cancel();
+                ServiceControlHandlerResult::NoError
+            }
+            // All services must accept Interrogate even if it's a no-op.
+            ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+            _ => ServiceControlHandlerResult::NotImplemented,
+        }
+    };
+
+    // Register system service event handler
+    let status_handle = service_control_handler::register("drasyl", event_handler).unwrap();
+
+    // Tell the system that the service is running now
+    status_handle
+        .set_service_status(ServiceStatus {
+            // Should match the one from system service registry
+            service_type: ServiceType::OWN_PROCESS,
+            // The new state
+            current_state: ServiceState::Running,
+            // Accept stop events when running
+            controls_accepted: ServiceControlAccept::STOP,
+            // Used to report an error when starting or stopping only, otherwise must be zero
+            exit_code: ServiceExitCode::Win32(0),
+            // Only used for pending states, otherwise must be zero
+            checkpoint: 0,
+            // Only used for pending states, otherwise must be zero
+            wait_hint: Duration::default(),
+            // Unused for setting status
+            process_id: None,
+        })
+        .expect("Failed to set service status to running");
+
+    // Retrieve config_path and token_path from global state
+    if let (Some(config_path), Some(token_path)) = (
+        CONFIG_PATH.lock().unwrap().as_ref(),
+        TOKEN_PATH.lock().unwrap().as_ref(),
+    ) {
+        // Start the actual SDN node
+        if let Err(e) = run_sdn_node(config_path.clone(), token_path.clone(), Some(child_token)) {
+            error!("Failed to start SDN node: {}", e);
+        }
+    } else {
+        error!("Configuration paths not available in service context");
     }
+
+    // Tell the system that the service is stopped now
+    status_handle
+        .set_service_status(ServiceStatus {
+            // Should match the one from system service registry
+            service_type: ServiceType::OWN_PROCESS,
+            // The new state
+            current_state: ServiceState::Stopped,
+            // Accept stop events when running
+            controls_accepted: ServiceControlAccept::empty(),
+            // Used to report an error when starting or stopping only, otherwise must be zero
+            exit_code: ServiceExitCode::Win32(0),
+            // Only used for pending states, otherwise must be zero
+            checkpoint: 0,
+            // Only used for pending states, otherwise must be zero
+            wait_hint: Duration::default(),
+            // Unused for setting status
+            process_id: None,
+        })
+        .expect("Failed to set service status to stopped");
+}
+
+#[cfg(target_os = "windows")]
+static CONFIG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+#[cfg(target_os = "windows")]
+static TOKEN_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+#[cfg(target_os = "windows")]
+fn run_sdn_node_win(
+    config_path: PathBuf,
+    token_path: PathBuf,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    // Store config_path and token_path in global state
+    *CONFIG_PATH.lock().unwrap() = Some(config_path);
+    *TOKEN_PATH.lock().unwrap() = Some(token_path);
+
+    // Register generated `ffi_service_main` with the system and start the service, blocking
+    // this thread until the service is stopped.
+    service_dispatcher::start("drasyl", ffi_service_main)?;
 
     Ok(())
 }
@@ -203,71 +353,83 @@ fn show_version() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'stati
     Ok(())
 }
 
-async fn show_status(
+fn show_status(
     token_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let token_path = token_path.to_str().expect("Invalid token path").to_owned();
-    let client = RestApiClient::new(token_path);
+    let rt = Runtime::new().unwrap();
 
-    match client.status().await {
-        Ok(status) => {
-            println!("{status}");
-        }
-        Err(e) => {
-            eprintln!("Failed to retrieve status: {e}");
-            std::process::exit(1);
-        }
-    }
+    rt.block_on(async {
+        let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+        let client = RestApiClient::new(token_path);
 
-    Ok(())
-}
-
-async fn add_network(
-    token_path: PathBuf,
-    url: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let token_path = token_path.to_str().expect("Invalid token path").to_owned();
-    let client = RestApiClient::new(token_path);
-
-    match client.add_network(url).await {
-        Ok(response) => {
-            if response.success {
-                println!("{}", response.message);
-            } else {
-                eprintln!("{}", response.message);
+        match client.status().await {
+            Ok(status) => {
+                println!("{status}");
+            }
+            Err(e) => {
+                eprintln!("Failed to retrieve status: {e}");
                 std::process::exit(1);
             }
         }
-        Err(e) => {
-            eprintln!("Failed to add network: {e}");
-            std::process::exit(1);
-        }
-    }
 
-    Ok(())
+        Ok(())
+    })
 }
 
-async fn remove_network(
+fn add_network(
     token_path: PathBuf,
     url: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let token_path = token_path.to_str().expect("Invalid token path").to_owned();
-    let client = RestApiClient::new(token_path);
+    let rt = Runtime::new().unwrap();
 
-    match client.remove_network(url).await {
-        Ok(response) => {
-            if response.success {
-                println!("{}", response.message);
-            } else {
-                eprintln!("{}", response.message);
+    rt.block_on(async {
+        let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+        let client = RestApiClient::new(token_path);
+
+        match client.add_network(url).await {
+            Ok(response) => {
+                if response.success {
+                    println!("{}", response.message);
+                } else {
+                    eprintln!("{}", response.message);
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to add network: {e}");
                 std::process::exit(1);
             }
         }
-        Err(e) => {
-            eprintln!("Failed to remove network: {e}");
-            std::process::exit(1);
-        }
-    }
 
-    Ok(())
+        Ok(())
+    })
+}
+
+fn remove_network(
+    token_path: PathBuf,
+    url: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let rt = Runtime::new().unwrap();
+
+    rt.block_on(async {
+        let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+        let client = RestApiClient::new(token_path);
+
+        match client.remove_network(url).await {
+            Ok(response) => {
+                if response.success {
+                    println!("{}", response.message);
+                } else {
+                    eprintln!("{}", response.message);
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to remove network: {e}");
+                std::process::exit(1);
+            }
+        }
+
+        Ok(())
+    })
 }
