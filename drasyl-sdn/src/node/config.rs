@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde::de;
 use std::collections::HashMap;
 use std::fs;
-use tracing::trace;
+use tracing::{info, trace};
 use url::Url;
 
 #[cfg(feature = "prometheus")]
@@ -63,7 +63,7 @@ impl SdnNodeConfig {
         let config = if std::path::Path::new(path).exists() {
             Self::load(path)?
         } else {
-            trace!(
+            info!(
                 "Config file does not exist, generating new one (this might take some time due to the PoW)"
             );
 
