@@ -450,12 +450,12 @@ impl fmt::Display for NodePeerStatus {
 
 #[derive(Serialize, Deserialize)]
 pub struct NetworkStatus {
-    subnet: Option<Ipv4Net>,
-    ip: Option<Ipv4Addr>,
+    pub subnet: Option<Ipv4Net>,
+    pub ip: Option<Ipv4Addr>,
     access_rules: Option<EffectiveAccessRuleList>,
     routes: Option<EffectiveRoutingList>,
     hostnames: Option<HashMap<Ipv4Addr, String>>,
-    tun_device: Option<String>,
+    pub tun_device: Option<String>,
 }
 
 impl NetworkStatus {
