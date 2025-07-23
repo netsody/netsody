@@ -14,7 +14,7 @@ use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
 use net_route::Handle;
 use std::collections::HashMap;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -488,7 +488,31 @@ impl SdnNodeInner {
         Some(format!("{}{}", PREFIX, clean_id))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    fn tun_dev_name(network: Ipv4Net) -> Option<String> {
+        const PREFIX: &str = "drasyl";
+        const MAX_TOTAL_LEN: usize = 15;
+        const MAX_ID_LEN: usize = MAX_TOTAL_LEN - PREFIX.len();
+
+        const BASE36: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+        let mut hash = {
+            let mut hasher = DefaultHasher::new();
+            network.hash(&mut hasher);
+            hasher.finish()
+        };
+        let mut buf = ['0'; 15]; // Max IFNAMSIZ-1 sicherstellen
+        let mut i = MAX_ID_LEN;
+
+        while hash != 0 && i > 0 {
+            i -= 1;
+            buf[i] = BASE36[(hash % 36) as usize] as char;
+            hash /= 36;
+        }
+        let clean_id: String = buf[i..MAX_ID_LEN].iter().collect();
+        Some(format!("{} ({})", PREFIX, clean_id))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     #[allow(unused_variables)]
     fn tun_dev_name(network: Ipv4Net) -> Option<String> {
         None
