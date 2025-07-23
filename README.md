@@ -31,11 +31,6 @@ All traffic is encrypted and routed via the most direct physical path, bypassing
         - Central over HTTPS
         - Fully decentralized (each node holds a local copy)
 
-- **Automation support**
-    - Plain-text config enables automated updates:
-        - Triggered by monitoring metrics
-        - Integrates with CI/CD pipelines or custom scripts
-
 - **Resilient Mesh Overlay Networking**
     - Native peer-to-peer with automatic NAT traversal
     - Fastest-relay fallback when direct paths fail
@@ -48,6 +43,10 @@ All traffic is encrypted and routed via the most direct physical path, bypassing
 - **External-Network Gatewaying**
     - drasyl devices act as gateways to external subnets/services
     - Granular, per-resource access controls
+
+- **Automation Support**
+  - TOML config enables dynamic overlays driven by external inputs
+  - e.g., an HTTP service aware of network metrics can serve adaptive configurations
 
 - **Cross-Platform Support**
   - Production-ready on:
