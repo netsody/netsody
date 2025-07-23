@@ -2,9 +2,9 @@ name: drasyl-sdn
 
 on:
   push:
-    branches: [ "master" ]
+    branches:
+      - master
   pull_request:
-    branches: [ "master" ]
 
 env:
   CARGO_TERM_COLOR: always

@@ -23,7 +23,7 @@ pub struct SdnNode {
 }
 
 impl SdnNode {
-    pub async fn start(config: SdnNodeConfig) -> Self {
+    pub async fn start(config: SdnNodeConfig, token_path: String) -> Self {
         info!("Start SDN node.");
 
         // start node
@@ -48,6 +48,7 @@ impl SdnNode {
             recv_buf_rx,
             tun_tx.clone(),
             drasyl_rx.clone(),
+            token_path,
         ));
 
         let mut join_set = JoinSet::new();
