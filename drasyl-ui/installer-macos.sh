@@ -63,15 +63,6 @@ cat > "$PKG_ROOT/Library/LaunchDaemons/drasyl.plist" <<EOF
     <string>/var/log/drasyl.err.log</string>
     <key>KeepAlive</key>
     <true/>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>RUST_LOG</key>
-        <string>info</string>
-        <key>RUST_BACKTRACE</key>
-        <string>full</string>
-        <key>DRASYL_IDENTITY_FILE</key>
-        <string>drasyl.identity</string>
-    </dict>
 </dict>
 </plist>
 EOF
