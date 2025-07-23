@@ -77,7 +77,7 @@ impl SdnNode {
             }
         });
 
-        info!("SDN node started");
+        info!("SDN node started.");
 
         Self { inner }
     }
@@ -88,7 +88,8 @@ impl SdnNode {
 
     pub async fn shutdown(&self) {
         info!("Shutdown SDN node.");
-        self.inner.shutdown().await
+        self.inner.shutdown().await;
+        info!("SDN node shut down.");
     }
 
     pub fn drasyl_node(&self) -> Arc<Node> {

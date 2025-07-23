@@ -51,7 +51,9 @@ impl Clone for FileWriter {
 
 #[derive(Parser, Debug)]
 #[command(name = "drasyl")]
-#[command(about = "drasyl provides secure, software-defined overlay networks")]
+#[command(
+    about = "drasyl provides secure, software-defined overlay networks, connecting all your devices"
+)]
 struct Cli {
     /// Path to a log file [defaults to stdout]
     #[arg(long, value_name = "file", global = true)]
