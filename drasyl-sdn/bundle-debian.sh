@@ -81,6 +81,7 @@ if [ "$1" = "configure" ]; then
     # Generate API auth token if not present
     if [ ! -f /etc/drasyl/auth.token ]; then
         mkdir -p /etc/drasyl
+        chmod 600 /etc/drasyl
         TOKEN=$(openssl rand -hex 12)
         echo "$TOKEN" > /etc/drasyl/auth.token
         chmod 600 /etc/drasyl/auth.token
