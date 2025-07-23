@@ -76,6 +76,8 @@ impl SdnNode {
             }
         });
 
+        info!("SDN node started");
+
         Self { inner }
     }
 
