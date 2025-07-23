@@ -49,8 +49,9 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
+Depends: libxdo3
 Maintainer: drasyl Team <info@drasyl.org>
-Description: ${APP_NAME}
+Description: drasyl provides secure, software-defined overlay networks, connecting all your devices.
 EOF
 
 echo "📦 Building .deb package..."
