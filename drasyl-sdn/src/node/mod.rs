@@ -154,16 +154,14 @@ impl SdnNode {
         &self,
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) -> Result<(), Error> {
-        let config_path = util::get_env("CONFIG", "config.toml".to_string());
-
         // load current configuration
-        let mut config = SdnNodeConfig::load(&config_path)?;
+        let mut config = SdnNodeConfig::load(&self.inner.token_path)?;
 
         // update networks from inner state
         config.networks = (*networks).clone();
 
         // save configuration
-        config.save(&config_path)
+        config.save(&self.inner.token_path)
     }
 }
 
