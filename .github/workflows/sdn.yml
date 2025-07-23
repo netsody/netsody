@@ -62,7 +62,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build drasyl-sdn
-        run: cargo build --verbose --package drasyl-sdn --features prometheus --release
+        run: cargo build --verbose --package drasyl-sdn --features prometheus,dns --release
 
       - name: Bundle drasyl-sdn.deb
         run: ./drasyl-sdn/bundle-debian.sh --release
