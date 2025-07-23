@@ -24,11 +24,15 @@ jobs:
         include:
           - job_name: linux-amd64
             os: ubuntu-22.04
-            path: target/release/drasyl
+            path: |
+              target/release/drasyl
+              target/release/*.deb
 
           - job_name: linux-arm64
             os: [ self-hosted, linux, ARM64 ]
-            path: target/release/drasyl
+            path: |
+              target/release/drasyl
+              target/release/*.deb
 
           - job_name: macos-amd64
             os: macOS-13
@@ -59,6 +63,10 @@ jobs:
 
       - name: Build drasyl-sdn
         run: cargo build --verbose --package drasyl-sdn --features prometheus --release
+
+      - name: Bundle drasyl-sdn.deb
+        run: ./drasyl-sdn/bundle-debian.sh --release
+        if: success() && startsWith(matrix.job_name, 'linux-')
 
       - name: Upload drasyl-sdn artifact
         uses: actions/upload-artifact@v4
