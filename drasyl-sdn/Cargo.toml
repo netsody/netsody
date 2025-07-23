@@ -7,7 +7,7 @@ edition = "2024"
 vergen-git2 = { version = "1.0.0", features = ["build", "cargo"] }
 
 [dependencies]
-drasyl = { path = "../drasyl", features = ["serde"] }
+drasyl = { path = "../drasyl-p2p", features = ["serde"] }
 tracing = { workspace = true }
 tracing-subscriber  = { workspace = true }
 tokio = { workspace = true }
