@@ -187,13 +187,11 @@ The following configuration assumes that `target/release/drasyl` has been moved 
    Wants=network-online.target
 
    [Service]
-   ExecStart=/usr/local/sbin/drasyl run NETWORK_URL1 NETWORK_URL2
+   ExecStart=/usr/local/sbin/drasyl run
    Restart=always
    KillMode=process
    WorkingDirectory=/etc/drasyl/
-   Environment=RUST_LOG=info
    Environment=RUST_BACKTRACE=full
-   Environment=DRASYL_IDENTITY_FILE=drasyl.identity
    Environment=DRASYL_UDP_SOCKETS=1
    Environment=DRASYL_C2D_THREADS=1
    Environment=DRASYL_D2C_THREADS=1
