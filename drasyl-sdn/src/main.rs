@@ -175,8 +175,8 @@ fn run_sdn_node(
     cancellation_token: Option<CancellationToken>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     // config
-    let config = SdnNodeConfig::load_or_generate(config_path.to_str().unwrap())
-        .expect("Failed to load SDN config");
+    let config_path = config_path.to_str().unwrap();
+    let config = SdnNodeConfig::load_or_generate(config_path).expect("Failed to load SDN config");
 
     // identity
     info!("I am {}", config.id.pk);
@@ -185,7 +185,7 @@ fn run_sdn_node(
 
     rt.block_on(async {
         let token_path = token_path.to_str().expect("Invalid token path").to_owned();
-        let node = Arc::new(SdnNode::start(config, token_path).await);
+        let node = Arc::new(SdnNode::start(config, config_path.to_string(), token_path).await);
         let rest_api = RestApiServer::new(node.clone());
 
         let node_clone = node.clone();

@@ -23,7 +23,7 @@ pub struct SdnNode {
 }
 
 impl SdnNode {
-    pub async fn start(config: SdnNodeConfig, token_path: String) -> Self {
+    pub async fn start(config: SdnNodeConfig, config_path: String, token_path: String) -> Self {
         info!("Start SDN node.");
 
         // start node
@@ -48,6 +48,7 @@ impl SdnNode {
             recv_buf_rx,
             tun_tx.clone(),
             drasyl_rx.clone(),
+            config_path,
             token_path,
         ));
 
@@ -157,13 +158,13 @@ impl SdnNode {
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) -> Result<(), Error> {
         // load current configuration
-        let mut config = SdnNodeConfig::load(&self.inner.token_path)?;
+        let mut config = SdnNodeConfig::load(&self.inner.config_path)?;
 
         // update networks from inner state
         config.networks = (*networks).clone();
 
         // save configuration
-        config.save(&self.inner.token_path)
+        config.save(&self.inner.config_path)
     }
 }
 
