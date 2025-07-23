@@ -2,7 +2,7 @@
 
 **drasyl-sdn** provides a secure software-defined overlay network on top of drasyl. It supports both centralized and distributed control planes. The daemon provides membership management through authentication and enables fine-grained access control between nodes. Nodes can be configured as gateways to provide access to external networks via the overlay. Both centralized and distributed control plane architectures are supported. Built on top of the [drasyl](../drasyl) library, all communication is encrypted and routed via the most local physical path available, bypassing typical network barriers such as NATs and stateful firewalls.
 
-To integrate an device into the software-defined overlay network, the drasyl daemon must be running on that device. The daemon handles the secure communication, routing, and access control for the device within the overlay network.
+To integrate a device into the software-defined overlay network, the drasyl daemon must be running on that device. The daemon handles the secure communication, routing, and access control for the device within the overlay network.
 
 ## Development
 
