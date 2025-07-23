@@ -43,7 +43,9 @@ jobs:
 
           - job_name: windows-amd64
             os: windows-latest
-            path: target/release/drasyl-ui.exe
+            path: |
+              target/release/drasyl-ui.exe
+              target/release/drasyl_*_windows.exe
 
     name: Build drasyl-ui on ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
@@ -71,7 +73,7 @@ jobs:
 
       - name: Build drasyl-sdn
         run: cargo build --verbose --package drasyl-sdn --features prometheus,dns --release
-        if: startsWith(matrix.os, 'macOS-')
+        if: startsWith(matrix.os, 'macOS-') || startsWith(matrix.os, 'windows-')
 
       - name: Create macOS Installer
         run: ./drasyl-ui/installer-macos.sh --release
@@ -80,6 +82,12 @@ jobs:
       - name: Bundle drasyl-ui.deb
         run: ./drasyl-ui/bundle-debian.sh --release
         if: success() && startsWith(matrix.os, 'ubuntu-')
+
+      - name: Create Windows Installer
+        uses: joncloud/makensis-action@v4.1
+        with:
+          script-file: ./drasyl-ui/installer-windows.nsi
+        if: success() && startsWith(matrix.os, 'windows-')
 
       - name: Upload drasyl-ui artifact(s)
         uses: actions/upload-artifact@v4
