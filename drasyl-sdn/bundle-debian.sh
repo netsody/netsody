@@ -93,7 +93,7 @@ An API auth token has been created at:
 
 To use drasyl you must copy it into your home directory:
   mkdir -p ~/.drasyl
-  cp /etc/drasyl/auth.token ~/.drasyl/auth.token
+  sudo cat /etc/drasyl/auth.token > ~/.drasyl/auth.token
   chmod 600 ~/.drasyl/auth.token
 
 MSG
