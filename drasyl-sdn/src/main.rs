@@ -127,8 +127,6 @@ fn setup_logging(
     let maybe_file =
         log_file.and_then(|path| OpenOptions::new().append(true).create(true).open(path).ok());
 
-    let ansi = !cfg!(target_os = "windows");
-
     // Configure subscriber: file logger if available, otherwise console
     if let Some(file) = maybe_file {
         // Wrap the file handle in Arc<Mutex<...>> for thread-safe sharing
@@ -142,13 +140,13 @@ fn setup_logging(
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(BoxMakeWriter::new(make_writer))
-            .with_ansi(ansi)
+            .with_ansi(false)
             .init();
     } else {
         // Fallback to console logger
         tracing_subscriber::fmt()
             .with_env_filter(filter)
-            .with_ansi(ansi)
+            .with_ansi(false)
             .init();
     }
 
