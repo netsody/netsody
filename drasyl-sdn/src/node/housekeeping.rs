@@ -49,16 +49,20 @@ impl SdnNodeInner {
     }
 
     async fn housekeeping(&self, inner: &Arc<SdnNodeInner>) -> Result<(), Error> {
+        trace!("Locking networks to get network keys");
         let urls: Vec<Url> = {
             let networks = inner.networks.lock().await;
             networks.keys().cloned().collect()
         };
+        trace!("Got network keys");
 
+        trace!("Locking networks for housekeeping");
         let mut networks = self.networks.lock().await;
         for url in urls {
             self.housekeeping_network(inner.clone(), url, &mut networks)
                 .await;
         }
+        trace!("Finished housekeeping");
 
         Ok(())
     }

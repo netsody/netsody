@@ -365,19 +365,23 @@ impl SdnNodeInner {
 
         // remove physical routes
         trace!("remove physical routes");
-        let networks = self.networks.lock().await;
         let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
+        {
+            trace!("Locking networks for shutdown");
+            let networks = self.networks.lock().await;
 
-        for network in networks.values() {
-            if let Some(state) = network.state.as_ref() {
-                all_physical_routes.push((
-                    network
-                        .tun_state
-                        .as_ref()
-                        .and_then(|tun| tun.device.if_index().ok()),
-                    state.routes.clone(),
-                ));
+            for network in networks.values() {
+                if let Some(state) = network.state.as_ref() {
+                    all_physical_routes.push((
+                        network
+                            .tun_state
+                            .as_ref()
+                            .and_then(|tun| tun.device.if_index().ok()),
+                        state.routes.clone(),
+                    ));
+                }
             }
+            trace!("Got networks for shutdown");
         }
 
         let routes_handle = self.routes_handle.clone();

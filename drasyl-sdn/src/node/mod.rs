@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::MutexGuard;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 use url::Url;
 
 pub struct SdnNode {
@@ -103,6 +103,7 @@ impl SdnNode {
         })?;
 
         // check if network already exists and add it
+        trace!("Locking networks to check if network already exists");
         let mut networks = self.inner.networks.lock().await;
         if networks.contains_key(&url) {
             return Err(Error::NetworkAlreadyExists {
@@ -111,6 +112,7 @@ impl SdnNode {
         }
 
         // add network
+        trace!("Adding network");
         let network = Network {
             config_url: config_url.to_string(),
             state: None,
@@ -133,6 +135,7 @@ impl SdnNode {
         })?;
 
         // check if network exists and remove it
+        trace!("Locking networks to check if network exists");
         let mut networks = self.inner.networks.lock().await;
         if !networks.contains_key(&url) {
             return Err(Error::NetworkNotFound {
@@ -141,6 +144,7 @@ impl SdnNode {
         }
 
         // shutdown network
+        trace!("Shutting down network");
         self.inner
             .teardown_network(self.inner.clone(), url.clone(), &mut networks)
             .await;
@@ -158,6 +162,8 @@ impl SdnNode {
         &self,
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) -> Result<(), Error> {
+        trace!("Saving configuration");
+
         // load current configuration
         let mut config = SdnNodeConfig::load(&self.inner.config_path)?;
 
