@@ -49,7 +49,7 @@ impl RestApiServer {
         }
 
         // networks
-        trace!("Getting networks");
+        trace!("Locking networks to get status");
         let mut networks = HashMap::new();
         {
             let guard = sdn_node.inner.networks.lock().await;

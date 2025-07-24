@@ -44,8 +44,7 @@ async fn server() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'stati
         " --release"
     };
     println!(
-        "Listening. To connect, use:\ncargo run --package drasyl-bench --bin iroh{} {}",
-        profile, ticket
+        "Listening. To connect, use:\ncargo run --package drasyl-bench --bin iroh{profile} {ticket}"
     );
 
     loop {
