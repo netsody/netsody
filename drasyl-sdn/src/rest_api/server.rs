@@ -65,6 +65,8 @@ impl RestApiServer {
             .route("/status", get(Self::status))
             .route("/network/add", post(Self::add_network))
             .route("/network/remove", post(Self::remove_network))
+            .route("/network/disable", post(Self::disable_network))
+            .route("/network/enable", post(Self::enable_network))
             .with_state(self.node.clone());
         let listener = TcpListener::bind(listen)
             .await

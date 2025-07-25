@@ -130,6 +130,23 @@ impl App {
                                                             )
                                                         ));
                                                     }
+                                                    id if id.0.starts_with("network_enabled ") => {
+                                                        item.set_text(format!(
+                                                            "Device:\t  {0}",
+                                                            network.tun_device.clone().map_or(
+                                                                "None".to_string(),
+                                                                |tun_device| tun_device.to_string()
+                                                            )
+                                                        ));
+                                                    }
+                                                    _ => {}
+                                                }
+                                            } else if let MenuItemKind::Check(item) = kind {
+                                                let id = item.id();
+                                                match id {
+                                                    id if id.0.starts_with("network_enabled ") => {
+                                                        item.set_checked(!network.disabled);
+                                                    }
                                                     _ => {}
                                                 }
                                             }
@@ -193,30 +210,7 @@ impl App {
                     continue;
                 }
 
-                let mut display_text = match network.name.as_ref() {
-                    Some(name) => Self::sanitize_menu_text(name),
-                    None => mask_url(config_url),
-                };
-
-                // On Linux, underscores need to be masked as they are interpreted as mnemonics
-                if cfg!(target_os = "linux") {
-                    let mut result = String::with_capacity(display_text.len());
-                    let chars: Vec<_> = display_text.chars().collect();
-
-                    for i in 0..chars.len() {
-                        if chars[i] == '_'
-                            && (i == 0 || chars[i - 1] != '_') // no previous underscore
-                            && (i + 1 == chars.len() || chars[i + 1] != '_')
-                        // no next underscore
-                        {
-                            result.push_str("__"); // standalone -> double
-                        } else {
-                            result.push(chars[i]);
-                        }
-                    }
-                    display_text = result;
-                }
-
+                let display_text = Self::network_display_text(config_url, network);
                 let submenu =
                     Submenu::with_id(format!("network {config_url_str}"), display_text, true);
 
@@ -276,6 +270,18 @@ impl App {
                     panic!("{e:?}");
                 }
 
+                // enable/disable action
+                let item = CheckMenuItem::with_id(
+                    format!("network_enabled {config_url_str}"),
+                    "Enabled",
+                    true,
+                    !network.disabled,
+                    None,
+                );
+                if let Err(e) = submenu.append(&item) {
+                    panic!("{e:?}");
+                }
+
                 // remove action
                 let item = MenuItem::with_id(
                     format!("remove_network {config_url_str}"),
@@ -293,6 +299,33 @@ impl App {
                 position += 1;
             }
         }
+    }
+
+    fn network_display_text(config_url: &Url, network: &NetworkStatus) -> String {
+        let mut display_text = match network.name.as_ref() {
+            Some(name) => Self::sanitize_menu_text(name),
+            None => mask_url(config_url),
+        };
+
+        // On Linux, underscores need to be masked as they are interpreted as mnemonics
+        if cfg!(target_os = "linux") {
+            let mut result = String::with_capacity(display_text.len());
+            let chars: Vec<_> = display_text.chars().collect();
+
+            for i in 0..chars.len() {
+                if chars[i] == '_'
+                    && (i == 0 || chars[i - 1] != '_') // no previous underscore
+                    && (i + 1 == chars.len() || chars[i + 1] != '_')
+                // no next underscore
+                {
+                    result.push_str("__"); // standalone -> double
+                } else {
+                    result.push(chars[i]);
+                }
+            }
+            display_text = result;
+        }
+        display_text
     }
 
     fn network_ip(network: &NetworkStatus) -> String {
@@ -729,6 +762,47 @@ impl ApplicationHandler<UserEvent> for App {
                                 }
                             }
                         });
+                    }
+                    id if id.0.starts_with("network_enabled ") => {
+                        let url = id.0.split_once(' ').unwrap().1;
+
+                        trace!("Enable/Disable network with URL: {}", url);
+
+                        if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
+                            if let Some(network) = status.networks.get(&Url::parse(url).unwrap()) {
+                                if network.disabled {
+                                    self.rt.block_on(async {
+                                        let client = RestApiClient::new(self.token_path.clone());
+                                        match client.enable_network(url).await {
+                                            Ok(_) => {
+                                                trace!("Enabled network: {url}");
+                                            }
+                                            Err(e) => {
+                                                trace!("Failed to enable network: {}", e);
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    self.rt.block_on(async {
+                                        let client = RestApiClient::new(self.token_path.clone());
+                                        match client.disable_network(url).await {
+                                            Ok(_) => {
+                                                trace!("Disabled network: {url}");
+                                            }
+                                            Err(e) => {
+                                                trace!("Failed to disable network: {}", e);
+                                            }
+                                        }
+                                    });
+                                }
+                            } else {
+                                trace!("Network not found in status");
+                            }
+                        } else {
+                            trace!("No status available");
+                        }
                     }
                     id if id.0.starts_with("copy_network ") => {
                         let url = id.0.split_once(' ').unwrap().1;

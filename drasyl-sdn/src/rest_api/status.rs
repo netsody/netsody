@@ -453,6 +453,7 @@ pub struct NetworkStatus {
     pub subnet: Option<Ipv4Net>,
     pub ip: Option<Ipv4Addr>,
     pub name: Option<String>,
+    pub disabled: bool,
     access_rules: Option<EffectiveAccessRuleList>,
     routes: Option<EffectiveRoutingList>,
     hostnames: Option<HashMap<Ipv4Addr, String>>,
@@ -465,6 +466,7 @@ impl NetworkStatus {
             subnet: network.state.as_ref().map(|state| state.subnet),
             ip: network.state.as_ref().map(|state| state.ip),
             name: network.name.clone(),
+            disabled: network.disabled,
             access_rules: network
                 .state
                 .as_ref()
@@ -481,6 +483,7 @@ impl NetworkStatus {
 
 impl fmt::Display for NetworkStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Disabled: {}", self.disabled)?;
         writeln!(
             f,
             "Name: {}",

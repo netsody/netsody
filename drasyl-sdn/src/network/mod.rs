@@ -48,6 +48,8 @@ impl Default for NetworkInner {
 #[derive(Deserialize, Serialize, Clone)]
 pub struct Network {
     pub(crate) config_url: String,
+    #[serde(default)]
+    pub(crate) disabled: bool,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub(crate) name: Option<String>,
     #[serde(skip_deserializing, skip_serializing, default)]

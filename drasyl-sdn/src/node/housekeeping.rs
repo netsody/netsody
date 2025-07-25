@@ -121,6 +121,14 @@ impl SdnNodeInner {
                     let current = network.state.as_ref().cloned();
 
                     match (current, desired) {
+                        (Some(_), _) if network.disabled => {
+                            trace!("Nework is disabled. We need to teardown everything.");
+                            self.teardown_network(inner.clone(), config_url, networks)
+                                .await;
+                        }
+                        (_, _) if network.disabled => {
+                            trace!("Network is disabled. Nothing to do.");
+                        }
                         (Some(current), Some(desired)) if current == desired => {
                             trace!("Network is already in desired state");
                         }
@@ -688,8 +696,11 @@ impl SdnNodeInner {
         }
 
         tokio::select! {
-            _ = cancellation_token.cancelled() => {}
+            _ = cancellation_token.cancelled() => {
+                trace!("TUN runner cancelled");
+            }
             _ = node.cancelled() => {
+                trace!("Node cancelled");
                 cancellation_token.cancel();
             }
         }
