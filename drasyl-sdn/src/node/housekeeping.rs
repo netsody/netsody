@@ -473,6 +473,7 @@ impl SdnNodeInner {
         let child_token = cancellation_token_clone.child_token();
         task::spawn(async move {
             tokio::select! {
+                biased;
                 _ = cancellation_token_clone.cancelled() => {}
                 _ = Self::tun_runner(inner_clone, tun_device_clone, child_token, ip, network_inner_clone) => {
                     error!("TUN runner terminated. Must have crashed.");
