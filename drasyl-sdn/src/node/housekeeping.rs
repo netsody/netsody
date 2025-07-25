@@ -75,7 +75,7 @@ impl SdnNodeInner {
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         if let Some(network) = networks.get_mut(&config_url) {
-            match Self::fetch_network_config(network.config_url.as_str()).await {
+            match self.fetch_network_config(network.config_url.as_str()).await {
                 Ok(config) => {
                     trace!("Network config fetched successfully");
 
