@@ -115,6 +115,7 @@ impl SdnNode {
         trace!("Adding network");
         let network = Network {
             config_url: config_url.to_string(),
+            name: None,
             state: None,
             inner: std::sync::Arc::new(crate::network::NetworkInner::default()),
             tun_state: None,

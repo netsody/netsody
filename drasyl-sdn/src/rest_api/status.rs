@@ -452,6 +452,7 @@ impl fmt::Display for NodePeerStatus {
 pub struct NetworkStatus {
     pub subnet: Option<Ipv4Net>,
     pub ip: Option<Ipv4Addr>,
+    pub name: Option<String>,
     access_rules: Option<EffectiveAccessRuleList>,
     routes: Option<EffectiveRoutingList>,
     hostnames: Option<HashMap<Ipv4Addr, String>>,
@@ -463,6 +464,7 @@ impl NetworkStatus {
         Self {
             subnet: network.state.as_ref().map(|state| state.subnet),
             ip: network.state.as_ref().map(|state| state.ip),
+            name: network.name.clone(),
             access_rules: network
                 .state
                 .as_ref()
@@ -479,6 +481,13 @@ impl NetworkStatus {
 
 impl fmt::Display for NetworkStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "Name: {}",
+            self.name
+                .as_ref()
+                .map_or("None".to_string(), |name| name.to_string())
+        )?;
         writeln!(
             f,
             "Subnet: {}",

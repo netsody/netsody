@@ -49,6 +49,8 @@ impl Default for NetworkInner {
 pub struct Network {
     pub(crate) config_url: String,
     #[serde(skip_deserializing, skip_serializing, default)]
+    pub(crate) name: Option<String>,
+    #[serde(skip_deserializing, skip_serializing, default)]
     pub(crate) state: Option<LocalNodeState>,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub(crate) inner: Arc<NetworkInner>,

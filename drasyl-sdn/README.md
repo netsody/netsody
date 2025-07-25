@@ -40,6 +40,7 @@ Example network configuration:
 ```toml
 # Network configuration using Carrier-Grade NAT address space
 network = "100.64.0.0/24"  # /24 subnet for our company network
+name = "Company Network"    # Optional: Human-readable name for the network
 
 # Node definitions
 [[node]]
@@ -92,6 +93,8 @@ This example showcases a network for a small startup with a development and mark
 - Both teams can communicate with each other to coordinate their work
 - Each team has access only to their required infrastructure
 - The marketing team can access legacy hardware through a gateway node
+
+**Note:** The `name` parameter is optional and provides a human-readable identifier for the network. It helps users identify different networks when managing multiple configurations. If not specified, it defaults to `None`.
 
 ### Gateway Configuration
 

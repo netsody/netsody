@@ -89,6 +89,15 @@ impl SdnNodeInner {
                 Ok(Ok(config)) => {
                     trace!("Network config fetched successfully");
 
+                    // Update network name from config
+                    if network.name != config.name {
+                        trace!(
+                            "Network name changed from '{:?}' to '{:?}'",
+                            network.name, config.name
+                        );
+                    }
+                    network.name = config.name.clone();
+
                     let desired = match config.ip(&inner.id.pk) {
                         Some(desired_ip) => {
                             let desired_effective_access_rule_list = config

@@ -9,7 +9,9 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::Sender;
 use tracing::{trace, warn};
 use tray_icon::menu::accelerator::{Accelerator, CMD_OR_CTRL, Code};
-use tray_icon::menu::{Menu, MenuId, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{
+    CheckMenuItem, Menu, MenuId, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu,
+};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 use url::Url;
 use winit::application::ApplicationHandler;
@@ -99,6 +101,11 @@ impl App {
                                     if let Some(network) = status.networks.get(&config_url) {
                                         existing_networks.push(config_url_str.to_string());
 
+                                        submenu.set_text(Self::network_display_text(
+                                            &config_url,
+                                            network,
+                                        ));
+
                                         submenu.items().iter_mut().for_each(|kind| {
                                             if let MenuItemKind::MenuItem(item) = kind {
                                                 let id = item.id();
@@ -186,16 +193,20 @@ impl App {
                     continue;
                 }
 
-                let display_text = mask_url(config_url);
+                let mut display_text = match network.name.as_ref() {
+                    Some(name) => Self::sanitize_menu_text(name),
+                    None => mask_url(config_url),
+                };
+
                 // On Linux, underscores need to be masked as they are interpreted as mnemonics
-                let display_text = if cfg!(target_os = "linux") {
+                if cfg!(target_os = "linux") {
                     let mut result = String::with_capacity(display_text.len());
                     let chars: Vec<_> = display_text.chars().collect();
 
                     for i in 0..chars.len() {
                         if chars[i] == '_'
-                             && (i == 0 || chars[i - 1] != '_') // no previous underscore
-                             && (i + 1 == chars.len() || chars[i + 1] != '_')
+                            && (i == 0 || chars[i - 1] != '_') // no previous underscore
+                            && (i + 1 == chars.len() || chars[i + 1] != '_')
                         // no next underscore
                         {
                             result.push_str("__"); // standalone -> double
@@ -203,17 +214,16 @@ impl App {
                             result.push(chars[i]);
                         }
                     }
-                    result
-                } else {
-                    display_text
-                };
+                    display_text = result;
+                }
+
                 let submenu =
                     Submenu::with_id(format!("network {config_url_str}"), display_text, true);
 
                 // copy action
                 let item = MenuItem::with_id(
                     format!("copy_network {config_url_str}"),
-                    "Copy URL",
+                    "Copy Network URL",
                     true,
                     None,
                 );
@@ -292,6 +302,47 @@ impl App {
             }
             _ => "None".to_string(),
         }
+    }
+
+    /// Sanitizes text for use in menu items by only allowing safe characters
+    pub(crate) fn sanitize_menu_text(text: &str) -> String {
+        let mut sanitized = String::with_capacity(text.len());
+
+        for ch in text.chars() {
+            // Whitelist: Only allow explicitly safe characters
+            match ch {
+                // Basic Latin letters and numbers
+                'a'..='z' | 'A'..='Z' | '0'..='9' => {
+                    sanitized.push(ch);
+                }
+                // Common punctuation and symbols that are safe for menu display
+                ' ' | '-' | '_' | '.' | ',' | ':' | '(' | ')' | '[' | ']' | '!' | '?' | '&' => {
+                    sanitized.push(ch);
+                }
+                // German umlauts and special characters (common in German network names)
+                'ä' | 'ö' | 'ü' | 'Ä' | 'Ö' | 'Ü' | 'ß' => {
+                    sanitized.push(ch);
+                }
+                // All other characters are ignored/removed
+                _ => {
+                    // Skip any character not in the whitelist
+                }
+            }
+        }
+
+        // Trim whitespace and limit length
+        sanitized = sanitized.trim().to_string();
+        if sanitized.len() > 100 {
+            sanitized.truncate(97);
+            sanitized.push_str("...");
+        }
+
+        // If sanitization resulted in empty string, provide a fallback
+        if sanitized.is_empty() {
+            sanitized = "Unnamed Network".to_string();
+        }
+
+        sanitized
     }
 
     pub(crate) fn new_tray_icon() -> (TrayIcon, Menu) {
