@@ -111,6 +111,22 @@ enum Commands {
         /// The URL of the network to remove
         url: String,
     },
+    /// Disables a network in the running drasyl daemon
+    Disable {
+        /// Path to authentication token file
+        #[arg(long, value_name = "file", default_value = "auth.token")]
+        token: PathBuf,
+        /// The URL of the network to disable
+        url: String,
+    },
+    /// Enables a network in the running drasyl daemon
+    Enable {
+        /// Path to authentication token file
+        #[arg(long, value_name = "file", default_value = "auth.token")]
+        token: PathBuf,
+        /// The URL of the network to enable
+        url: String,
+    },
 }
 
 fn setup_logging(
@@ -166,6 +182,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         Commands::Version => show_version(),
         Commands::Add { token, url } => add_network(token, &url),
         Commands::Remove { token, url } => remove_network(token, &url),
+        Commands::Disable { token, url } => disable_network(token, &url),
+        Commands::Enable { token, url } => enable_network(token, &url),
     }
 }
 
@@ -426,6 +444,64 @@ fn remove_network(
             }
             Err(e) => {
                 eprintln!("Failed to remove network: {e}");
+                std::process::exit(1);
+            }
+        }
+
+        Ok(())
+    })
+}
+
+fn disable_network(
+    token_path: PathBuf,
+    url: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let rt = Runtime::new().unwrap();
+
+    rt.block_on(async {
+        let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+        let client = RestApiClient::new(token_path);
+
+        match client.disable_network(url).await {
+            Ok(response) => {
+                if response.success {
+                    println!("{}", response.message);
+                } else {
+                    eprintln!("{}", response.message);
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to disable network: {e}");
+                std::process::exit(1);
+            }
+        }
+
+        Ok(())
+    })
+}
+
+fn enable_network(
+    token_path: PathBuf,
+    url: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let rt = Runtime::new().unwrap();
+
+    rt.block_on(async {
+        let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+        let client = RestApiClient::new(token_path);
+
+        match client.enable_network(url).await {
+            Ok(response) => {
+                if response.success {
+                    println!("{}", response.message);
+                } else {
+                    eprintln!("{}", response.message);
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to enable network: {e}");
                 std::process::exit(1);
             }
         }

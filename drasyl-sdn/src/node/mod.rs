@@ -115,6 +115,7 @@ impl SdnNode {
         trace!("Adding network");
         let network = Network {
             config_url: config_url.to_string(),
+            disabled: false,
             name: None,
             state: None,
             inner: std::sync::Arc::new(crate::network::NetworkInner::default()),
@@ -155,6 +156,62 @@ impl SdnNode {
         self.save_config(&networks).await?;
 
         info!("Network '{}' removed successfully", config_url);
+        Ok(())
+    }
+
+    /// disables a network
+    pub async fn disable_network(&self, config_url: &str) -> Result<(), Error> {
+        let url = Url::parse(config_url).map_err(|e| Error::ConfigParseError {
+            reason: format!("Failed to parse URL: {e}"),
+        })?;
+
+        // check if network exists and disable it
+        trace!("Locking networks to check if network exists");
+        let mut networks = self.inner.networks.lock().await;
+        if !networks.contains_key(&url) {
+            return Err(Error::NetworkNotFound {
+                config_url: config_url.to_string(),
+            });
+        }
+
+        // disable network
+        trace!("Disabling network");
+        if let Some(network) = networks.get_mut(&url) {
+            network.disabled = true;
+        }
+
+        // persist configuration
+        self.save_config(&networks).await?;
+
+        info!("Network '{}' disabled successfully", config_url);
+        Ok(())
+    }
+
+    /// enables a network
+    pub async fn enable_network(&self, config_url: &str) -> Result<(), Error> {
+        let url = Url::parse(config_url).map_err(|e| Error::ConfigParseError {
+            reason: format!("Failed to parse URL: {e}"),
+        })?;
+
+        // check if network exists and enable it
+        trace!("Locking networks to check if network exists");
+        let mut networks = self.inner.networks.lock().await;
+        if !networks.contains_key(&url) {
+            return Err(Error::NetworkNotFound {
+                config_url: config_url.to_string(),
+            });
+        }
+
+        // enable network
+        trace!("Enabling network");
+        if let Some(network) = networks.get_mut(&url) {
+            network.disabled = false;
+        }
+
+        // persist configuration
+        self.save_config(&networks).await?;
+
+        info!("Network '{}' enabled successfully", config_url);
         Ok(())
     }
 
