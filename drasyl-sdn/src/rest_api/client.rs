@@ -22,7 +22,9 @@ impl RestApiClient {
     where
         R: DeserializeOwned,
     {
-        let client = Client::builder(TokioExecutor::new()).build_http();
+        let client = Client::builder(TokioExecutor::new())
+            .pool_max_idle_per_host(0)
+            .build_http();
         let auth_token = load_auth_token(&self.token_path).map_err(Error::AuthTokenReadFailed)?;
 
         let uri = format!("http://localhost:22527{path}")
@@ -34,6 +36,7 @@ impl RestApiClient {
         let req = Request::builder()
             .method("GET")
             .uri(uri)
+            .header("Connection", "close")
             .header("Authorization", format!("Bearer {auth_token}"))
             .body(Empty::<Bytes>::new())
             .map_err(|e| error::Error::StatusRequestFailed {
@@ -82,7 +85,9 @@ impl RestApiClient {
         T: Serialize,
         R: DeserializeOwned,
     {
-        let client = Client::builder(TokioExecutor::new()).build_http();
+        let client = Client::builder(TokioExecutor::new())
+            .pool_max_idle_per_host(0)
+            .build_http();
         let auth_token = load_auth_token(&self.token_path).map_err(Error::AuthTokenReadFailed)?;
 
         let uri = format!("http://localhost:22527{path}")
@@ -99,6 +104,7 @@ impl RestApiClient {
         let req = Request::builder()
             .method("POST")
             .uri(uri)
+            .header("Connection", "close")
             .header("Authorization", format!("Bearer {auth_token}"))
             .header("Content-Type", "application/json")
             .body(Full::new(Bytes::from(body_json)))

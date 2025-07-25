@@ -79,7 +79,9 @@ impl SdnNodeInner {
             drasyl_rx,
             config_path,
             token_path,
-            client: Client::builder(TokioExecutor::new()).build::<_, Empty<Bytes>>(https),
+            client: Client::builder(TokioExecutor::new())
+                .pool_max_idle_per_host(0)
+                .build::<_, Empty<Bytes>>(https),
         }
     }
 
@@ -342,7 +344,10 @@ impl SdnNodeInner {
             // parse URL and extract auth info if present
             let parsed_url = url::Url::parse(url)?;
             trace!("Parsed URL: {}", parsed_url);
-            let mut request = Request::builder().uri(parsed_url.as_str()).method("GET");
+            let mut request = Request::builder()
+                .uri(parsed_url.as_str())
+                .method("GET")
+                .header("Connection", "close");
 
             // add basic auth header if username and password are present
             let username = parsed_url.username();
