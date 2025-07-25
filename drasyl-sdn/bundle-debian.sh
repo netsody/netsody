@@ -40,6 +40,7 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
+Homepage: https://drasyl.org
 Maintainer: drasyl Team <info@drasyl.org>
 Description: drasyl provides secure, software-defined overlay networks, connecting all your devices.
 EOF
