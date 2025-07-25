@@ -347,7 +347,8 @@ impl SdnNodeInner {
             let mut request = Request::builder()
                 .uri(parsed_url.as_str())
                 .method("GET")
-                .header("Connection", "close");
+                .header("Connection", "close")
+                .header("drasyl-pk", self.id.pk.to_string());
 
             // add basic auth header if username and password are present
             let username = parsed_url.username();
