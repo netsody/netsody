@@ -14,8 +14,9 @@ use etherparse::Ipv4HeaderSlice;
 use flume::{Receiver, Sender};
 use http::Request;
 use http_body_util::{BodyExt, Empty};
-use hyper_rustls::HttpsConnectorBuilder;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use ipnet::IpNet;
 use ipnet_trie::IpnetTrie;
@@ -44,6 +45,7 @@ pub struct SdnNodeInner {
     drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
     pub(crate) config_path: String,
     pub(crate) token_path: String,
+    client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
 }
 
 impl SdnNodeInner {
@@ -59,6 +61,12 @@ impl SdnNodeInner {
         config_path: String,
         token_path: String,
     ) -> Self {
+        let https = HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_http1()
+            .build();
+
         Self {
             id,
             networks: Arc::new(Mutex::new(networks)),
@@ -71,6 +79,7 @@ impl SdnNodeInner {
             drasyl_rx,
             config_path,
             token_path,
+            client: Client::builder(TokioExecutor::new()).build::<_, Empty<Bytes>>(https),
         }
     }
 
@@ -327,31 +336,30 @@ impl SdnNodeInner {
         }
     }
 
-    pub(crate) async fn fetch_network_config(url: &str) -> Result<NetworkConfig, Error> {
+    pub(crate) async fn fetch_network_config(&self, url: &str) -> Result<NetworkConfig, Error> {
         trace!("Fetching network config from: {}", url);
         let body = if url.starts_with("http://") || url.starts_with("https://") {
-            let https = HttpsConnectorBuilder::new()
-                .with_webpki_roots()
-                .https_or_http()
-                .enable_http1()
-                .build();
-            let client = Client::builder(TokioExecutor::new()).build::<_, Empty<Bytes>>(https);
-
             // parse URL and extract auth info if present
             let parsed_url = url::Url::parse(url)?;
+            trace!("Parsed URL: {}", parsed_url);
             let mut request = Request::builder().uri(parsed_url.as_str()).method("GET");
 
             // add basic auth header if username and password are present
             let username = parsed_url.username();
             let password = parsed_url.password();
             if !username.is_empty() && password.is_some() {
+                trace!("Adding basic auth header: {}", username);
                 let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
                 request = request.header("Authorization", format!("Basic {auth}"));
             }
 
+            trace!("Building request");
             let request = request.body(Empty::new())?;
-            let response = client.request(request).await?;
+            trace!("Sending request");
+            let response = self.client.request(request).await?;
+            trace!("Received response");
             let body_bytes = response.into_body().collect().await?.to_bytes();
+            trace!("Received body");
             String::from_utf8(body_bytes.to_vec())?
         } else {
             let path = url.strip_prefix("file://").unwrap_or(url);
