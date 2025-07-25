@@ -21,12 +21,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::MutexGuard;
 use tokio::task;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, instrument, trace, warn};
 use tun_rs::{AsyncDevice as TunDevice, AsyncDevice, DeviceBuilder as TunDeviceBuilder};
 use url::Url;
 #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
 use {std::fs, std::io::Write};
+
+/// Timeout in milliseconds for fetching network config.
+/// If a config cannot be received within this time, the fetch is considered failed.
+pub(crate) const CONFIG_FETCH_TIMEOUT: u64 = 5_000;
 
 impl SdnNodeInner {
     pub(crate) async fn housekeeping_runner(
@@ -75,8 +80,13 @@ impl SdnNodeInner {
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         if let Some(network) = networks.get_mut(&config_url) {
-            match self.fetch_network_config(network.config_url.as_str()).await {
-                Ok(config) => {
+            match timeout(
+                Duration::from_millis(CONFIG_FETCH_TIMEOUT),
+                self.fetch_network_config(network.config_url.as_str()),
+            )
+            .await
+            {
+                Ok(Ok(config)) => {
                     trace!("Network config fetched successfully");
 
                     let desired = match config.ip(&inner.id.pk) {
@@ -144,8 +154,14 @@ impl SdnNodeInner {
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     warn!("Failed to fetch network config: {}", e);
+                }
+                Err(_) => {
+                    warn!(
+                        "Timeout of {} ms exceeded while attempting to fetch network config hostname",
+                        CONFIG_FETCH_TIMEOUT
+                    );
                 }
             }
         }
