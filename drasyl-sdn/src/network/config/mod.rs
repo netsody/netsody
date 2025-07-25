@@ -18,6 +18,8 @@ use std::net::{IpAddr, Ipv4Addr};
 pub struct NetworkConfig {
     #[serde(rename = "network")]
     pub subnet: Ipv4Net,
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(rename = "node", default, deserialize_with = "deserialize_nodes")]
     pub nodes: HashMap<PubKey, NetworkNode>,
     #[serde(rename = "route", default, deserialize_with = "deserialize_routes")]
@@ -773,6 +775,49 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
+    fn test_network_deserialization_with_name() {
+        let toml_str = r#"
+            network = "192.168.1.0/24"
+            name = "Test Network"
+
+            [[node]]
+            pk       = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            ip       = "192.168.1.1"
+            hostname = "node-1"
+        "#;
+
+        let network = NetworkConfig::try_from(toml_str).unwrap();
+
+        assert_eq!(
+            network.subnet,
+            Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap()
+        );
+        assert_eq!(network.name, Some("Test Network".to_string()));
+        assert_eq!(network.nodes.len(), 1);
+    }
+
+    #[test]
+    fn test_network_deserialization_without_name() {
+        let toml_str = r#"
+            network = "192.168.1.0/24"
+
+            [[node]]
+            pk       = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            ip       = "192.168.1.1"
+            hostname = "node-1"
+        "#;
+
+        let network = NetworkConfig::try_from(toml_str).unwrap();
+
+        assert_eq!(
+            network.subnet,
+            Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap()
+        );
+        assert_eq!(network.name, None);
+        assert_eq!(network.nodes.len(), 1);
+    }
+
+    #[test]
     fn test_network_deserialization() {
         let toml_str = r#"
             network = "192.168.1.0/24"
@@ -808,6 +853,7 @@ mod tests {
             network.subnet,
             Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap()
         );
+        assert_eq!(network.name, None);
         assert_eq!(network.nodes.len(), 2);
         assert_eq!(network.routes.len(), 1);
         assert_eq!(network.policies.len(), 2);
