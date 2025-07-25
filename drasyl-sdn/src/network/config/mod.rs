@@ -222,19 +222,7 @@ impl NetworkConfig {
     ) -> Result<EffectiveRoutingList, network::ConfigError> {
         let mut physical_route = HashMap::with_hasher(RandomState::new());
         for (dest, route) in &self.routes {
-            let result = if my_pk.eq(&route.gw) {
-                // i am the gateway, nothing to do
-                false
-            } else if !&route.groups.is_empty() {
-                // allowed?
-                let my_groups = &self.nodes.get(my_pk).unwrap().groups;
-                my_groups.iter().any(|g| route.groups.contains(g))
-
-                // TODO check if we can access gateway?
-            } else {
-                true
-            };
-            if result {
+            if has_route_access(my_pk, route, &self.nodes) {
                 if let Some(node) = self.nodes.get(&route.gw) {
                     let route = EffectiveRoute {
                         dest: *dest,
@@ -248,6 +236,25 @@ impl NetworkConfig {
             }
         }
         Ok(EffectiveRoutingList(physical_route))
+    }
+}
+
+/// Checks if a node has access to a route
+fn has_route_access(
+    my_pk: &PubKey,
+    route: &NetworkRoute,
+    nodes: &HashMap<PubKey, NetworkNode>,
+) -> bool {
+    if my_pk.eq(&route.gw) {
+        // i am the gateway, nothing to do
+        false
+    } else if !route.groups.is_empty() {
+        // allowed?
+        let my_groups = &nodes.get(my_pk).unwrap().groups;
+        my_groups.iter().any(|g| route.groups.contains(g))
+        // TODO check if we can access gateway?
+    } else {
+        true
     }
 }
 
@@ -1120,5 +1127,108 @@ mod tests {
                 _ => assert!(result.is_err(), "{description} should be invalid"),
             }
         }
+    }
+
+    #[test]
+    fn test_has_route_access() {
+        use crate::network::config::{NetworkNode, NetworkRoute, has_route_access};
+        use std::collections::HashMap;
+        use std::str::FromStr;
+
+        // Create test data
+        let node1_pk =
+            PubKey::from_str("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+                .unwrap();
+        let node2_pk =
+            PubKey::from_str("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
+                .unwrap();
+        let node3_pk =
+            PubKey::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .unwrap();
+
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            node1_pk,
+            NetworkNode {
+                pk: node1_pk,
+                ip: Ipv4Addr::new(192, 168, 1, 1),
+                hostname: "node-1".to_string(),
+                groups: HashSet::from(["group1".to_string(), "group2".to_string()]),
+            },
+        );
+        nodes.insert(
+            node2_pk,
+            NetworkNode {
+                pk: node2_pk,
+                ip: Ipv4Addr::new(192, 168, 1, 2),
+                hostname: "node-2".to_string(),
+                groups: HashSet::from(["group2".to_string()]),
+            },
+        );
+        nodes.insert(
+            node3_pk,
+            NetworkNode {
+                pk: node3_pk,
+                ip: Ipv4Addr::new(192, 168, 1, 3),
+                hostname: "node-3".to_string(),
+                groups: HashSet::new(),
+            },
+        );
+
+        // Test 1: Node is the gateway itself - should return false
+        let route_gateway = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::new(),
+        };
+        assert!(!has_route_access(&node1_pk, &route_gateway, &nodes));
+
+        // Test 2: Route without groups - should return true
+        let route_no_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::new(),
+        };
+        assert!(has_route_access(&node2_pk, &route_no_groups, &nodes));
+
+        // Test 3: Route with groups, node belongs to allowed group
+        let route_with_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::from(["group2".to_string()]),
+        };
+        assert!(has_route_access(&node2_pk, &route_with_groups, &nodes));
+
+        // Test 4: Route with groups, node belongs to allowed group (multiple groups)
+        let route_with_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node2_pk,
+            groups: HashSet::from(["group1".to_string(), "group3".to_string()]),
+        };
+        assert!(has_route_access(&node1_pk, &route_with_groups, &nodes));
+
+        // Test 5: Route with groups, node doesn't belong to allowed groups
+        let route_with_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::from(["group3".to_string()]),
+        };
+        assert!(!has_route_access(&node2_pk, &route_with_groups, &nodes));
+
+        // Test 6: Node without groups tries to access route with groups
+        let route_with_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::from(["group1".to_string()]),
+        };
+        assert!(!has_route_access(&node3_pk, &route_with_groups, &nodes));
+
+        // Test 7: Node without groups tries to access route without groups
+        let route_no_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::new(),
+        };
+        assert!(has_route_access(&node3_pk, &route_no_groups, &nodes));
     }
 }
