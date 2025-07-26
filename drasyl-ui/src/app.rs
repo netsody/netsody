@@ -414,12 +414,6 @@ impl App {
             panic!("{e:?}");
         }
 
-        // separator
-        trace!("Adding separator");
-        if let Err(e) = menu.append(&PredefinedMenuItem::separator()) {
-            panic!("{e:?}");
-        }
-
         // add network
         trace!("Adding 'add network' item");
         let item = MenuItem::with_id(
@@ -429,6 +423,12 @@ impl App {
             Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyN)),
         );
         if let Err(e) = menu.append(&item) {
+            panic!("{e:?}");
+        }
+
+        // separator
+        trace!("Adding separator");
+        if let Err(e) = menu.append(&PredefinedMenuItem::separator()) {
             panic!("{e:?}");
         }
 
