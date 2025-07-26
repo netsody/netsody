@@ -10,10 +10,12 @@
 
 # drasyl
 
-drasyl ([dʁazy:l]) is a secure, software-defined overlay network built on [a fast, peer-to-peer protocol](./drasyl-p2p).
-It enables you to interconnect all of your devices, making best use of the underlying physical network by using peer-to-peer technologies to create a mesh overlay.
-Both centralized and distributed control planes are supported, offering fine-grained access control and optional gateways for bridging to external networks.
-All traffic is encrypted and routed via the most direct physical path, bypassing NATs and firewalls.
+[drasyl](https://github.com/drasyl/drasyl-rs) ([dʁazy:l]) is a lightweight, software-defined overlay networking solution built on a [fast and secure peer-to-peer protocol](./drasyl-p2p).
+
+It enables you to seamlessly interconnect all your devices in your organization, team, or home, regardless of typical network barriers prevalent between physical networks.
+Unlike traditional VPNs, drasyl establishes direct, peer-to-peer connections between all devices, creating a mesh overlay that optimally utilizes the underlying physical network.
+There is no need for a proprietary, centralized network controller, as overlay configurations can be distributed by any standard HTTP server or fully decentralized with local copies on each device.
+You remain in control of network membership and permitted communication, following a zero-trust model with all traffic end-to-end encrypted and all devices authenticated.
 
 ## Features
 
@@ -29,7 +31,7 @@ All traffic is encrypted and routed via the most direct physical path, bypassing
         - Guided editing via [web editor](https://editor.drasyl.org)
     - Distribution methods:
         - Central over HTTPS
-        - Fully decentralized (each node holds a local copy)
+        - Fully decentralized (each device holds a local copy)
 
 - **Resilient Mesh Overlay Networking**
     - Native peer-to-peer with automatic NAT traversal
