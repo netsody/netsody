@@ -340,36 +340,57 @@ impl SdnNodeInner {
 
     pub(crate) async fn fetch_network_config(&self, url: &str) -> Result<NetworkConfig, Error> {
         trace!("Fetching network config from: {}", url);
-        let body = if url.starts_with("http://") || url.starts_with("https://") {
-            // parse URL and extract auth info if present
-            let parsed_url = url::Url::parse(url)?;
-            trace!("Parsed URL: {}", parsed_url);
-            let mut request = Request::builder()
-                .uri(parsed_url.as_str())
-                .method("GET")
-                .header("Connection", "close")
-                .header("drasyl-pk", self.id.pk.to_string());
 
-            // add basic auth header if username and password are present
-            let username = parsed_url.username();
-            let password = parsed_url.password();
-            if !username.is_empty() && password.is_some() {
-                trace!("Adding basic auth header: {}", username);
-                let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
-                request = request.header("Authorization", format!("Basic {auth}"));
+        let body = match url {
+            url if url.starts_with("http://") || url.starts_with("https://") => {
+                // parse URL and extract auth info if present
+                let parsed_url = url::Url::parse(url)?;
+                trace!("Parsed URL: {}", parsed_url);
+                let mut request = Request::builder()
+                    .uri(parsed_url.as_str())
+                    .method("GET")
+                    .header("Connection", "close")
+                    .header("drasyl-pk", self.id.pk.to_string());
+
+                // add basic auth header if username and password are present
+                let username = parsed_url.username();
+                let password = parsed_url.password();
+                if !username.is_empty() && password.is_some() {
+                    trace!("Adding basic auth header: {}", username);
+                    let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
+                    request = request.header("Authorization", format!("Basic {auth}"));
+                }
+
+                trace!("Building request");
+                let request = request.body(Empty::new())?;
+                trace!("Sending request");
+                let response = self.client.request(request).await?;
+                trace!("Received response");
+                let body_bytes = response.into_body().collect().await?.to_bytes();
+                trace!("Received body");
+                String::from_utf8(body_bytes.to_vec())?
             }
-
-            trace!("Building request");
-            let request = request.body(Empty::new())?;
-            trace!("Sending request");
-            let response = self.client.request(request).await?;
-            trace!("Received response");
-            let body_bytes = response.into_body().collect().await?.to_bytes();
-            trace!("Received body");
-            String::from_utf8(body_bytes.to_vec())?
-        } else {
-            let path = url.strip_prefix("file://").unwrap_or(url);
-            fs::read_to_string(path)?
+            url if url.starts_with("file://") => {
+                // Handle file:// URLs properly, especially on Windows
+                let path_part = url.strip_prefix("file://").unwrap();
+                let path = if cfg!(target_os = "windows")
+                    && path_part.starts_with('/')
+                    && path_part.len() > 2
+                {
+                    // Remove the leading slash and ensure proper Windows path format
+                    // e.g., file:///C:/path becomes /C:/path, which needs to be C:/path
+                    &path_part[1..]
+                } else {
+                    path_part
+                };
+                trace!("Reading file: {}", path);
+                fs::read_to_string(path)?
+            }
+            _ => {
+                return Err(Error::ConfigParseError {
+                    reason: format!("Unsupported URL scheme: {url}"),
+                });
+            }
         };
         Ok(NetworkConfig::try_from(body.as_str())?)
     }
