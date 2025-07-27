@@ -122,7 +122,7 @@ impl SdnNodeInner {
 
                     match (current, desired) {
                         (Some(_), _) if network.disabled => {
-                            trace!("Nework is disabled. We need to teardown everything.");
+                            trace!("Network is disabled. We need to teardown everything.");
                             self.teardown_network(inner.clone(), config_url, networks)
                                 .await;
                         }
