@@ -18,6 +18,7 @@ use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
+
 use ipnet::IpNet;
 use ipnet_trie::IpnetTrie;
 use net_route::Handle;
@@ -343,32 +344,7 @@ impl SdnNodeInner {
 
         let body = match url {
             url if url.starts_with("http://") || url.starts_with("https://") => {
-                // parse URL and extract auth info if present
-                let parsed_url = url::Url::parse(url)?;
-                trace!("Parsed URL: {}", parsed_url);
-                let mut request = Request::builder()
-                    .uri(parsed_url.as_str())
-                    .method("GET")
-                    .header("Connection", "close")
-                    .header("drasyl-pk", self.id.pk.to_string());
-
-                // add basic auth header if username and password are present
-                let username = parsed_url.username();
-                let password = parsed_url.password();
-                if !username.is_empty() && password.is_some() {
-                    trace!("Adding basic auth header: {}", username);
-                    let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
-                    request = request.header("Authorization", format!("Basic {auth}"));
-                }
-
-                trace!("Building request");
-                let request = request.body(Empty::new())?;
-                trace!("Sending request");
-                let response = self.client.request(request).await?;
-                trace!("Received response");
-                let body_bytes = response.into_body().collect().await?.to_bytes();
-                trace!("Received body");
-                String::from_utf8(body_bytes.to_vec())?
+                self.fetch_with_redirects(url).await?
             }
             url if url.starts_with("file://") => {
                 // Handle file:// URLs properly, especially on Windows
@@ -393,6 +369,87 @@ impl SdnNodeInner {
             }
         };
         Ok(NetworkConfig::try_from(body.as_str())?)
+    }
+
+    async fn fetch_with_redirects(&self, url: &str) -> Result<String, Error> {
+        let mut current_url = url.to_string();
+        let mut redirect_count = 0;
+        const MAX_REDIRECTS: usize = 5;
+
+        loop {
+            if redirect_count >= MAX_REDIRECTS {
+                return Err(Error::ConfigParseError {
+                    reason: format!("Too many redirects (max {MAX_REDIRECTS}): {url}"),
+                });
+            }
+
+            // parse URL and extract auth info if present
+            let parsed_url = url::Url::parse(&current_url)?;
+            trace!("Parsed URL: {}", parsed_url);
+            let mut request = Request::builder()
+                .uri(parsed_url.as_str())
+                .method("GET")
+                .header("Connection", "close")
+                .header("drasyl-pk", self.id.pk.to_string());
+
+            // add basic auth header if username and password are present
+            let username = parsed_url.username();
+            let password = parsed_url.password();
+            if !username.is_empty() && password.is_some() {
+                trace!("Adding basic auth header: {}", username);
+                let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
+                request = request.header("Authorization", format!("Basic {auth}"));
+            }
+
+            trace!("Building request");
+            let request = request.body(Empty::new())?;
+            trace!("Sending request");
+            let response = self.client.request(request).await?;
+            trace!("Received response");
+
+            let status = response.status();
+
+            // Handle redirects
+            if status.is_redirection() {
+                if let Some(location) = response.headers().get("Location") {
+                    if let Ok(location_str) = location.to_str() {
+                        redirect_count += 1;
+                        trace!(
+                            "Following redirect {}: {} -> {}",
+                            redirect_count, current_url, location_str
+                        );
+
+                        // Handle relative URLs
+                        if location_str.starts_with("http://")
+                            || location_str.starts_with("https://")
+                        {
+                            current_url = location_str.to_string();
+                        } else {
+                            // Resolve relative URL
+                            let base_url = url::Url::parse(&current_url)?;
+                            let redirect_url = base_url.join(location_str)?;
+                            current_url = redirect_url.to_string();
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            // Check for success
+            if !status.is_success() {
+                return Err(Error::ConfigParseError {
+                    reason: format!(
+                        "HTTP request failed with status {}: {}",
+                        status,
+                        status.canonical_reason().unwrap_or("Unknown")
+                    ),
+                });
+            }
+
+            let body_bytes = response.into_body().collect().await?.to_bytes();
+            trace!("Received body");
+            return Ok(String::from_utf8(body_bytes.to_vec())?);
+        }
     }
 
     pub(crate) async fn shutdown(&self) {
