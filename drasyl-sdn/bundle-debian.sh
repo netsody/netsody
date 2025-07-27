@@ -70,24 +70,35 @@ WantedBy=multi-user.target
 EOF
 
 # Add maintainer scripts for systemd
-# postinst: enable & start service on install
+# postinst: enable & start service on install/update
 cat > "${DEBIAN_DIR}/postinst" << 'EOF'
 #!/bin/sh
 set -e
+
+# Always reload systemd daemon and restart service on configure
 if [ "$1" = "configure" ]; then
     systemctl daemon-reload
-    systemctl enable drasyl.service
-    systemctl start drasyl.service
+    
+    # Check if service is already enabled
+    if systemctl is-enabled drasyl.service >/dev/null 2>&1; then
+        # Service exists, restart it (for updates)
+        systemctl restart drasyl.service || systemctl start drasyl.service
+    else
+        # First installation, enable and start service
+        systemctl enable drasyl.service
+        systemctl start drasyl.service
+    fi
 
-    # Generate API auth token if not present
+    # Create auth token only on first installation
     if [ ! -f /etc/drasyl/auth.token ]; then
         mkdir -p /etc/drasyl
         chmod 600 /etc/drasyl
         TOKEN=$(openssl rand -hex 12)
         echo "$TOKEN" > /etc/drasyl/auth.token
         chmod 600 /etc/drasyl/auth.token
+    fi
 
-        cat <<-MSG
+    cat <<-MSG
 
 An API auth token has been created at:
   /etc/drasyl/auth.token
@@ -98,7 +109,6 @@ To use drasyl you must copy it into your home directory:
   chmod 600 ~/.drasyl/auth.token
 
 MSG
-    fi
 fi
 EOF
 chmod 0755 "${DEBIAN_DIR}/postinst"
