@@ -281,7 +281,7 @@ impl TryFrom<&str> for NetworkConfig {
             }
 
             // check if hostname is valid
-            if !is_valid_hostname(&node.hostname) {
+            if !is_valid_hostname(&node.hostname.to_lowercase()) {
                 return Err(network::ConfigError::HostnameInvalid(node.hostname.clone()));
             }
         }
@@ -326,7 +326,9 @@ where
                 node.ip
             )));
         }
-        if !hostname_set.insert(node.hostname) {
+        // Use to_lowercase() to ensure case-insensitive hostname uniqueness
+        // This prevents conflicts between hostnames like "Node-1" and "node-1"
+        if !hostname_set.insert(node.hostname.to_lowercase()) {
             return Err(serde::de::Error::custom(format!(
                 "duplicate hostname: {}",
                 node.ip
@@ -967,6 +969,29 @@ mod tests {
     }
 
     #[test]
+    fn test_duplicate_hostname_case_insensitive() {
+        let toml_str = r#"
+            network = "192.168.1.0/24"
+
+            [[node]]
+            pk       = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            ip       = "192.168.1.1"
+            hostname = "Node-1"
+
+            [[node]]
+            pk       = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+            ip       = "192.168.1.2"
+            hostname = "node-1"
+        "#;
+
+        let result = NetworkConfig::try_from(toml_str);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, network::ConfigError::TomlError(_)));
+        assert!(err.to_string().contains("duplicate hostname"));
+    }
+
+    #[test]
     fn test_duplicate_route() {
         let toml_str = r#"
             network = "192.168.1.0/24"
@@ -1147,7 +1172,6 @@ mod tests {
             ("host--name", "valid hostname with double hyphen"),
             ("-hostname", "hostname starting with hyphen"),
             ("hostname-", "hostname ending with hyphen"),
-            ("HostName", "hostname with uppercase letters"),
             ("host.name", "hostname with dot"),
             ("host_name", "hostname with underscore"),
             (&long_hostname, "hostname too long"),
