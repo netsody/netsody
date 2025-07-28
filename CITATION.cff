@@ -1,0 +1,36 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: drasyl - secure, software-defined overlay networks, connecting all your devices
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Heiko
+    family-names: Bornholdt
+    orcid: 'https://orcid.org/0000-0003-0013-7966'
+    affiliation: University of Hamburg
+    email: heiko.bornholdt@uni-hamburg.de
+  - given-names: Kevin
+    family-names: Röbert
+    email: kevin.roebert@uni-hamburg.de
+    affiliation: University of Hamburg
+    orcid: 'https://orcid.org/0009-0006-5377-6541'
+repository-code: 'https://github.com/drasyl/drasyl-rs'
+url: 'https://drasyl.org'
+abstract: >-
+  drasyl provides secure, software-defined overlay networks, connecting all your devices.
+keywords:
+  - rust
+  - mesh-networks
+  - nat-traversal
+  - p2p
+  - vpn
+  - sdn
+  - overlay-network
+  - zero-trust-access-network
+license: MIT
+version: 0.1.0
+date-released: '2025-07-29'
