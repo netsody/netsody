@@ -192,7 +192,7 @@ impl SendHandle {
                 ),
             })
         } else {
-            unreachable!()
+            return Err(Error::RecipientIsSuperPeer(recipient));
         }
     }
 
