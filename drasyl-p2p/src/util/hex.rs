@@ -92,4 +92,17 @@ mod tests {
             "ab7a1654d463f9986530bed00569cc895697827b802153b8ef1598579713045f"
         );
     }
+
+    #[test]
+    fn test_hex_to_bytes_invalid_length() {
+        assert!(matches!(hex_to_bytes::<2>("abc"), Err(HexError::InvalidLength)));
+    }
+
+    #[test]
+    fn test_hex_to_bytes_invalid_character() {
+        assert!(matches!(
+            hex_to_bytes::<1>("g1"),
+            Err(HexError::InvalidCharacter(b'g'))
+        ));
+    }
 }
