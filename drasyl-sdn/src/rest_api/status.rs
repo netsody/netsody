@@ -48,6 +48,8 @@ impl RestApiServer {
             }
         }
 
+        let mtu = sdn_node.inner.mtu;
+
         // networks
         trace!("Locking networks to get status");
         let mut networks = HashMap::new();
@@ -65,6 +67,7 @@ impl RestApiServer {
             default_route,
             super_peers,
             node_peers,
+            mtu,
             networks,
         };
         trace!("Status request completed");
@@ -88,6 +91,7 @@ pub struct Status {
     super_peers: HashMap<PubKey, SuperPeerStatus>,
     node_peers: HashMap<PubKey, NodePeerStatus>,
     // drasyl-sdn
+    pub mtu: u16,
     pub networks: HashMap<Url, NetworkStatus>,
 }
 
@@ -154,7 +158,7 @@ impl fmt::Display for Status {
         for super_peer in &self.opts.super_peers {
             writeln!(f, "    {super_peer}")?;
         }
-        writeln!(f, "  MTU: {}", self.opts.mtu)?;
+        writeln!(f, "  Network MTU: {}", self.opts.mtu)?;
         writeln!(f, "  Process UNITEs: {}", self.opts.process_unites)?;
         writeln!(
             f,
@@ -190,6 +194,7 @@ impl fmt::Display for Status {
                     .unwrap_or(&"None".to_string())
             )?;
         }
+        writeln!(f, "  TUN MTU: {}", self.mtu)?;
         writeln!(f)?;
 
         // peers list

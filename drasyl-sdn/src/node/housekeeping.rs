@@ -4,9 +4,6 @@ use crate::node::Error;
 use crate::node::inner::SdnNodeInner;
 use crate::node::inner::is_drasyl_control_packet;
 use drasyl::identity::PubKey;
-use drasyl::message::ARM_HEADER_LEN;
-use drasyl::message::LONG_HEADER_LEN;
-use drasyl::message::SHORT_HEADER_LEN;
 use drasyl::node::SendHandle;
 use drasyl::util;
 use etherparse::Ipv4HeaderSlice;
@@ -438,15 +435,7 @@ impl SdnNodeInner {
         // create tun device
         let cancellation_token = CancellationToken::new();
         // options
-        let arm_messages = util::get_env("ARM_MESSAGES", true);
-        let mtu = util::get_env(
-            "MTU",
-            if arm_messages {
-                1472 - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-            } else {
-                1472 - 4 /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-            } as u16,
-        );
+        let mtu = inner.mtu;
 
         // create tun device
         trace!("Create TUN device");
@@ -567,16 +556,8 @@ impl SdnNodeInner {
         let tun_tx = inner.tun_tx.clone();
 
         // options
-        let arm_messages = util::get_env("ARM_MESSAGES", true);
         let tun_threads = util::get_env("TUN_THREADS", 3);
-        let mtu = util::get_env(
-            "MTU",
-            if arm_messages {
-                1472 - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-            } else {
-                1472 - 4 /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-            } as u16,
-        );
+        let mtu = inner.mtu;
 
         // tun <-> drasyl packet processing
         #[allow(unused_variables)]

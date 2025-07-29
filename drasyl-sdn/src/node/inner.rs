@@ -46,6 +46,7 @@ pub struct SdnNodeInner {
     drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
     pub(crate) config_path: String,
     pub(crate) token_path: String,
+    pub(crate) mtu: u16,
     client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
 }
 
@@ -61,6 +62,7 @@ impl SdnNodeInner {
         drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
         config_path: String,
         token_path: String,
+        mtu: u16,
     ) -> Self {
         let https = HttpsConnectorBuilder::new()
             .with_webpki_roots()
@@ -80,6 +82,7 @@ impl SdnNodeInner {
             drasyl_rx,
             config_path,
             token_path,
+            mtu,
             client: Client::builder(TokioExecutor::new())
                 .pool_max_idle_per_host(0)
                 .build::<_, Empty<Bytes>>(https),
