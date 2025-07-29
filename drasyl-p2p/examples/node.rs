@@ -6,7 +6,6 @@ use std::io::{Write, stdin, stdout};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{Mutex, mpsc};
 
@@ -80,7 +79,6 @@ async fn main() {
 
     tokio::spawn(async move {
         tokio::select! {
-            _ = peers_task(node.clone()) => {},
             _ = node.cancelled() => {},
             _ = recv_task(recv_buf_rx_clone) => {},
         }
@@ -132,14 +130,6 @@ async fn main() {
             }
             last_recipient = recipient;
         }
-    }
-}
-
-async fn peers_task(node: Arc<Node>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(5));
-    loop {
-        interval.tick().await;
-        println!("{}", node.peers_list());
     }
 }
 
