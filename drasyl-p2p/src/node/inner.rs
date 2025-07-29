@@ -46,7 +46,7 @@ impl NodeInner {
         udp_port: u16,
         cancellation_token: CancellationToken,
     ) -> Self {
-        assert!(opts.max_peers.is_power_of_two());
+        assert!(opts.max_peers == 0 || opts.max_peers.is_power_of_two());
 
         let peers = PeersList::new(peers, default_route);
 
@@ -120,7 +120,7 @@ impl NodeInner {
                     }
                     peer
                 } else {
-                    if peers.len() >= self.opts.max_peers as usize {
+                    if self.opts.max_peers != 0 && peers.len() >= self.opts.max_peers as usize {
                         return Err(Error::PeersListCapacityExceeded(self.opts.max_peers));
                     }
 
