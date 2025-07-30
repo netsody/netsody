@@ -1,0 +1,40 @@
+name: drasyl-sp
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        job_name:
+          - linux-amd64
+
+        include:
+          - job_name: linux-amd64
+            os: ubuntu-22.04
+            path: |
+              target/release/drasyl-sp
+
+    name: Build drasyl-sp on ${{ matrix.job_name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build drasyl-sp
+        run: cargo build --verbose --package drasyl-sp --features prometheus --release
+
+      - name: Upload drasyl-sp artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: drasyl-${{ matrix.job_name }}
+          path: ${{ matrix.path }}
