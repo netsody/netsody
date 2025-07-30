@@ -1,14 +1,24 @@
 use crate::network::Network;
 use crate::node::Error;
-use drasyl::node::Identity;
+use drasyl::message::{ARM_HEADER_LEN, LONG_HEADER_LEN, SHORT_HEADER_LEN};
+use drasyl::node::{Identity, MTU_DEFAULT};
 use drasyl::util;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de;
 use std::collections::HashMap;
 use std::fs;
-use tracing::trace;
+use tracing::{info, trace};
 use url::Url;
+
+fn default_mtu() -> u16 {
+    let arm_messages = util::get_env("ARM_MESSAGES", true);
+    (if arm_messages {
+        MTU_DEFAULT - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
+    } else {
+        MTU_DEFAULT - 4 /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
+    }) as u16
+}
 
 #[cfg(feature = "prometheus")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -29,6 +39,8 @@ pub struct SdnNodeConfig {
         serialize_with = "serialize_networks"
     )]
     pub networks: HashMap<Url, Network>,
+    #[serde(default = "default_mtu")]
+    pub mtu: u16,
     #[cfg(feature = "prometheus")]
     pub prometheus: Option<PrometheusConfig>,
 }
@@ -38,6 +50,7 @@ impl SdnNodeConfig {
         Self {
             id,
             networks: Default::default(),
+            mtu: default_mtu(),
             #[cfg(feature = "prometheus")]
             prometheus: Default::default(),
         }
@@ -63,7 +76,7 @@ impl SdnNodeConfig {
         let config = if std::path::Path::new(path).exists() {
             Self::load(path)?
         } else {
-            trace!(
+            info!(
                 "Config file does not exist, generating new one (this might take some time due to the PoW)"
             );
 

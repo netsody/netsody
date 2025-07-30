@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "drasyl",
+    "drasyl-p2p",
     "drasyl-sdn"
 , "drasyl-sp", "drasyl-bench", "drasyl-ui"]
 resolver = "3"
@@ -8,7 +8,7 @@ resolver = "3"
 [workspace.dependencies]
 tracing = { version = "0.1.41"}
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "fmt", "ansi", "time", "local-time"] }
-tokio = { version = "1.43.0", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+tokio = { version = "1.46.1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
 tokio-util = "0.7.15"
 ahash = "0.8.12"
 thiserror = "2.0.12"
@@ -17,7 +17,7 @@ derive_builder = "0.20.2"
 papaya = "0.2.1"
 lazy_static = "1.5.0"
 hyper = { version = "1.6" }
-hyper-util = { version = "0.1.15" }
+hyper-util = { version = "0.1.16" }
 bytes = "1.10.1"
 arc-swap = "1.7.1"
 futures = "0.3.31"

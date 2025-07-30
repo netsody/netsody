@@ -2,13 +2,16 @@ use crate::glow_tools::GlutinWindowContext;
 use crate::user_event::UserEvent;
 use arboard::Clipboard;
 use drasyl_sdn::rest_api;
-use drasyl_sdn::rest_api::{Status, mask_url};
+use drasyl_sdn::rest_api::{NetworkStatus, Status, mask_url};
+use rest_api::RestApiClient;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::Sender;
 use tracing::{trace, warn};
 use tray_icon::menu::accelerator::{Accelerator, CMD_OR_CTRL, Code};
-use tray_icon::menu::{Menu, MenuId, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{
+    CheckMenuItem, Menu, MenuId, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu,
+};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 use url::Url;
 use winit::application::ApplicationHandler;
@@ -28,6 +31,7 @@ pub struct App {
     egui_glow: Option<egui_glow::EguiGlow>,
     config_url: String,
     repaint_delay: std::time::Duration,
+    token_path: String,
 }
 
 impl App {
@@ -36,6 +40,7 @@ impl App {
         proxy: winit::event_loop::EventLoopProxy<UserEvent>,
         rt: Arc<Runtime>,
         clipboard: Clipboard,
+        token_path: String,
     ) -> Self {
         Self {
             sender,
@@ -50,6 +55,7 @@ impl App {
             egui_glow: None,
             config_url: String::new(),
             repaint_delay: std::time::Duration::MAX,
+            token_path,
         }
     }
 
@@ -92,8 +98,59 @@ impl App {
                                 let config_url_str = id.0.split_once(' ').unwrap().1;
 
                                 if let Ok(config_url) = Url::parse(config_url_str) {
-                                    if status.networks.contains_key(&config_url) {
+                                    if let Some(network) = status.networks.get(&config_url) {
                                         existing_networks.push(config_url_str.to_string());
+
+                                        submenu.set_text(Self::network_display_text(
+                                            &config_url,
+                                            network,
+                                        ));
+
+                                        submenu.items().iter_mut().for_each(|kind| {
+                                            if let MenuItemKind::MenuItem(item) = kind {
+                                                let id = item.id();
+                                                match id {
+                                                    id if id.0.starts_with("network_ip ") => {
+                                                        let tabs = if cfg!(target_os = "linux") {
+                                                            "\t\t\t"
+                                                        } else {
+                                                            "\t\t"
+                                                        };
+                                                        item.set_text(format!(
+                                                            "IP:{tabs}  {0}",
+                                                            Self::network_ip(network)
+                                                        ));
+                                                    }
+                                                    id if id.0.starts_with("network_device ") => {
+                                                        item.set_text(format!(
+                                                            "Device:\t  {0}",
+                                                            network.tun_device.clone().map_or(
+                                                                "None".to_string(),
+                                                                |tun_device| tun_device.to_string()
+                                                            )
+                                                        ));
+                                                    }
+                                                    id if id.0.starts_with("network_enabled ") => {
+                                                        item.set_text(format!(
+                                                            "Device:\t  {0}",
+                                                            network.tun_device.clone().map_or(
+                                                                "None".to_string(),
+                                                                |tun_device| tun_device.to_string()
+                                                            )
+                                                        ));
+                                                    }
+                                                    _ => {}
+                                                }
+                                            } else if let MenuItemKind::Check(item) = kind {
+                                                let id = item.id();
+                                                match id {
+                                                    id if id.0.starts_with("network_enabled ") => {
+                                                        item.set_checked(!network.disabled);
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        });
                                     } else {
                                         positions_to_delete.push(position);
                                     }
@@ -146,45 +203,25 @@ impl App {
         // add items for new networks
         if let Ok(status) = result {
             let mut position = 0;
-            for config_url in status.networks.keys() {
+            for (config_url, network) in &status.networks {
                 let config_url_str = config_url.to_string();
 
                 if existing_networks.contains(&config_url_str) {
                     continue;
                 }
 
-                let display_text = mask_url(config_url);
-                // On Linux, underscores need to be masked as they are interpreted as mnemonics
-                let display_text = if cfg!(target_os = "linux") {
-                    let mut result = String::with_capacity(display_text.len());
-                    let chars: Vec<_> = display_text.chars().collect();
-
-                    for i in 0..chars.len() {
-                        if chars[i] == '_'
-                             && (i == 0 || chars[i - 1] != '_') // no previous underscore
-                             && (i + 1 == chars.len() || chars[i + 1] != '_')
-                        // no next underscore
-                        {
-                            result.push_str("__"); // standalone -> double
-                        } else {
-                            result.push(chars[i]);
-                        }
-                    }
-                    result
-                } else {
-                    display_text
-                };
+                let display_text = Self::network_display_text(config_url, network);
                 let submenu =
                     Submenu::with_id(format!("network {config_url_str}"), display_text, true);
 
                 // copy action
-                let copy = MenuItem::with_id(
+                let item = MenuItem::with_id(
                     format!("copy_network {config_url_str}"),
-                    "Copy URL",
+                    "Copy Network URL",
                     true,
                     None,
                 );
-                if let Err(e) = submenu.append(&copy) {
+                if let Err(e) = submenu.append(&item) {
                     panic!("{e:?}");
                 }
 
@@ -194,14 +231,65 @@ impl App {
                     panic!("{e:?}");
                 }
 
+                // IP
+                let tabs = if cfg!(target_os = "linux") {
+                    "\t\t\t"
+                } else {
+                    "\t\t"
+                };
+                let item = MenuItem::with_id(
+                    format!("network_ip {config_url_str}"),
+                    format!("IP:{tabs}  {0}", Self::network_ip(network)),
+                    true,
+                    None,
+                );
+                if let Err(e) = submenu.append(&item) {
+                    panic!("{e:?}");
+                }
+
+                // TUN device
+                let item = MenuItem::with_id(
+                    format!("network_device {config_url_str}"),
+                    format!(
+                        "Device:\t  {0}",
+                        network
+                            .tun_device
+                            .clone()
+                            .map_or("None".to_string(), |tun_device| tun_device.to_string())
+                    ),
+                    true,
+                    None,
+                );
+                if let Err(e) = submenu.append(&item) {
+                    panic!("{e:?}");
+                }
+
+                // separator
+                trace!("Adding separator");
+                if let Err(e) = submenu.append(&PredefinedMenuItem::separator()) {
+                    panic!("{e:?}");
+                }
+
+                // enable/disable action
+                let item = CheckMenuItem::with_id(
+                    format!("network_enabled {config_url_str}"),
+                    "Enabled",
+                    true,
+                    !network.disabled,
+                    None,
+                );
+                if let Err(e) = submenu.append(&item) {
+                    panic!("{e:?}");
+                }
+
                 // remove action
-                let remove = MenuItem::with_id(
+                let item = MenuItem::with_id(
                     format!("remove_network {config_url_str}"),
                     "Remove",
                     true,
                     None,
                 );
-                if let Err(e) = submenu.append(&remove) {
+                if let Err(e) = submenu.append(&item) {
                     panic!("{e:?}");
                 }
 
@@ -211,6 +299,83 @@ impl App {
                 position += 1;
             }
         }
+    }
+
+    fn network_display_text(config_url: &Url, network: &NetworkStatus) -> String {
+        let mut display_text = match network.name.as_ref() {
+            Some(name) => Self::sanitize_menu_text(name),
+            None => mask_url(config_url),
+        };
+
+        // On Linux, underscores need to be masked as they are interpreted as mnemonics
+        if cfg!(target_os = "linux") {
+            let mut result = String::with_capacity(display_text.len());
+            let chars: Vec<_> = display_text.chars().collect();
+
+            for i in 0..chars.len() {
+                if chars[i] == '_'
+                    && (i == 0 || chars[i - 1] != '_') // no previous underscore
+                    && (i + 1 == chars.len() || chars[i + 1] != '_')
+                // no next underscore
+                {
+                    result.push_str("__"); // standalone -> double
+                } else {
+                    result.push(chars[i]);
+                }
+            }
+            display_text = result;
+        }
+        display_text
+    }
+
+    fn network_ip(network: &NetworkStatus) -> String {
+        match (network.subnet, network.ip) {
+            (Some(subnet), Some(ip)) => {
+                format!("{0}/{1}", ip, subnet.prefix_len())
+            }
+            _ => "None".to_string(),
+        }
+    }
+
+    /// Sanitizes text for use in menu items by only allowing safe characters
+    pub(crate) fn sanitize_menu_text(text: &str) -> String {
+        let mut sanitized = String::with_capacity(text.len());
+
+        for ch in text.chars() {
+            // Whitelist: Only allow explicitly safe characters
+            match ch {
+                // Basic Latin letters and numbers
+                'a'..='z' | 'A'..='Z' | '0'..='9' => {
+                    sanitized.push(ch);
+                }
+                // Common punctuation and symbols that are safe for menu display
+                ' ' | '-' | '_' | '.' | ',' | ':' | '(' | ')' | '[' | ']' | '!' | '?' | '&' => {
+                    sanitized.push(ch);
+                }
+                // German umlauts and special characters (common in German network names)
+                'ä' | 'ö' | 'ü' | 'Ä' | 'Ö' | 'Ü' | 'ß' => {
+                    sanitized.push(ch);
+                }
+                // All other characters are ignored/removed
+                _ => {
+                    // Skip any character not in the whitelist
+                }
+            }
+        }
+
+        // Trim whitespace and limit length
+        sanitized = sanitized.trim().to_string();
+        if sanitized.len() > 100 {
+            sanitized.truncate(97);
+            sanitized.push_str("...");
+        }
+
+        // If sanitization resulted in empty string, provide a fallback
+        if sanitized.is_empty() {
+            sanitized = "Unnamed Network".to_string();
+        }
+
+        sanitized
     }
 
     pub(crate) fn new_tray_icon() -> (TrayIcon, Menu) {
@@ -249,12 +414,6 @@ impl App {
             panic!("{e:?}");
         }
 
-        // separator
-        trace!("Adding separator");
-        if let Err(e) = menu.append(&PredefinedMenuItem::separator()) {
-            panic!("{e:?}");
-        }
-
         // add network
         trace!("Adding 'add network' item");
         let item = MenuItem::with_id(
@@ -273,6 +432,12 @@ impl App {
             panic!("{e:?}");
         }
 
+        // separator
+        trace!("Adding separator");
+        if let Err(e) = menu.append(&PredefinedMenuItem::separator()) {
+            panic!("{e:?}");
+        }
+
         // add about
         let about = Submenu::with_id("about", "About", true);
         if let Err(e) = menu.append(&about) {
@@ -282,34 +447,19 @@ impl App {
         // ui version
         trace!("Adding UI version item");
 
-        // extract version information from build-time environment variables
-        let version = env!("CARGO_PKG_VERSION");
-        let git_commit = env!("VERGEN_GIT_SHA");
-        let git_dirty = env!("VERGEN_GIT_DIRTY");
-
-        // combine git commit hash with dirty flag
-        let full_commit = if git_dirty == "true" {
-            format!("{git_commit}-dirty")
-        } else {
-            git_commit.to_string()
-        };
+        let version = Self::version_ui();
 
         let tabs = if cfg!(target_os = "linux") {
-            "\t\t\t  "
+            "\t\t\t"
         } else {
-            "\t\t  "
+            "\t\t"
         };
-        let item = MenuItem::with_id(
-            "version_ui",
-            format!("UI:{tabs}{version} ({full_commit})"),
-            false,
-            None,
-        );
+        let item = MenuItem::with_id("version_ui", format!("UI:{tabs}  {version}"), true, None);
         if let Err(e) = about.append(&item) {
             panic!("{e:?}");
         }
 
-        let item = MenuItem::with_id("version_daemon", "Daemon:", false, None);
+        let item = MenuItem::with_id("version_daemon", "Daemon:", true, None);
         if let Err(e) = about.append(&item) {
             panic!("{e:?}");
         }
@@ -355,6 +505,22 @@ impl App {
         }
 
         menu
+    }
+
+    fn version_ui() -> String {
+        // extract version information from build-time environment variables
+        let version = env!("CARGO_PKG_VERSION");
+        let git_commit = env!("VERGEN_GIT_SHA");
+        let git_dirty = env!("VERGEN_GIT_DIRTY");
+
+        // combine git commit hash with dirty flag
+        let full_commit = if git_dirty == "true" {
+            format!("{git_commit}-dirty")
+        } else {
+            git_commit.to_string()
+        };
+        let version = format!("{version} ({full_commit})");
+        version
     }
 
     fn load_icon_from_bytes(icon_bytes: &[u8]) -> tray_icon::Icon {
@@ -586,7 +752,7 @@ impl ApplicationHandler<UserEvent> for App {
                         trace!("Removing network with URL: {}", url);
 
                         self.rt.block_on(async {
-                            let client = rest_api::RestApiClient::new();
+                            let client = RestApiClient::new(self.token_path.clone());
                             match client.remove_network(url).await {
                                 Ok(_) => {
                                     trace!("Removed network: {url}");
@@ -597,21 +763,142 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                         });
                     }
+                    id if id.0.starts_with("network_enabled ") => {
+                        let url = id.0.split_once(' ').unwrap().1;
+
+                        trace!("Enable/Disable network with URL: {}", url);
+
+                        if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
+                            if let Some(network) = status.networks.get(&Url::parse(url).unwrap()) {
+                                if network.disabled {
+                                    self.rt.block_on(async {
+                                        let client = RestApiClient::new(self.token_path.clone());
+                                        match client.enable_network(url).await {
+                                            Ok(_) => {
+                                                trace!("Enabled network: {url}");
+                                            }
+                                            Err(e) => {
+                                                trace!("Failed to enable network: {}", e);
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    self.rt.block_on(async {
+                                        let client = RestApiClient::new(self.token_path.clone());
+                                        match client.disable_network(url).await {
+                                            Ok(_) => {
+                                                trace!("Disabled network: {url}");
+                                            }
+                                            Err(e) => {
+                                                trace!("Failed to disable network: {}", e);
+                                            }
+                                        }
+                                    });
+                                }
+                            } else {
+                                trace!("Network not found in status");
+                            }
+                        } else {
+                            trace!("No status available");
+                        }
+                    }
                     id if id.0.starts_with("copy_network ") => {
                         let url = id.0.split_once(' ').unwrap().1;
 
                         trace!("Copy network URL: {}", url);
 
                         if let Err(e) = self.clipboard.set_text(url) {
-                            warn!("Failed to network URL to clipboard: {}", e);
+                            warn!("Failed to copy network URL to clipboard: {}", e);
                         } else {
                             trace!("Copied network URL to clipboard: {}", url);
+                        }
+                    }
+                    id if id.0.starts_with("network_ip ") => {
+                        let url = id.0.split_once(' ').unwrap().1;
+                        trace!("Copy network IP for network: {}", url);
+
+                        if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
+                            if let Some(network) = status.networks.get(&Url::parse(url).unwrap()) {
+                                let ip = Self::network_ip(network);
+
+                                if let Err(e) = self.clipboard.set_text(ip) {
+                                    warn!("Failed to copy network IP to clipboard: {}", e);
+                                } else {
+                                    trace!("Copied network IP to clipboard: {}", url);
+                                }
+                            } else {
+                                trace!("Network not found in status");
+                            }
+                        } else {
+                            trace!("No status available");
+                        }
+                    }
+                    id if id.0.starts_with("network_device ") => {
+                        let url = id.0.split_once(' ').unwrap().1;
+                        trace!("Copy network TUN device for network: {}", url);
+
+                        if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
+                            if let Some(network) = status.networks.get(&Url::parse(url).unwrap()) {
+                                if let Some(tun_device) = network.tun_device.as_ref() {
+                                    if let Err(e) = self.clipboard.set_text(tun_device) {
+                                        warn!(
+                                            "Failed to copy network TUN device to clipboard: {}",
+                                            e
+                                        );
+                                    } else {
+                                        trace!("Copied network TUN device to clipboard: {}", url);
+                                    }
+                                } else {
+                                    trace!("Network has no TUN device");
+                                }
+                            } else {
+                                trace!("Network not found in status");
+                            }
+                        } else {
+                            trace!("No status available");
                         }
                     }
                     id if id == MenuId::new("website") => {
                         trace!("Website item clicked");
                         if let Err(e) = webbrowser::open("https://drasyl.org") {
                             warn!("Failed to open Website: {}", e);
+                        }
+                    }
+                    id if id == MenuId::new("version_ui") => {
+                        let version = Self::version_ui();
+                        trace!("Copy UI version: {}", version);
+
+                        if let Err(e) = self.clipboard.set_text(version.clone()) {
+                            warn!("Failed to copy UI version to clipboard: {}", e);
+                        } else {
+                            trace!("Copied UI version to clipboard: {}", version);
+                        }
+                    }
+                    id if id == MenuId::new("version_daemon") => {
+                        let version = if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
+                            format!(
+                                "{0} ({1})",
+                                status.version_info.version,
+                                status.version_info.full_commit()
+                            )
+                        } else {
+                            "None".to_string()
+                        };
+
+                        trace!("Copy daemon version: {}", version);
+
+                        if let Err(e) = self.clipboard.set_text(version.clone()) {
+                            warn!("Failed to copy daemon version to clipboard: {}", e);
+                        } else {
+                            trace!("Copied daemon version to clipboard: {}", version);
                         }
                     }
                     id if id == MenuId::new("github") => {
@@ -633,7 +920,7 @@ impl ApplicationHandler<UserEvent> for App {
                 trace!("Adding network with URL: {}", url);
 
                 self.rt.block_on(async {
-                    let client = rest_api::RestApiClient::new();
+                    let client = RestApiClient::new(self.token_path.clone());
                     match client.add_network(&url).await {
                         Ok(_) => {
                             trace!("Added network: {url}");

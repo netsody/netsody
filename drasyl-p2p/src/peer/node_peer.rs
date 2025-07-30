@@ -269,7 +269,7 @@ impl NodePeer {
 
     /// Clear application traffic counters.
     pub(crate) fn clear_app_tx_rx(&self) {
-        trace!("Clear short ids");
+        trace!("Clear application counters");
         self.app_tx.store(0, SeqCst);
         self.app_rx.store(0, SeqCst);
     }

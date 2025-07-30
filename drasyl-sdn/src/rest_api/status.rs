@@ -33,6 +33,7 @@ impl RestApiServer {
         let opts = sdn_node.drasyl_node().opts().clone();
 
         // peers
+        trace!("Getting peers");
         let default_route = *sdn_node.drasyl_node().peers_list().default_route();
         let mut super_peers = HashMap::new();
         let mut node_peers = HashMap::new();
@@ -47,11 +48,18 @@ impl RestApiServer {
             }
         }
 
+        let mtu = sdn_node.inner.mtu;
+
         // networks
+        trace!("Locking networks to get status");
         let mut networks = HashMap::new();
-        for (config_url, network) in &*sdn_node.inner.networks.lock().await {
-            networks.insert(config_url.clone(), NetworkStatus::new(network));
+        {
+            let guard = sdn_node.inner.networks.lock().await;
+            for (config_url, network) in &*guard {
+                networks.insert(config_url.clone(), NetworkStatus::new(network));
+            }
         }
+        trace!("Networks retrieved");
 
         let status = Status {
             version_info: VersionInfo::new(),
@@ -59,8 +67,11 @@ impl RestApiServer {
             default_route,
             super_peers,
             node_peers,
+            mtu,
             networks,
         };
+        trace!("Status request completed");
+
         Json(status)
     }
 }
@@ -80,6 +91,7 @@ pub struct Status {
     super_peers: HashMap<PubKey, SuperPeerStatus>,
     node_peers: HashMap<PubKey, NodePeerStatus>,
     // drasyl-sdn
+    pub mtu: u16,
     pub networks: HashMap<Url, NetworkStatus>,
 }
 
@@ -146,7 +158,7 @@ impl fmt::Display for Status {
         for super_peer in &self.opts.super_peers {
             writeln!(f, "    {super_peer}")?;
         }
-        writeln!(f, "  MTU: {}", self.opts.mtu)?;
+        writeln!(f, "  Network MTU: {}", self.opts.mtu)?;
         writeln!(f, "  Process UNITEs: {}", self.opts.process_unites)?;
         writeln!(
             f,
@@ -182,6 +194,7 @@ impl fmt::Display for Status {
                     .unwrap_or(&"None".to_string())
             )?;
         }
+        writeln!(f, "  TUN MTU: {}", self.mtu)?;
         writeln!(f)?;
 
         // peers list
@@ -442,12 +455,14 @@ impl fmt::Display for NodePeerStatus {
 
 #[derive(Serialize, Deserialize)]
 pub struct NetworkStatus {
-    subnet: Option<Ipv4Net>,
-    ip: Option<Ipv4Addr>,
+    pub subnet: Option<Ipv4Net>,
+    pub ip: Option<Ipv4Addr>,
+    pub name: Option<String>,
+    pub disabled: bool,
     access_rules: Option<EffectiveAccessRuleList>,
     routes: Option<EffectiveRoutingList>,
     hostnames: Option<HashMap<Ipv4Addr, String>>,
-    tun_device: Option<String>,
+    pub tun_device: Option<String>,
 }
 
 impl NetworkStatus {
@@ -455,6 +470,8 @@ impl NetworkStatus {
         Self {
             subnet: network.state.as_ref().map(|state| state.subnet),
             ip: network.state.as_ref().map(|state| state.ip),
+            name: network.name.clone(),
+            disabled: network.disabled,
             access_rules: network
                 .state
                 .as_ref()
@@ -471,6 +488,14 @@ impl NetworkStatus {
 
 impl fmt::Display for NetworkStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Disabled: {}", self.disabled)?;
+        writeln!(
+            f,
+            "Name: {}",
+            self.name
+                .as_ref()
+                .map_or("None".to_string(), |name| name.to_string())
+        )?;
         writeln!(
             f,
             "Subnet: {}",

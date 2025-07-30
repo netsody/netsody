@@ -2,24 +2,19 @@ use crate::rest_api::error;
 use crate::rest_api::error::Error;
 use crate::rest_api::load_auth_token;
 use bytes::Bytes;
-use drasyl::util;
 use http::Request;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde::{Serialize, de::DeserializeOwned};
 
-pub struct RestApiClient {}
-
-impl Default for RestApiClient {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct RestApiClient {
+    token_path: String,
 }
 
 impl RestApiClient {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(token_path: String) -> Self {
+        Self { token_path }
     }
 
     /// performs a GET request to the REST API
@@ -27,9 +22,10 @@ impl RestApiClient {
     where
         R: DeserializeOwned,
     {
-        let client = Client::builder(TokioExecutor::new()).build_http();
-        let token_file = util::get_env("AUTH_FILE", crate::rest_api::AUTH_FILE_DEFAULT.to_string());
-        let auth_token = load_auth_token(&token_file).map_err(Error::AuthTokenReadFailed)?;
+        let client = Client::builder(TokioExecutor::new())
+            .pool_max_idle_per_host(0)
+            .build_http();
+        let auth_token = load_auth_token(&self.token_path).map_err(Error::AuthTokenReadFailed)?;
 
         let uri = format!("http://localhost:22527{path}")
             .parse::<hyper::Uri>()
@@ -40,6 +36,7 @@ impl RestApiClient {
         let req = Request::builder()
             .method("GET")
             .uri(uri)
+            .header("Connection", "close")
             .header("Authorization", format!("Bearer {auth_token}"))
             .body(Empty::<Bytes>::new())
             .map_err(|e| error::Error::StatusRequestFailed {
@@ -88,9 +85,10 @@ impl RestApiClient {
         T: Serialize,
         R: DeserializeOwned,
     {
-        let client = Client::builder(TokioExecutor::new()).build_http();
-        let token_file = util::get_env("AUTH_FILE", crate::rest_api::AUTH_FILE_DEFAULT.to_string());
-        let auth_token = load_auth_token(&token_file).map_err(Error::AuthTokenReadFailed)?;
+        let client = Client::builder(TokioExecutor::new())
+            .pool_max_idle_per_host(0)
+            .build_http();
+        let auth_token = load_auth_token(&self.token_path).map_err(Error::AuthTokenReadFailed)?;
 
         let uri = format!("http://localhost:22527{path}")
             .parse::<hyper::Uri>()
@@ -106,6 +104,7 @@ impl RestApiClient {
         let req = Request::builder()
             .method("POST")
             .uri(uri)
+            .header("Connection", "close")
             .header("Authorization", format!("Bearer {auth_token}"))
             .header("Content-Type", "application/json")
             .body(Full::new(Bytes::from(body_json)))

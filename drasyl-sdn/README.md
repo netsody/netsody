@@ -1,8 +1,8 @@
 # drasyl-sdn
 
-**drasyl-sdn** provides a secure software-defined overlay network on top of drasyl. It supports both centralized and distributed control planes. The daemon provides membership management through authentication and enables fine-grained access control between nodes. Nodes can be configured as gateways to provide access to external networks via the overlay. Both centralized and distributed control plane architectures are supported. Built on top of the [drasyl](../drasyl) library, all communication is encrypted and routed via the most local physical path available, bypassing typical network barriers such as NATs and stateful firewalls.
+**drasyl-sdn** provides a secure software-defined overlay network on top of drasyl. It supports both centralized and distributed control planes. The daemon provides membership management through authentication and enables fine-grained access control between nodes. Nodes can be configured as gateways to provide access to external networks via the overlay. Both centralized and distributed control plane architectures are supported. Built on top of the [drasyl](../drasyl-p2p) library, all communication is encrypted and routed via the most local physical path available, bypassing typical network barriers such as NATs and stateful firewalls.
 
-To integrate an device into the software-defined overlay network, the drasyl daemon must be running on that device. The daemon handles the secure communication, routing, and access control for the device within the overlay network.
+To integrate a device into the software-defined overlay network, the drasyl daemon must be running on that device. The daemon handles the secure communication, routing, and access control for the device within the overlay network.
 
 ## Development
 
@@ -40,6 +40,7 @@ Example network configuration:
 ```toml
 # Network configuration using Carrier-Grade NAT address space
 network = "100.64.0.0/24"  # /24 subnet for our company network
+name = "Company Network"    # Optional: Human-readable name for the network
 
 # Node definitions
 [[node]]
@@ -92,6 +93,8 @@ This example showcases a network for a small startup with a development and mark
 - Both teams can communicate with each other to coordinate their work
 - Each team has access only to their required infrastructure
 - The marketing team can access legacy hardware through a gateway node
+
+**Note:** The `name` parameter is optional and provides a human-readable identifier for the network. It helps users identify different networks when managing multiple configurations. If not specified, it defaults to `None`.
 
 ### Gateway Configuration
 
@@ -146,9 +149,6 @@ The following configuration assumes that `target/release/drasyl` has been moved 
        <array>
            <string>/usr/local/bin/drasyl</string>
            <string>run</string>
-           <string>NETWORK_URL1</string>
-           <string>NETWORK_URL2</string>
-           <string>...</string>
        </array>
        <key>WorkingDirectory</key>
        <string>/etc/drasyl/</string>
@@ -158,15 +158,6 @@ The following configuration assumes that `target/release/drasyl` has been moved 
        <string>/var/log/drasyl.err.log</string>
        <key>KeepAlive</key>
        <true/>
-       <key>EnvironmentVariables</key>
-       <dict>
-           <key>RUST_LOG</key>
-           <string>debug</string>
-           <key>RUST_BACKTRACE</key>
-           <string>full</string>
-           <key>DRASYL_IDENTITY_FILE</key>
-           <string>drasyl.identity</string>
-       </dict>
    </dict>
    </plist>
    EOF
@@ -199,13 +190,11 @@ The following configuration assumes that `target/release/drasyl` has been moved 
    Wants=network-online.target
 
    [Service]
-   ExecStart=/usr/local/sbin/drasyl run NETWORK_URL1 NETWORK_URL2
+   ExecStart=/usr/local/sbin/drasyl run
    Restart=always
    KillMode=process
    WorkingDirectory=/etc/drasyl/
-   Environment=RUST_LOG=info
    Environment=RUST_BACKTRACE=full
-   Environment=DRASYL_IDENTITY_FILE=drasyl.identity
    Environment=DRASYL_UDP_SOCKETS=1
    Environment=DRASYL_C2D_THREADS=1
    Environment=DRASYL_D2C_THREADS=1

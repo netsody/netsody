@@ -156,7 +156,7 @@ impl SendHandle {
         let peer = if let Some(peer) = peers.get(&recipient) {
             peer
         } else {
-            if peers.len() >= inner.opts.max_peers as usize {
+            if inner.opts.max_peers != 0 && peers.len() >= inner.opts.max_peers as usize {
                 return Err(Error::PeersListCapacityExceeded(inner.opts.max_peers));
             }
 
@@ -192,7 +192,7 @@ impl SendHandle {
                 ),
             })
         } else {
-            unreachable!()
+            return Err(Error::RecipientIsSuperPeer(recipient));
         }
     }
 

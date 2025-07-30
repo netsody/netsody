@@ -168,4 +168,7 @@ pub enum Error {
 
     #[error("Send handle is closed due to node drop")]
     SendHandleClosed,
+
+    #[error("Cannot create send handle for super peer {0}")]
+    RecipientIsSuperPeer(PubKey),
 }

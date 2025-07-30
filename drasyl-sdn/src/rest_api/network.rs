@@ -17,6 +17,16 @@ pub struct RemoveNetworkRequest {
     pub config_url: String,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DisableNetworkRequest {
+    pub config_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct EnableNetworkRequest {
+    pub config_url: String,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct NetworkResponse {
     pub success: bool,
@@ -82,6 +92,64 @@ impl RestApiServer {
             }
         })
     }
+
+    pub(crate) async fn disable_network(
+        State(sdn_node): State<Arc<SdnNode>>,
+        _: AuthToken,
+        Json(request): Json<DisableNetworkRequest>,
+    ) -> Json<NetworkResponse> {
+        trace!("Disable network request received: {:?}", request);
+        match Self::disable_network_internal(sdn_node, &request.config_url).await {
+            Ok(_) => Json(NetworkResponse {
+                success: true,
+                message: format!("Network '{}' disabled successfully", request.config_url),
+            }),
+            Err(e) => Json(NetworkResponse {
+                success: false,
+                message: format!("Failed to disable network '{}': {}", request.config_url, e),
+            }),
+        }
+    }
+
+    pub(crate) async fn enable_network(
+        State(sdn_node): State<Arc<SdnNode>>,
+        _: AuthToken,
+        Json(request): Json<EnableNetworkRequest>,
+    ) -> Json<NetworkResponse> {
+        trace!("Enable network request received: {:?}", request);
+        match Self::enable_network_internal(sdn_node, &request.config_url).await {
+            Ok(_) => Json(NetworkResponse {
+                success: true,
+                message: format!("Network '{}' enabled successfully", request.config_url),
+            }),
+            Err(e) => Json(NetworkResponse {
+                success: false,
+                message: format!("Failed to enable network '{}': {}", request.config_url, e),
+            }),
+        }
+    }
+
+    async fn disable_network_internal(
+        sdn_node: Arc<SdnNode>,
+        config_url: &str,
+    ) -> Result<(), error::Error> {
+        sdn_node.disable_network(config_url).await.map_err(|e| {
+            error::Error::NetworkConfigFetchFailed {
+                reason: e.to_string(),
+            }
+        })
+    }
+
+    async fn enable_network_internal(
+        sdn_node: Arc<SdnNode>,
+        config_url: &str,
+    ) -> Result<(), error::Error> {
+        sdn_node.enable_network(config_url).await.map_err(|e| {
+            error::Error::NetworkConfigFetchFailed {
+                reason: e.to_string(),
+            }
+        })
+    }
 }
 
 impl RestApiClient {
@@ -97,5 +165,19 @@ impl RestApiClient {
             config_url: config_url.to_string(),
         };
         self.post("/network/remove", request).await
+    }
+
+    pub async fn disable_network(&self, config_url: &str) -> Result<NetworkResponse, error::Error> {
+        let request = DisableNetworkRequest {
+            config_url: config_url.to_string(),
+        };
+        self.post("/network/disable", request).await
+    }
+
+    pub async fn enable_network(&self, config_url: &str) -> Result<NetworkResponse, error::Error> {
+        let request = EnableNetworkRequest {
+            config_url: config_url.to_string(),
+        };
+        self.post("/network/enable", request).await
     }
 }

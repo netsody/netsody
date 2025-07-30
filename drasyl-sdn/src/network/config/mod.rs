@@ -18,6 +18,8 @@ use std::net::{IpAddr, Ipv4Addr};
 pub struct NetworkConfig {
     #[serde(rename = "network")]
     pub subnet: Ipv4Net,
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(rename = "node", default, deserialize_with = "deserialize_nodes")]
     pub nodes: HashMap<PubKey, NetworkNode>,
     #[serde(rename = "route", default, deserialize_with = "deserialize_routes")]
@@ -222,19 +224,7 @@ impl NetworkConfig {
     ) -> Result<EffectiveRoutingList, network::ConfigError> {
         let mut physical_route = HashMap::with_hasher(RandomState::new());
         for (dest, route) in &self.routes {
-            let result = if my_pk.eq(&route.gw) {
-                // i am the gateway, nothing to do
-                false
-            } else if !&route.groups.is_empty() {
-                // allowed?
-                let my_groups = &self.nodes.get(my_pk).unwrap().groups;
-                my_groups.iter().any(|g| route.groups.contains(g))
-
-                // TODO check if we can access gateway?
-            } else {
-                true
-            };
-            if result {
+            if has_route_access(my_pk, route, &self.nodes) {
                 if let Some(node) = self.nodes.get(&route.gw) {
                     let route = EffectiveRoute {
                         dest: *dest,
@@ -248,6 +238,25 @@ impl NetworkConfig {
             }
         }
         Ok(EffectiveRoutingList(physical_route))
+    }
+}
+
+/// Checks if a node has access to a route
+fn has_route_access(
+    my_pk: &PubKey,
+    route: &NetworkRoute,
+    nodes: &HashMap<PubKey, NetworkNode>,
+) -> bool {
+    if my_pk.eq(&route.gw) {
+        // i am the gateway, nothing to do
+        false
+    } else if !route.groups.is_empty() {
+        // allowed?
+        let my_groups = &nodes.get(my_pk).unwrap().groups;
+        my_groups.iter().any(|g| route.groups.contains(g))
+        // TODO check if we can access gateway?
+    } else {
+        true
     }
 }
 
@@ -272,7 +281,7 @@ impl TryFrom<&str> for NetworkConfig {
             }
 
             // check if hostname is valid
-            if !is_valid_hostname(&node.hostname) {
+            if !is_valid_hostname(&node.hostname.to_lowercase()) {
                 return Err(network::ConfigError::HostnameInvalid(node.hostname.clone()));
             }
         }
@@ -317,7 +326,9 @@ where
                 node.ip
             )));
         }
-        if !hostname_set.insert(node.hostname) {
+        // Use to_lowercase() to ensure case-insensitive hostname uniqueness
+        // This prevents conflicts between hostnames like "Node-1" and "node-1"
+        if !hostname_set.insert(node.hostname.to_lowercase()) {
             return Err(serde::de::Error::custom(format!(
                 "duplicate hostname: {}",
                 node.ip
@@ -766,6 +777,49 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
+    fn test_network_deserialization_with_name() {
+        let toml_str = r#"
+            network = "192.168.1.0/24"
+            name = "Test Network"
+
+            [[node]]
+            pk       = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            ip       = "192.168.1.1"
+            hostname = "node-1"
+        "#;
+
+        let network = NetworkConfig::try_from(toml_str).unwrap();
+
+        assert_eq!(
+            network.subnet,
+            Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap()
+        );
+        assert_eq!(network.name, Some("Test Network".to_string()));
+        assert_eq!(network.nodes.len(), 1);
+    }
+
+    #[test]
+    fn test_network_deserialization_without_name() {
+        let toml_str = r#"
+            network = "192.168.1.0/24"
+
+            [[node]]
+            pk       = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            ip       = "192.168.1.1"
+            hostname = "node-1"
+        "#;
+
+        let network = NetworkConfig::try_from(toml_str).unwrap();
+
+        assert_eq!(
+            network.subnet,
+            Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap()
+        );
+        assert_eq!(network.name, None);
+        assert_eq!(network.nodes.len(), 1);
+    }
+
+    #[test]
     fn test_network_deserialization() {
         let toml_str = r#"
             network = "192.168.1.0/24"
@@ -801,6 +855,7 @@ mod tests {
             network.subnet,
             Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap()
         );
+        assert_eq!(network.name, None);
         assert_eq!(network.nodes.len(), 2);
         assert_eq!(network.routes.len(), 1);
         assert_eq!(network.policies.len(), 2);
@@ -899,6 +954,29 @@ mod tests {
             pk       = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
             ip       = "192.168.1.1"
             hostname = "node-1"
+
+            [[node]]
+            pk       = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+            ip       = "192.168.1.2"
+            hostname = "node-1"
+        "#;
+
+        let result = NetworkConfig::try_from(toml_str);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, network::ConfigError::TomlError(_)));
+        assert!(err.to_string().contains("duplicate hostname"));
+    }
+
+    #[test]
+    fn test_duplicate_hostname_case_insensitive() {
+        let toml_str = r#"
+            network = "192.168.1.0/24"
+
+            [[node]]
+            pk       = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            ip       = "192.168.1.1"
+            hostname = "Node-1"
 
             [[node]]
             pk       = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
@@ -1094,7 +1172,6 @@ mod tests {
             ("host--name", "valid hostname with double hyphen"),
             ("-hostname", "hostname starting with hyphen"),
             ("hostname-", "hostname ending with hyphen"),
-            ("HostName", "hostname with uppercase letters"),
             ("host.name", "hostname with dot"),
             ("host_name", "hostname with underscore"),
             (&long_hostname, "hostname too long"),
@@ -1120,5 +1197,108 @@ mod tests {
                 _ => assert!(result.is_err(), "{description} should be invalid"),
             }
         }
+    }
+
+    #[test]
+    fn test_has_route_access() {
+        use crate::network::config::{NetworkNode, NetworkRoute, has_route_access};
+        use std::collections::HashMap;
+        use std::str::FromStr;
+
+        // Create test data
+        let node1_pk =
+            PubKey::from_str("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+                .unwrap();
+        let node2_pk =
+            PubKey::from_str("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
+                .unwrap();
+        let node3_pk =
+            PubKey::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .unwrap();
+
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            node1_pk,
+            NetworkNode {
+                pk: node1_pk,
+                ip: Ipv4Addr::new(192, 168, 1, 1),
+                hostname: "node-1".to_string(),
+                groups: HashSet::from(["group1".to_string(), "group2".to_string()]),
+            },
+        );
+        nodes.insert(
+            node2_pk,
+            NetworkNode {
+                pk: node2_pk,
+                ip: Ipv4Addr::new(192, 168, 1, 2),
+                hostname: "node-2".to_string(),
+                groups: HashSet::from(["group2".to_string()]),
+            },
+        );
+        nodes.insert(
+            node3_pk,
+            NetworkNode {
+                pk: node3_pk,
+                ip: Ipv4Addr::new(192, 168, 1, 3),
+                hostname: "node-3".to_string(),
+                groups: HashSet::new(),
+            },
+        );
+
+        // Test 1: Node is the gateway itself - should return false
+        let route_gateway = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::new(),
+        };
+        assert!(!has_route_access(&node1_pk, &route_gateway, &nodes));
+
+        // Test 2: Route without groups - should return true
+        let route_no_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::new(),
+        };
+        assert!(has_route_access(&node2_pk, &route_no_groups, &nodes));
+
+        // Test 3: Route with groups, node belongs to allowed group
+        let route_with_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::from(["group2".to_string()]),
+        };
+        assert!(has_route_access(&node2_pk, &route_with_groups, &nodes));
+
+        // Test 4: Route with groups, node belongs to allowed group (multiple groups)
+        let route_with_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node2_pk,
+            groups: HashSet::from(["group1".to_string(), "group3".to_string()]),
+        };
+        assert!(has_route_access(&node1_pk, &route_with_groups, &nodes));
+
+        // Test 5: Route with groups, node doesn't belong to allowed groups
+        let route_with_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::from(["group3".to_string()]),
+        };
+        assert!(!has_route_access(&node2_pk, &route_with_groups, &nodes));
+
+        // Test 6: Node without groups tries to access route with groups
+        let route_with_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::from(["group1".to_string()]),
+        };
+        assert!(!has_route_access(&node3_pk, &route_with_groups, &nodes));
+
+        // Test 7: Node without groups tries to access route without groups
+        let route_no_groups = NetworkRoute {
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            gw: node1_pk,
+            groups: HashSet::new(),
+        };
+        assert!(has_route_access(&node3_pk, &route_no_groups, &nodes));
     }
 }

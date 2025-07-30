@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::MutexGuard;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 use url::Url;
 
 pub struct SdnNode {
@@ -23,7 +23,7 @@ pub struct SdnNode {
 }
 
 impl SdnNode {
-    pub async fn start(config: SdnNodeConfig) -> Self {
+    pub async fn start(config: SdnNodeConfig, config_path: String, token_path: String) -> Self {
         info!("Start SDN node.");
 
         // start node
@@ -48,6 +48,9 @@ impl SdnNode {
             recv_buf_rx,
             tun_tx.clone(),
             drasyl_rx.clone(),
+            config_path,
+            token_path,
+            config.mtu,
         ));
 
         let mut join_set = JoinSet::new();
@@ -75,6 +78,8 @@ impl SdnNode {
             }
         });
 
+        info!("SDN node started.");
+
         Self { inner }
     }
 
@@ -84,7 +89,8 @@ impl SdnNode {
 
     pub async fn shutdown(&self) {
         info!("Shutdown SDN node.");
-        self.inner.shutdown().await
+        self.inner.shutdown().await;
+        info!("SDN node shut down.");
     }
 
     pub fn drasyl_node(&self) -> Arc<Node> {
@@ -98,6 +104,7 @@ impl SdnNode {
         })?;
 
         // check if network already exists and add it
+        trace!("Locking networks to check if network already exists");
         let mut networks = self.inner.networks.lock().await;
         if networks.contains_key(&url) {
             return Err(Error::NetworkAlreadyExists {
@@ -106,8 +113,11 @@ impl SdnNode {
         }
 
         // add network
+        trace!("Adding network");
         let network = Network {
             config_url: config_url.to_string(),
+            disabled: false,
+            name: None,
             state: None,
             inner: std::sync::Arc::new(crate::network::NetworkInner::default()),
             tun_state: None,
@@ -128,6 +138,7 @@ impl SdnNode {
         })?;
 
         // check if network exists and remove it
+        trace!("Locking networks to check if network exists");
         let mut networks = self.inner.networks.lock().await;
         if !networks.contains_key(&url) {
             return Err(Error::NetworkNotFound {
@@ -136,6 +147,7 @@ impl SdnNode {
         }
 
         // shutdown network
+        trace!("Shutting down network");
         self.inner
             .teardown_network(self.inner.clone(), url.clone(), &mut networks)
             .await;
@@ -148,21 +160,77 @@ impl SdnNode {
         Ok(())
     }
 
+    /// disables a network
+    pub async fn disable_network(&self, config_url: &str) -> Result<(), Error> {
+        let url = Url::parse(config_url).map_err(|e| Error::ConfigParseError {
+            reason: format!("Failed to parse URL: {e}"),
+        })?;
+
+        // check if network exists and disable it
+        trace!("Locking networks to check if network exists");
+        let mut networks = self.inner.networks.lock().await;
+        if !networks.contains_key(&url) {
+            return Err(Error::NetworkNotFound {
+                config_url: config_url.to_string(),
+            });
+        }
+
+        // disable network
+        trace!("Disabling network");
+        if let Some(network) = networks.get_mut(&url) {
+            network.disabled = true;
+        }
+
+        // persist configuration
+        self.save_config(&networks).await?;
+
+        info!("Network '{}' disabled successfully", config_url);
+        Ok(())
+    }
+
+    /// enables a network
+    pub async fn enable_network(&self, config_url: &str) -> Result<(), Error> {
+        let url = Url::parse(config_url).map_err(|e| Error::ConfigParseError {
+            reason: format!("Failed to parse URL: {e}"),
+        })?;
+
+        // check if network exists and enable it
+        trace!("Locking networks to check if network exists");
+        let mut networks = self.inner.networks.lock().await;
+        if !networks.contains_key(&url) {
+            return Err(Error::NetworkNotFound {
+                config_url: config_url.to_string(),
+            });
+        }
+
+        // enable network
+        trace!("Enabling network");
+        if let Some(network) = networks.get_mut(&url) {
+            network.disabled = false;
+        }
+
+        // persist configuration
+        self.save_config(&networks).await?;
+
+        info!("Network '{}' enabled successfully", config_url);
+        Ok(())
+    }
+
     /// saves the current configuration to file
     async fn save_config(
         &self,
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) -> Result<(), Error> {
-        let config_path = util::get_env("CONFIG", "config.toml".to_string());
+        trace!("Saving configuration");
 
         // load current configuration
-        let mut config = SdnNodeConfig::load(&config_path)?;
+        let mut config = SdnNodeConfig::load(&self.inner.config_path)?;
 
         // update networks from inner state
         config.networks = (*networks).clone();
 
         // save configuration
-        config.save(&config_path)
+        config.save(&self.inner.config_path)
     }
 }
 

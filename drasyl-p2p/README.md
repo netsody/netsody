@@ -1,6 +1,6 @@
-# drasyl
+# drasyl-p2p
 
-**drasyl** is a lightweight library for establishing direct, secure peer-to-peer connections in minimal time. Each peer is identified by a public key, enabling location-transparent communication across the network. Typical network barriers such as NATs and stateful firewalls are bypassed automatically. This is achieved through a custom protocol that combines multiple NAT traversal techniques with a modern cryptographic handshake. All communication is secured using [AEGIS](https://datatracker.ietf.org/doc/draft-irtf-cfrg-aegis-aead/), a high-performance authenticated encryption algorithm designed for strong security—even without hardware acceleration.
+**drasyl-p2p** is a lightweight library for establishing direct, secure peer-to-peer connections in minimal time. Each peer is identified by a public key, enabling location-transparent communication across the network. Typical network barriers such as NATs and stateful firewalls are bypassed automatically. This is achieved through a custom protocol that combines multiple NAT traversal techniques with a modern cryptographic handshake. All communication is secured using [AEGIS](https://datatracker.ietf.org/doc/draft-irtf-cfrg-aegis-aead/), a high-performance authenticated encryption algorithm designed for strong security—even without hardware acceleration.
 
 ## Development
 

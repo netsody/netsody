@@ -4,9 +4,6 @@ use crate::node::Error;
 use crate::node::inner::SdnNodeInner;
 use crate::node::inner::is_drasyl_control_packet;
 use drasyl::identity::PubKey;
-use drasyl::message::ARM_HEADER_LEN;
-use drasyl::message::LONG_HEADER_LEN;
-use drasyl::message::SHORT_HEADER_LEN;
 use drasyl::node::SendHandle;
 use drasyl::util;
 use etherparse::Ipv4HeaderSlice;
@@ -14,19 +11,24 @@ use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
 use net_route::Handle;
 use std::collections::HashMap;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::MutexGuard;
 use tokio::task;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, instrument, trace, warn};
 use tun_rs::{AsyncDevice as TunDevice, AsyncDevice, DeviceBuilder as TunDeviceBuilder};
 use url::Url;
 #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
 use {std::fs, std::io::Write};
+
+/// Timeout in milliseconds for fetching network config.
+/// If a config cannot be received within this time, the fetch is considered failed.
+pub(crate) const CONFIG_FETCH_TIMEOUT: u64 = 5_000;
 
 impl SdnNodeInner {
     pub(crate) async fn housekeeping_runner(
@@ -49,16 +51,20 @@ impl SdnNodeInner {
     }
 
     async fn housekeeping(&self, inner: &Arc<SdnNodeInner>) -> Result<(), Error> {
+        trace!("Locking networks to get network keys");
         let urls: Vec<Url> = {
             let networks = inner.networks.lock().await;
             networks.keys().cloned().collect()
         };
+        trace!("Got network keys");
 
+        trace!("Locking networks for housekeeping");
         let mut networks = self.networks.lock().await;
         for url in urls {
             self.housekeeping_network(inner.clone(), url, &mut networks)
                 .await;
         }
+        trace!("Finished housekeeping");
 
         Ok(())
     }
@@ -71,9 +77,23 @@ impl SdnNodeInner {
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         if let Some(network) = networks.get_mut(&config_url) {
-            match Self::fetch_network_config(network.config_url.as_str()).await {
-                Ok(config) => {
+            match timeout(
+                Duration::from_millis(CONFIG_FETCH_TIMEOUT),
+                self.fetch_network_config(network.config_url.as_str()),
+            )
+            .await
+            {
+                Ok(Ok(config)) => {
                     trace!("Network config fetched successfully");
+
+                    // Update network name from config
+                    if network.name != config.name {
+                        trace!(
+                            "Network name changed from '{:?}' to '{:?}'",
+                            network.name, config.name
+                        );
+                    }
+                    network.name = config.name.clone();
 
                     let desired = match config.ip(&inner.id.pk) {
                         Some(desired_ip) => {
@@ -98,6 +118,14 @@ impl SdnNodeInner {
                     let current = network.state.as_ref().cloned();
 
                     match (current, desired) {
+                        (Some(_), _) if network.disabled => {
+                            trace!("Network is disabled. We need to teardown everything.");
+                            self.teardown_network(inner.clone(), config_url, networks)
+                                .await;
+                        }
+                        (_, _) if network.disabled => {
+                            trace!("Network is disabled. Nothing to do.");
+                        }
                         (Some(current), Some(desired)) if current == desired => {
                             trace!("Network is already in desired state");
                         }
@@ -140,8 +168,14 @@ impl SdnNodeInner {
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     warn!("Failed to fetch network config: {}", e);
+                }
+                Err(_) => {
+                    warn!(
+                        "Timeout of {} ms exceeded while attempting to fetch network config hostname",
+                        CONFIG_FETCH_TIMEOUT
+                    );
                 }
             }
         }
@@ -401,15 +435,7 @@ impl SdnNodeInner {
         // create tun device
         let cancellation_token = CancellationToken::new();
         // options
-        let arm_messages = util::get_env("ARM_MESSAGES", true);
-        let mtu = util::get_env(
-            "MTU",
-            if arm_messages {
-                1472 - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-            } else {
-                1472 - 4 /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-            } as u16,
-        );
+        let mtu = inner.mtu;
 
         // create tun device
         trace!("Create TUN device");
@@ -444,6 +470,7 @@ impl SdnNodeInner {
         let child_token = cancellation_token_clone.child_token();
         task::spawn(async move {
             tokio::select! {
+                biased;
                 _ = cancellation_token_clone.cancelled() => {}
                 _ = Self::tun_runner(inner_clone, tun_device_clone, child_token, ip, network_inner_clone) => {
                     error!("TUN runner terminated. Must have crashed.");
@@ -488,7 +515,31 @@ impl SdnNodeInner {
         Some(format!("{}{}", PREFIX, clean_id))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    fn tun_dev_name(network: Ipv4Net) -> Option<String> {
+        const PREFIX: &str = "drasyl";
+        const MAX_TOTAL_LEN: usize = 15;
+        const MAX_ID_LEN: usize = MAX_TOTAL_LEN - PREFIX.len();
+
+        const BASE36: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+        let mut hash = {
+            let mut hasher = DefaultHasher::new();
+            network.hash(&mut hasher);
+            hasher.finish()
+        };
+        let mut buf = ['0'; 15]; // Max IFNAMSIZ-1 sicherstellen
+        let mut i = MAX_ID_LEN;
+
+        while hash != 0 && i > 0 {
+            i -= 1;
+            buf[i] = BASE36[(hash % 36) as usize] as char;
+            hash /= 36;
+        }
+        let clean_id: String = buf[i..MAX_ID_LEN].iter().collect();
+        Some(format!("{} ({})", PREFIX, clean_id))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     #[allow(unused_variables)]
     fn tun_dev_name(network: Ipv4Net) -> Option<String> {
         None
@@ -505,16 +556,8 @@ impl SdnNodeInner {
         let tun_tx = inner.tun_tx.clone();
 
         // options
-        let arm_messages = util::get_env("ARM_MESSAGES", true);
         let tun_threads = util::get_env("TUN_THREADS", 3);
-        let mtu = util::get_env(
-            "MTU",
-            if arm_messages {
-                1472 - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-            } else {
-                1472 - 4 /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-            } as u16,
-        );
+        let mtu = inner.mtu;
 
         // tun <-> drasyl packet processing
         #[allow(unused_variables)]
@@ -634,8 +677,11 @@ impl SdnNodeInner {
         }
 
         tokio::select! {
-            _ = cancellation_token.cancelled() => {}
+            _ = cancellation_token.cancelled() => {
+                trace!("TUN runner cancelled");
+            }
             _ = node.cancelled() => {
+                trace!("Node cancelled");
                 cancellation_token.cancel();
             }
         }

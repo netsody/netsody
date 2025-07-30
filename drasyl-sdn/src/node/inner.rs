@@ -14,9 +14,11 @@ use etherparse::Ipv4HeaderSlice;
 use flume::{Receiver, Sender};
 use http::Request;
 use http_body_util::{BodyExt, Empty};
-use hyper_rustls::HttpsConnectorBuilder;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
+
 use ipnet::IpNet;
 use ipnet_trie::IpnetTrie;
 use net_route::Handle;
@@ -42,6 +44,10 @@ pub struct SdnNodeInner {
     pub(crate) trie_rx: ArcSwap<TrieRx>,
     pub(crate) tun_tx: Arc<Sender<(Vec<u8>, Arc<SendHandle>)>>,
     drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
+    pub(crate) config_path: String,
+    pub(crate) token_path: String,
+    pub(crate) mtu: u16,
+    client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
 }
 
 impl SdnNodeInner {
@@ -54,7 +60,16 @@ impl SdnNodeInner {
         recv_buf_rx: Arc<Receiver<(PubKey, Vec<u8>)>>,
         tun_tx: Arc<Sender<(Vec<u8>, Arc<SendHandle>)>>,
         drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
+        config_path: String,
+        token_path: String,
+        mtu: u16,
     ) -> Self {
+        let https = HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_http1()
+            .build();
+
         Self {
             id,
             networks: Arc::new(Mutex::new(networks)),
@@ -65,6 +80,12 @@ impl SdnNodeInner {
             trie_rx: ArcSwap::new(Arc::new(IpnetTrie::new())),
             tun_tx,
             drasyl_rx,
+            config_path,
+            token_path,
+            mtu,
+            client: Client::builder(TokioExecutor::new())
+                .pool_max_idle_per_host(0)
+                .build::<_, Empty<Bytes>>(https),
         }
     }
 
@@ -321,37 +342,117 @@ impl SdnNodeInner {
         }
     }
 
-    pub(crate) async fn fetch_network_config(url: &str) -> Result<NetworkConfig, Error> {
+    pub(crate) async fn fetch_network_config(&self, url: &str) -> Result<NetworkConfig, Error> {
         trace!("Fetching network config from: {}", url);
-        let body = if url.starts_with("http://") || url.starts_with("https://") {
-            let https = HttpsConnectorBuilder::new()
-                .with_webpki_roots()
-                .https_or_http()
-                .enable_http1()
-                .build();
-            let client = Client::builder(TokioExecutor::new()).build::<_, Empty<Bytes>>(https);
+
+        let body = match url {
+            url if url.starts_with("http://") || url.starts_with("https://") => {
+                self.fetch_with_redirects(url).await?
+            }
+            url if url.starts_with("file://") => {
+                // Handle file:// URLs properly, especially on Windows
+                let path_part = url.strip_prefix("file://").unwrap();
+                let path = if cfg!(target_os = "windows")
+                    && path_part.starts_with('/')
+                    && path_part.len() > 2
+                {
+                    // Remove the leading slash and ensure proper Windows path format
+                    // e.g., file:///C:/path becomes /C:/path, which needs to be C:/path
+                    &path_part[1..]
+                } else {
+                    path_part
+                };
+                trace!("Reading file: {}", path);
+                fs::read_to_string(path)?
+            }
+            _ => {
+                return Err(Error::ConfigParseError {
+                    reason: format!("Unsupported URL scheme: {url}"),
+                });
+            }
+        };
+        Ok(NetworkConfig::try_from(body.as_str())?)
+    }
+
+    async fn fetch_with_redirects(&self, url: &str) -> Result<String, Error> {
+        let mut current_url = url.to_string();
+        let mut redirect_count = 0;
+        const MAX_REDIRECTS: usize = 5;
+
+        loop {
+            if redirect_count >= MAX_REDIRECTS {
+                return Err(Error::ConfigParseError {
+                    reason: format!("Too many redirects (max {MAX_REDIRECTS}): {url}"),
+                });
+            }
 
             // parse URL and extract auth info if present
-            let parsed_url = url::Url::parse(url)?;
-            let mut request = Request::builder().uri(parsed_url.as_str()).method("GET");
+            let parsed_url = url::Url::parse(&current_url)?;
+            trace!("Parsed URL: {}", parsed_url);
+            let mut request = Request::builder()
+                .uri(parsed_url.as_str())
+                .method("GET")
+                .header("Connection", "close")
+                .header("drasyl-pk", self.id.pk.to_string());
 
             // add basic auth header if username and password are present
             let username = parsed_url.username();
             let password = parsed_url.password();
             if !username.is_empty() && password.is_some() {
+                trace!("Adding basic auth header: {}", username);
                 let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
                 request = request.header("Authorization", format!("Basic {auth}"));
             }
 
+            trace!("Building request");
             let request = request.body(Empty::new())?;
-            let response = client.request(request).await?;
+            trace!("Sending request");
+            let response = self.client.request(request).await?;
+            trace!("Received response");
+
+            let status = response.status();
+
+            // Handle redirects
+            if status.is_redirection() {
+                if let Some(location) = response.headers().get("Location") {
+                    if let Ok(location_str) = location.to_str() {
+                        redirect_count += 1;
+                        trace!(
+                            "Following redirect {}: {} -> {}",
+                            redirect_count, current_url, location_str
+                        );
+
+                        // Handle relative URLs
+                        if location_str.starts_with("http://")
+                            || location_str.starts_with("https://")
+                        {
+                            current_url = location_str.to_string();
+                        } else {
+                            // Resolve relative URL
+                            let base_url = url::Url::parse(&current_url)?;
+                            let redirect_url = base_url.join(location_str)?;
+                            current_url = redirect_url.to_string();
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            // Check for success
+            if !status.is_success() {
+                return Err(Error::ConfigParseError {
+                    reason: format!(
+                        "HTTP request failed with status {}: {}",
+                        status,
+                        status.canonical_reason().unwrap_or("Unknown")
+                    ),
+                });
+            }
+
             let body_bytes = response.into_body().collect().await?.to_bytes();
-            String::from_utf8(body_bytes.to_vec())?
-        } else {
-            let path = url.strip_prefix("file://").unwrap_or(url);
-            fs::read_to_string(path)?
-        };
-        Ok(NetworkConfig::try_from(body.as_str())?)
+            trace!("Received body");
+            return Ok(String::from_utf8(body_bytes.to_vec())?);
+        }
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -359,19 +460,23 @@ impl SdnNodeInner {
 
         // remove physical routes
         trace!("remove physical routes");
-        let networks = self.networks.lock().await;
         let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
+        {
+            trace!("Locking networks for shutdown");
+            let networks = self.networks.lock().await;
 
-        for network in networks.values() {
-            if let Some(state) = network.state.as_ref() {
-                all_physical_routes.push((
-                    network
-                        .tun_state
-                        .as_ref()
-                        .and_then(|tun| tun.device.if_index().ok()),
-                    state.routes.clone(),
-                ));
+            for network in networks.values() {
+                if let Some(state) = network.state.as_ref() {
+                    all_physical_routes.push((
+                        network
+                            .tun_state
+                            .as_ref()
+                            .and_then(|tun| tun.device.if_index().ok()),
+                        state.routes.clone(),
+                    ));
+                }
             }
+            trace!("Got networks for shutdown");
         }
 
         let routes_handle = self.routes_handle.clone();

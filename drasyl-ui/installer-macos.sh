@@ -63,15 +63,6 @@ cat > "$PKG_ROOT/Library/LaunchDaemons/drasyl.plist" <<EOF
     <string>/var/log/drasyl.err.log</string>
     <key>KeepAlive</key>
     <true/>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>RUST_LOG</key>
-        <string>info</string>
-        <key>RUST_BACKTRACE</key>
-        <string>full</string>
-        <key>DRASYL_IDENTITY_FILE</key>
-        <string>drasyl.identity</string>
-    </dict>
 </dict>
 </plist>
 EOF
@@ -122,6 +113,8 @@ cat > "${SCRIPTS_DIR}/postinstall" <<'EOF'
   # Determine or generate shared auth token
   if [ ! -f "/etc/drasyl/auth.token" ]; then
     echo "🔐 Generating auth token..."
+    mkdir -p /etc/drasyl
+    chmod 600 /etc/drasyl
     TOKEN=$(/usr/bin/openssl rand -base64 18)
     echo "$TOKEN" > /etc/drasyl/auth.token
     chmod 600 /etc/drasyl/auth.token

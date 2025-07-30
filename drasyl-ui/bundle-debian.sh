@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# Parse command line arguments
+BUILD_TYPE="debug"
+if [[ "$1" == "--release" ]]; then
+    BUILD_TYPE="release"
+fi
+
 APP_NAME="drasyl UI"
 BINARY_NAME="drasyl-ui"
 VERSION="0.1.0"
@@ -8,7 +14,7 @@ ARCH="$(dpkg --print-architecture)"
 
 # Paths
 WORKSPACE_DIR="$(cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" && pwd)"
-TARGET_ROOT="${WORKSPACE_DIR}/target/release"
+TARGET_ROOT="${WORKSPACE_DIR}/target/${BUILD_TYPE}"
 TARGET_DIR="${TARGET_ROOT}"
 PKG_DIR="${TARGET_DIR}/${BINARY_NAME}_${VERSION}"
 DEBIAN_DIR="${PKG_DIR}/DEBIAN"
@@ -30,12 +36,8 @@ echo "🚚 Copying drasyl-ui binary..."
 cp "${TARGET_ROOT}/${BINARY_NAME}" "${BIN_DIR}/"
 chmod 755 "${BIN_DIR}/${BINARY_NAME}"
 
-if [[ -f "$ICON_SRC" ]]; then
-  echo "🎨 Copying app icon..."
-  cp "$ICON_SRC" "${ICON_DIR}/drasyl-ui.png"
-else
-  echo "⚠️  No icon found at $ICON_SRC – skipping icon"
-fi
+echo "🎨 Copying app icon..."
+cp "$ICON_SRC" "${ICON_DIR}/drasyl-ui.png"
 
 echo "📝 Copying .desktop file..."
 cp "$DESKTOP_FILE_SRC" "${APP_DIR}/"
@@ -47,8 +49,10 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
+Homepage: https://drasyl.org
+Depends: libxdo3
 Maintainer: drasyl Team <info@drasyl.org>
-Description: ${APP_NAME}
+Description: drasyl provides secure, software-defined overlay networks, connecting all your devices.
 EOF
 
 echo "📦 Building .deb package..."
