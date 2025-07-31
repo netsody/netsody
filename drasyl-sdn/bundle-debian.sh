@@ -145,7 +145,7 @@ EOF
 chmod 0755 "${DEBIAN_DIR}/postrm"
 
 echo "📦 Building .deb package..."
-dpkg-deb --build "${PKG_DIR}"
+dpkg-deb -Zgzip --build "${PKG_DIR}"
 
 DEB_NAME="${BINARY_NAME}_${VERSION}_${ARCH}.deb"
 mv "${PKG_DIR}.deb" "${TARGET_DIR}/${DEB_NAME}"
