@@ -19,7 +19,7 @@ if-addrs = "0.14.0"
 libsodium-sys-stable = { version = "1.22.2", features = ["minimal"] }
 aegis = "0.9.0"
 rand_chacha = { version = "0.9.0", features = ["os_rng"] }
-zerocopy = { version = "0.8.18", features = ["derive"] }
+zerocopy = { version = "0.8.26", features = ["derive"] }
 lz4_flex = { version = "0.11" }
 socket2 = { version = "0.6.0", features = ["all"] }
 bytes = "1.10.1"
