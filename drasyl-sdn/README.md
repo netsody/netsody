@@ -17,6 +17,22 @@ cargo build --package drasyl-sdn --release --features "prometheus dns"
 
 This will create a release binary that can be used to run the drasyl-sdn daemon. The Prometheus feature enables detailed monitoring of the daemon's performance and network statistics. The DNS feature allows nodes to be addressed by hostnames (e.g., `$hostname` or `$hostname.drasyl.network`). Note that DNS support is only available on macOS and Linux.
 
+### Docker Build
+
+To build multi-platform Docker images for the drasyl-sdn daemon:
+
+```bash
+# Build and push multi-platform images (amd64 and arm64)
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t drasyl/drasyl:0.1.0 \
+  -t drasyl/drasyl:latest \
+  -f ./drasyl-sdn/Dockerfile \
+  --push .
+```
+
+This command builds Docker images for both AMD64 and ARM64 architectures and pushes them to the Docker registry with the specified tags.
+
 ### Configuration
 
 The drasyl-sdn daemon can be configured through a config file located at `config.toml` by default, which can be overridden using the `DRASYL_CONFIG` environment variable. The config file is created upon first start and contains the daemon's identity.
