@@ -56,11 +56,11 @@ You remain in control of network membership and permitted communication, followi
       - Windows
       - macOS
       - Linux
+      - Docker
   - Planned targets:
       - iOS
       - Android
       - OpenWrt
-      - Docker
 
 # Get Started
 
