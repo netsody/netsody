@@ -314,6 +314,10 @@ impl App {
             None => mask_url(config_url),
         };
 
+        // Add enabled/disabled indicator at the beginning
+        let status_icon = if network.disabled { "\t" } else { "✓\t" };
+        display_text = format!("{status_icon}{display_text}");
+
         // On Linux, underscores need to be masked as they are interpreted as mnemonics
         if cfg!(target_os = "linux") {
             let mut result = String::with_capacity(display_text.len());
