@@ -318,24 +318,6 @@ impl App {
         let status_icon = if network.disabled { "\t" } else { "✓\t" };
         display_text = format!("{status_icon}{display_text}");
 
-        // On Linux, underscores need to be masked as they are interpreted as mnemonics
-        if cfg!(target_os = "linux") {
-            let mut result = String::with_capacity(display_text.len());
-            let chars: Vec<_> = display_text.chars().collect();
-
-            for i in 0..chars.len() {
-                if chars[i] == '_'
-                    && (i == 0 || chars[i - 1] != '_') // no previous underscore
-                    && (i + 1 == chars.len() || chars[i + 1] != '_')
-                // no next underscore
-                {
-                    result.push_str("__"); // standalone -> double
-                } else {
-                    result.push(chars[i]);
-                }
-            }
-            display_text = result;
-        }
         display_text
     }
 
