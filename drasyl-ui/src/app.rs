@@ -202,11 +202,18 @@ impl App {
 
         // add items for new networks
         if let Ok(status) = result {
+            // Collect all networks and sort them
+            let mut networks_to_add: Vec<_> = status.networks.iter().collect();
+
+            // Sort by URL
+            networks_to_add.sort_by(|(url_a, _), (url_b, _)| url_a.as_str().cmp(url_b.as_str()));
+
             let mut position = 0;
-            for (config_url, network) in &status.networks {
+            for (config_url, network) in networks_to_add {
                 let config_url_str = config_url.to_string();
 
                 if existing_networks.contains(&config_url_str) {
+                    position += 1;
                     continue;
                 }
 
