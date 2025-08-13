@@ -569,6 +569,19 @@ impl ApplicationHandler<UserEvent> for App {
                     self.gl_window.as_mut().unwrap().window(),
                     |egui_ctx| {
                         egui::CentralPanel::default().show(egui_ctx, |ui| {
+                            // Helper function to add network
+                            let add_network = |url: String| {
+                                if Url::parse(url.trim()).is_ok() {
+                                    // send event for processing
+                                    self.proxy
+                                        .send_event(UserEvent::AddNetwork(url))
+                                        .expect("Failed to send event");
+                                    true // return true to indicate success
+                                } else {
+                                    false
+                                }
+                            };
+
                             // URL input field
                             ui.label("Network configuration URL (https:// or file://):");
                             let response = ui.add_sized(
@@ -579,6 +592,21 @@ impl ApplicationHandler<UserEvent> for App {
                             // automatically set focus on the text field
                             response.request_focus();
 
+                            // Check for Enter key press
+                            let input = ui.input(|i| i.clone());
+                            if input.key_pressed(egui::Key::Enter) {
+                                let url = self.config_url.clone();
+                                if add_network(url) {
+                                    cancel = true;
+                                }
+                            }
+
+                            // Check for Escape key press
+                            if input.key_pressed(egui::Key::Escape) {
+                                trace!("Cancel action triggered");
+                                cancel = true;
+                            }
+
                             ui.add_space(5.0);
 
                             // buttons
@@ -588,18 +616,13 @@ impl ApplicationHandler<UserEvent> for App {
                                     |ui| {
                                         if ui.button("Add").clicked() {
                                             let url = self.config_url.clone();
-                                            if Url::parse(url.trim()).is_ok() {
-                                                // send event for processing
-                                                self.proxy
-                                                    .send_event(UserEvent::AddNetwork(url))
-                                                    .expect("Failed to send event");
-
+                                            if add_network(url) {
                                                 cancel = true;
                                             }
                                         }
 
                                         if ui.button("Cancel").clicked() {
-                                            trace!("Cancel button clicked in add network modal");
+                                            trace!("Cancel action triggered");
                                             cancel = true;
                                         }
                                     },
