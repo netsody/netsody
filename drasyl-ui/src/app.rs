@@ -99,12 +99,21 @@ impl App {
 
                                 if let Ok(config_url) = Url::parse(config_url_str) {
                                     if let Some(network) = status.networks.get(&config_url) {
-                                        existing_networks.push(config_url_str.to_string());
+                                        let new_text =
+                                            Self::network_display_text(&config_url, network);
 
-                                        submenu.set_text(Self::network_display_text(
-                                            &config_url,
-                                            network,
-                                        ));
+                                        // On Linux, submenu text cannot be changed directly
+                                        // If the text has changed, we need to recreate the submenu
+                                        // by adding it to the deletion list so it gets rebuilt
+                                        if cfg!(target_os = "linux") && submenu.text() != new_text {
+                                            positions_to_delete.push(position);
+                                        } else {
+                                            // we do not add the network to the existing networks
+                                            // list on linux when text has changed, because it needs
+                                            // to be recreated, so we will add it again below
+                                            existing_networks.push(config_url_str.to_string());
+                                            submenu.set_text(new_text);
+                                        }
 
                                         submenu.items().iter_mut().for_each(|kind| {
                                             if let MenuItemKind::MenuItem(item) = kind {
@@ -202,11 +211,18 @@ impl App {
 
         // add items for new networks
         if let Ok(status) = result {
+            // Collect all networks and sort them
+            let mut networks_to_add: Vec<_> = status.networks.iter().collect();
+
+            // Sort by URL
+            networks_to_add.sort_by(|(url_a, _), (url_b, _)| url_a.as_str().cmp(url_b.as_str()));
+
             let mut position = 0;
-            for (config_url, network) in &status.networks {
+            for (config_url, network) in networks_to_add {
                 let config_url_str = config_url.to_string();
 
                 if existing_networks.contains(&config_url_str) {
+                    position += 1;
                     continue;
                 }
 
@@ -307,24 +323,13 @@ impl App {
             None => mask_url(config_url),
         };
 
-        // On Linux, underscores need to be masked as they are interpreted as mnemonics
-        if cfg!(target_os = "linux") {
-            let mut result = String::with_capacity(display_text.len());
-            let chars: Vec<_> = display_text.chars().collect();
+        // Add enabled/disabled indicator at the beginning
+        let status_icon = if cfg!(target_os = "windows") {
+            // do not use tabs on windows, because they are used for mnemonics
+            if network.disabled { "     " } else { "✓  " }
+        } else if network.disabled { "\t" } else { "✓\t" };
+        display_text = format!("{status_icon}{display_text}");
 
-            for i in 0..chars.len() {
-                if chars[i] == '_'
-                    && (i == 0 || chars[i - 1] != '_') // no previous underscore
-                    && (i + 1 == chars.len() || chars[i + 1] != '_')
-                // no next underscore
-                {
-                    result.push_str("__"); // standalone -> double
-                } else {
-                    result.push(chars[i]);
-                }
-            }
-            display_text = result;
-        }
         display_text
     }
 
@@ -562,6 +567,19 @@ impl ApplicationHandler<UserEvent> for App {
                     self.gl_window.as_mut().unwrap().window(),
                     |egui_ctx| {
                         egui::CentralPanel::default().show(egui_ctx, |ui| {
+                            // Helper function to add network
+                            let add_network = |url: String| {
+                                if Url::parse(url.trim()).is_ok() {
+                                    // send event for processing
+                                    self.proxy
+                                        .send_event(UserEvent::AddNetwork(url))
+                                        .expect("Failed to send event");
+                                    true // return true to indicate success
+                                } else {
+                                    false
+                                }
+                            };
+
                             // URL input field
                             ui.label("Network configuration URL (https:// or file://):");
                             let response = ui.add_sized(
@@ -572,6 +590,21 @@ impl ApplicationHandler<UserEvent> for App {
                             // automatically set focus on the text field
                             response.request_focus();
 
+                            // Check for Enter key press
+                            let input = ui.input(|i| i.clone());
+                            if input.key_pressed(egui::Key::Enter) {
+                                let url = self.config_url.clone();
+                                if add_network(url) {
+                                    cancel = true;
+                                }
+                            }
+
+                            // Check for Escape key press
+                            if input.key_pressed(egui::Key::Escape) {
+                                trace!("Cancel action triggered");
+                                cancel = true;
+                            }
+
                             ui.add_space(5.0);
 
                             // buttons
@@ -581,18 +614,13 @@ impl ApplicationHandler<UserEvent> for App {
                                     |ui| {
                                         if ui.button("Add").clicked() {
                                             let url = self.config_url.clone();
-                                            if Url::parse(url.trim()).is_ok() {
-                                                // send event for processing
-                                                self.proxy
-                                                    .send_event(UserEvent::AddNetwork(url))
-                                                    .expect("Failed to send event");
-
+                                            if add_network(url) {
                                                 cancel = true;
                                             }
                                         }
 
                                         if ui.button("Cancel").clicked() {
-                                            trace!("Cancel button clicked in add network modal");
+                                            trace!("Cancel action triggered");
                                             cancel = true;
                                         }
                                     },
