@@ -99,12 +99,21 @@ impl App {
 
                                 if let Ok(config_url) = Url::parse(config_url_str) {
                                     if let Some(network) = status.networks.get(&config_url) {
-                                        existing_networks.push(config_url_str.to_string());
+                                        let new_text =
+                                            Self::network_display_text(&config_url, network);
 
-                                        submenu.set_text(Self::network_display_text(
-                                            &config_url,
-                                            network,
-                                        ));
+                                        // On Linux, submenu text cannot be changed directly
+                                        // If the text has changed, we need to recreate the submenu
+                                        // by adding it to the deletion list so it gets rebuilt
+                                        if cfg!(target_os = "linux") && submenu.text() != new_text {
+                                            positions_to_delete.push(position);
+                                        } else {
+                                            // we do not add the network to the existing networks
+                                            // list on linux when text has changed, because it needs
+                                            // to be recreated, so we will add it again below
+                                            existing_networks.push(config_url_str.to_string());
+                                            submenu.set_text(new_text);
+                                        }
 
                                         submenu.items().iter_mut().for_each(|kind| {
                                             if let MenuItemKind::MenuItem(item) = kind {
