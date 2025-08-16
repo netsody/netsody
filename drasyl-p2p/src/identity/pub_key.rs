@@ -126,7 +126,7 @@ impl fmt::Debug for PubKey {
 
 impl PartialOrd for PubKey {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.0.cmp(&other.0))
+        Some(self.cmp(other))
     }
 }
 
