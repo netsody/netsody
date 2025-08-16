@@ -36,5 +36,5 @@ jobs:
       - name: Upload drasyl-sp artifact
         uses: actions/upload-artifact@v4
         with:
-          name: drasyl-${{ matrix.job_name }}
+          name: drasyl-sp-${{ matrix.job_name }}
           path: ${{ matrix.path }}
