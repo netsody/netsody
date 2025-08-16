@@ -50,7 +50,7 @@ impl SdnNode {
             drasyl_rx.clone(),
             config_path,
             token_path,
-            config.mtu,
+            config.mtu.unwrap_or(SdnNodeConfig::default_mtu()),
         ));
 
         let mut join_set = JoinSet::new();

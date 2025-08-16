@@ -11,15 +11,6 @@ use std::fs;
 use tracing::{info, trace};
 use url::Url;
 
-fn default_mtu() -> u16 {
-    let arm_messages = util::get_env("ARM_MESSAGES", true);
-    (if arm_messages {
-        MTU_DEFAULT - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-    } else {
-        MTU_DEFAULT - 4 /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
-    }) as u16
-}
-
 #[cfg(feature = "prometheus")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PrometheusConfig {
@@ -39,8 +30,7 @@ pub struct SdnNodeConfig {
         serialize_with = "serialize_networks"
     )]
     pub networks: HashMap<Url, Network>,
-    #[serde(default = "default_mtu")]
-    pub mtu: u16,
+    pub mtu: Option<u16>,
     #[cfg(feature = "prometheus")]
     pub prometheus: Option<PrometheusConfig>,
 }
@@ -50,7 +40,7 @@ impl SdnNodeConfig {
         Self {
             id,
             networks: Default::default(),
-            mtu: default_mtu(),
+            mtu: Default::default(),
             #[cfg(feature = "prometheus")]
             prometheus: Default::default(),
         }
@@ -122,6 +112,15 @@ impl SdnNodeConfig {
         trace!("Successfully wrote config file");
 
         Ok(())
+    }
+
+    pub(crate) fn default_mtu() -> u16 {
+        let arm_messages = util::get_env("ARM_MESSAGES", true);
+        (if arm_messages {
+            MTU_DEFAULT - 4 - ARM_HEADER_LEN /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
+        } else {
+            MTU_DEFAULT - 4 /* - 11 for COMPRESSION */ - (LONG_HEADER_LEN - SHORT_HEADER_LEN)
+        }) as u16
     }
 }
 
