@@ -401,10 +401,8 @@ impl SuperPeer {
             }
             self.update_best_udp_path();
 
-            if !enforce_tcp {
-                if let Some(tcp_path) = self.tcp_connection().as_ref() {
-                    tcp_path.cancel_connection();
-                }
+            if !enforce_tcp && let Some(tcp_path) = self.tcp_connection().as_ref() {
+                tcp_path.cancel_connection();
             }
         } else {
             trace!("Got ACK via TCP");

@@ -244,10 +244,10 @@ impl PeersList {
         let swapped_key = (*recipient, *sender);
 
         let guard = self.unite_attempts.guard();
-        if let Some(last_time) = self.unite_attempts.get(&key, &guard) {
-            if time - *last_time < (send_unites * 1_000) as u64 {
-                return false;
-            }
+        if let Some(last_time) = self.unite_attempts.get(&key, &guard)
+            && time - *last_time < (send_unites * 1_000) as u64
+        {
+            return false;
         }
 
         let _ = self.unite_attempts.insert(key, time, &guard);

@@ -44,12 +44,11 @@ impl SuperPeerInner {
 
         let guard = self.tcp_connections.owned_guard();
         for (key, connection) in self.tcp_connections.iter(&guard) {
-            if connection.is_inactive(time, self.opts.hello_timeout) {
-                if let Some(connection) = self.tcp_connections.remove(key, &guard) {
-                    if let Err(e) = connection.writer.lock().await.close().await {
-                        error!("Error shutting down connection: {e}");
-                    }
-                }
+            if connection.is_inactive(time, self.opts.hello_timeout)
+                && let Some(connection) = self.tcp_connections.remove(key, &guard)
+                && let Err(e) = connection.writer.lock().await.close().await
+            {
+                error!("Error shutting down connection: {e}");
             }
         }
     }

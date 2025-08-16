@@ -217,10 +217,10 @@ impl Identity {
                 if let Some(value) = line.split('=').nth(1) {
                     sk = Some(SecKey::from_str(value.trim()).unwrap());
                 }
-            } else if line.starts_with("ProofOfWork") {
-                if let Some(value) = line.split('=').nth(1) {
-                    proof_of_work = Some(value.trim().to_string().parse::<i32>().unwrap().into());
-                }
+            } else if line.starts_with("ProofOfWork")
+                && let Some(value) = line.split('=').nth(1)
+            {
+                proof_of_work = Some(value.trim().to_string().parse::<i32>().unwrap().into());
             }
         }
 

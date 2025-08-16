@@ -35,27 +35,26 @@ pub fn load_auth_token(token_file: &String) -> Result<String, io::Error> {
     };
 
     // On NotFound or PermissionDenied, try the fallback path
-    if let Err(e) = &main_result {
-        if e.kind() == io::ErrorKind::NotFound || e.kind() == io::ErrorKind::PermissionDenied {
-            if let Some(home_dir) = env::home_dir() {
-                let fallback_path = home_dir.join(".drasyl").join("auth.token");
-                if fallback_path.exists() {
-                    let fallback_path_clone = fallback_path.clone();
-                    if let Ok(token) = fs::read_to_string(fallback_path) {
-                        let token = token.trim().to_string();
-                        trace!(
-                            "Loaded REST API token from fallback path {}",
-                            fallback_path_clone.display()
-                        );
-                        return Ok(token);
-                    }
-                } else {
-                    trace!(
-                        "REST API token not found at fallback path {}",
-                        fallback_path.display()
-                    );
-                }
+    if let Err(e) = &main_result
+        && (e.kind() == io::ErrorKind::NotFound || e.kind() == io::ErrorKind::PermissionDenied)
+        && let Some(home_dir) = env::home_dir()
+    {
+        let fallback_path = home_dir.join(".drasyl").join("auth.token");
+        if fallback_path.exists() {
+            let fallback_path_clone = fallback_path.clone();
+            if let Ok(token) = fs::read_to_string(fallback_path) {
+                let token = token.trim().to_string();
+                trace!(
+                    "Loaded REST API token from fallback path {}",
+                    fallback_path_clone.display()
+                );
+                return Ok(token);
             }
+        } else {
+            trace!(
+                "REST API token not found at fallback path {}",
+                fallback_path.display()
+            );
         }
     }
 

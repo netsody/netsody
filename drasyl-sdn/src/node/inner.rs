@@ -413,29 +413,26 @@ impl SdnNodeInner {
             let status = response.status();
 
             // Handle redirects
-            if status.is_redirection() {
-                if let Some(location) = response.headers().get("Location") {
-                    if let Ok(location_str) = location.to_str() {
-                        redirect_count += 1;
-                        trace!(
-                            "Following redirect {}: {} -> {}",
-                            redirect_count, current_url, location_str
-                        );
+            if status.is_redirection()
+                && let Some(location) = response.headers().get("Location")
+                && let Ok(location_str) = location.to_str()
+            {
+                redirect_count += 1;
+                trace!(
+                    "Following redirect {}: {} -> {}",
+                    redirect_count, current_url, location_str
+                );
 
-                        // Handle relative URLs
-                        if location_str.starts_with("http://")
-                            || location_str.starts_with("https://")
-                        {
-                            current_url = location_str.to_string();
-                        } else {
-                            // Resolve relative URL
-                            let base_url = url::Url::parse(&current_url)?;
-                            let redirect_url = base_url.join(location_str)?;
-                            current_url = redirect_url.to_string();
-                        }
-                        continue;
-                    }
+                // Handle relative URLs
+                if location_str.starts_with("http://") || location_str.starts_with("https://") {
+                    current_url = location_str.to_string();
+                } else {
+                    // Resolve relative URL
+                    let base_url = url::Url::parse(&current_url)?;
+                    let redirect_url = base_url.join(location_str)?;
+                    current_url = redirect_url.to_string();
                 }
+                continue;
             }
 
             // Check for success
@@ -497,17 +494,17 @@ impl SdnNodeInner {
 }
 
 pub fn is_drasyl_control_packet(buf: &[u8]) -> bool {
-    if let Ok(ip_hdr) = Ipv4HeaderSlice::from_slice(buf) {
-        if ip_hdr.protocol() == etherparse::IpNumber::UDP {
-            let ip_header_len = ip_hdr.slice().len();
-            let udp_header_len = 8;
-            let magic_number_len = 4;
+    if let Ok(ip_hdr) = Ipv4HeaderSlice::from_slice(buf)
+        && ip_hdr.protocol() == etherparse::IpNumber::UDP
+    {
+        let ip_header_len = ip_hdr.slice().len();
+        let udp_header_len = 8;
+        let magic_number_len = 4;
 
-            if buf.len() >= ip_header_len + udp_header_len + magic_number_len {
-                let payload_start = ip_header_len + udp_header_len;
-                return &buf[payload_start..][..magic_number_len]
-                    == LONG_HEADER_MAGIC_NUMBER.as_bytes();
-            }
+        if buf.len() >= ip_header_len + udp_header_len + magic_number_len {
+            let payload_start = ip_header_len + udp_header_len;
+            return &buf[payload_start..][..magic_number_len]
+                == LONG_HEADER_MAGIC_NUMBER.as_bytes();
         }
     }
     false

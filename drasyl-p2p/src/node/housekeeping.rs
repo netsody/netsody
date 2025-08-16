@@ -216,11 +216,11 @@ impl NodeInner {
             let peer_key_ptr = peer_key as *const PubKey;
             if let Peer::SuperPeer(super_peer) = peer {
                 // best super peer?
-                if let Some(median_lat) = super_peer.median_lat() {
-                    if median_lat < best_median_lat {
-                        best_median_lat = median_lat;
-                        best_sp = peer_key_ptr as usize;
-                    }
+                if let Some(median_lat) = super_peer.median_lat()
+                    && median_lat < best_median_lat
+                {
+                    best_median_lat = median_lat;
+                    best_sp = peer_key_ptr as usize;
                 }
             }
         }
