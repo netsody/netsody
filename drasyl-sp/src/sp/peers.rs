@@ -264,7 +264,9 @@ impl fmt::Display for PeersList {
         writeln!(f, "{:<64} {:<3} {:<7} HelloSrc", "Node", "PoW", "HelloRx")?;
 
         let guard = self.peers.guard();
+        let mut peer_count = 0;
         for (key, peer) in self.peers.iter(&guard) {
+            peer_count += 1;
             // Format endpoints list
             let hello_endpoints = peer
                 .hello_endpoints()
@@ -292,6 +294,9 @@ impl fmt::Display for PeersList {
             )?;
             writeln!(f)?;
         }
+
+        // Show total number of peers
+        writeln!(f, "Total Peers: {}", peer_count)?;
 
         Ok(())
     }
