@@ -147,29 +147,29 @@ impl fmt::Display for PeersList {
                 "",
                 path,
             )?;
-            if tcp_path.is_some() {
-                if let Some((key, path)) = best_udp_path {
-                    writeln!(
-                        f,
-                        "{:<64} {:<3} {:<4} {:<6} {:<7} {:<7} {:<7} udp://{}",
-                        "",
-                        "",
-                        "",
-                        path.median_lat()
-                            .map_or_else(String::new, |median_lat| format!(
-                                "{:<6.1}",
-                                median_lat as f64 / 1_000.0
-                            )),
-                        path.ack_age(now)
-                            .map_or_else(String::new, |ack_age| format!(
-                                "{:<6.1}",
-                                ack_age as f64 / 1_000.0
-                            )),
-                        "",
-                        "",
-                        key,
-                    )?;
-                }
+            if tcp_path.is_some()
+                && let Some((key, path)) = best_udp_path
+            {
+                writeln!(
+                    f,
+                    "{:<64} {:<3} {:<4} {:<6} {:<7} {:<7} {:<7} udp://{}",
+                    "",
+                    "",
+                    "",
+                    path.median_lat()
+                        .map_or_else(String::new, |median_lat| format!(
+                            "{:<6.1}",
+                            median_lat as f64 / 1_000.0
+                        )),
+                    path.ack_age(now)
+                        .map_or_else(String::new, |ack_age| format!(
+                            "{:<6.1}",
+                            ack_age as f64 / 1_000.0
+                        )),
+                    "",
+                    "",
+                    key,
+                )?;
             }
 
             for (key, path) in &udp_paths {

@@ -35,10 +35,9 @@ impl NodeInner {
             Err(e) => {
                 error!("Failed to send message to super peer via TCP, shutting it down: {e}");
                 if let Some(Peer::SuperPeer(super_peer)) = self.peers_list.peers.pin().get(peer_key)
+                    && let Some(tcp_path) = super_peer.tcp_connection().as_ref()
                 {
-                    if let Some(tcp_path) = super_peer.tcp_connection().as_ref() {
-                        tcp_path.cancel_connection();
-                    }
+                    tcp_path.cancel_connection();
                 }
             }
             Ok(_) => {
@@ -159,11 +158,11 @@ impl NodeInner {
             "Sent HELLO to super peer {peer_key} via tcp://{tcp_addr} immediately after connection establishment."
         );
 
-        if let Some(Peer::SuperPeer(super_peer)) = inner.peers_list.peers.pin().get(&peer_key) {
-            if let Some(tcp_path) = super_peer.tcp_connection().as_ref() {
-                tcp_path.hello_tx(time);
-                tcp_path.set_stream(writer);
-            }
+        if let Some(Peer::SuperPeer(super_peer)) = inner.peers_list.peers.pin().get(&peer_key)
+            && let Some(tcp_path) = super_peer.tcp_connection().as_ref()
+        {
+            tcp_path.hello_tx(time);
+            tcp_path.set_stream(writer);
         }
 
         let tcp_inner = inner.clone();
@@ -185,11 +184,9 @@ impl NodeInner {
                                 error!("Error processing segment: {e}");
                                 if let Some(Peer::SuperPeer(super_peer)) =
                                     tcp_inner.peers_list.peers.pin_owned().get(&peer_key)
-                                {
-                                    if let Some(tcp_path) = super_peer.tcp_connection().as_ref() {
+                                    && let Some(tcp_path) = super_peer.tcp_connection().as_ref() {
                                         tcp_path.cancel_connection();
                                     }
-                                }
                                 break;
                             }
                         }

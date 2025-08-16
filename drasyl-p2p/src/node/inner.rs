@@ -109,14 +109,14 @@ impl NodeInner {
             {
                 let peers = self.peers_list.peers.pin();
                 let peer = if let Some(peer) = peers.get(&long_header.sender) {
-                    if let Peer::NodePeer(node_peer) = peer {
-                        if !node_peer.validate_pow(
+                    if let Peer::NodePeer(node_peer) = peer
+                        && !node_peer.validate_pow(
                             &long_header.pow,
                             &long_header.sender,
                             self.opts.min_pow_difficulty,
-                        )? {
-                            return Err(Error::PowInvalid);
-                        }
+                        )?
+                    {
+                        return Err(Error::PowInvalid);
                     }
                     peer
                 } else {

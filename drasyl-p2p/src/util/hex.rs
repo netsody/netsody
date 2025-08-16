@@ -95,7 +95,10 @@ mod tests {
 
     #[test]
     fn test_hex_to_bytes_invalid_length() {
-        assert!(matches!(hex_to_bytes::<2>("abc"), Err(HexError::InvalidLength)));
+        assert!(matches!(
+            hex_to_bytes::<2>("abc"),
+            Err(HexError::InvalidLength)
+        ));
     }
 
     #[test]

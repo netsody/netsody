@@ -327,7 +327,11 @@ impl App {
         let status_icon = if cfg!(target_os = "windows") {
             // do not use tabs on windows, because they are used for mnemonics
             if network.disabled { "     " } else { "✓  " }
-        } else if network.disabled { "\t" } else { "✓\t" };
+        } else if network.disabled {
+            "\t"
+        } else {
+            "✓\t"
+        };
         display_text = format!("{status_icon}{display_text}");
 
         display_text
