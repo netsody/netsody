@@ -123,7 +123,7 @@ impl SendHandleState {
 /// # Example
 ///
 /// ```rust
-/// use drasyl::node::{Node, PubKey};
+/// use drasyl_p2p::node::{Node, PubKey};
 ///
 /// async fn example(node: &Node, recipient: &PubKey) -> Result<(), Box<dyn std::error::Error>> {
 ///     // Get a send handle for the recipient

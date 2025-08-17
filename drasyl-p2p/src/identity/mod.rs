@@ -13,8 +13,8 @@
 //! # Example
 //!
 //! ```rust
-//! use drasyl::identity::Identity;
-//! use drasyl::node::MIN_POW_DIFFICULTY_DEFAULT;
+//! use drasyl_p2p::identity::Identity;
+//! use drasyl_p2p::node::MIN_POW_DIFFICULTY_DEFAULT;
 //!
 //! // Load an existing identity or generate a new one
 //! let identity = Identity::load_or_generate("drasyl.identity", MIN_POW_DIFFICULTY_DEFAULT).expect("Failed to load identity");
@@ -66,8 +66,8 @@ const MIN_DERIVED_PORT: u16 = 22528;
 /// # Example
 ///
 /// ```rust
-/// use drasyl::identity::Identity;
-/// use drasyl::node::MIN_POW_DIFFICULTY_DEFAULT;
+/// use drasyl_p2p::identity::Identity;
+/// use drasyl_p2p::node::MIN_POW_DIFFICULTY_DEFAULT;
 ///
 /// // Load an existing identity or generate a new one
 /// let identity = Identity::load_or_generate("drasyl.identity", MIN_POW_DIFFICULTY_DEFAULT).expect("Failed to load identity");

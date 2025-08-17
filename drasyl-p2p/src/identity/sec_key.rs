@@ -28,7 +28,7 @@ use crate::util::{bytes_to_hex, hex_to_bytes};
 /// # Example
 ///
 /// ```rust
-/// use drasyl::identity::SecKey;
+/// use drasyl_p2p::identity::SecKey;
 ///
 /// // Secret keys are typically generated as part of an Identity
 /// // and should not be created directly

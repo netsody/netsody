@@ -1,4 +1,4 @@
-name: drasyl-ui
+name: Agent UI
 
 on:
   push:
@@ -71,8 +71,8 @@ jobs:
         run: ./drasyl-ui/bundle-macos.sh --release
         if: success() && startsWith(matrix.os, 'macOS-')
 
-      - name: Build drasyl-sdn
-        run: cargo build --verbose --package drasyl-sdn --features dns --release
+      - name: Build drasyl-agent
+        run: cargo build --verbose --package drasyl-agent --features dns --release
         if: startsWith(matrix.os, 'macOS-') || startsWith(matrix.os, 'windows-')
 
       - name: Create macOS Installer
