@@ -7,7 +7,7 @@ edition = "2024"
 vergen-git2 = { version = "1.0.0", features = ["build", "cargo"] }
 
 [dependencies]
-drasyl = { path = "../drasyl-p2p", features = ["serde"] }
+p2p = { package = "drasyl-p2p", path = "../drasyl-p2p", features = ["serde"] }
 tracing = { workspace = true }
 tracing-subscriber  = { workspace = true }
 tokio = { workspace = true }
@@ -45,7 +45,7 @@ windows-service = "0.8.0"
 
 [features]
 dns = []
-prometheus = ["drasyl/prometheus"]
+prometheus = ["p2p/prometheus"]
 
 [[bin]]
 name = "drasyl"

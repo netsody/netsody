@@ -1,6 +1,5 @@
 use crate::sp::SuperPeerInner;
 use crate::sp::TransportProt;
-use drasyl::util;
 use hyper::Request;
 use hyper::Response;
 use hyper::body::Incoming;
@@ -9,6 +8,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use lazy_static::lazy_static;
+use p2p::util;
 use prometheus::{
     CounterVec, Encoder, HistogramVec, TextEncoder, register_counter_vec, register_histogram_vec,
 };

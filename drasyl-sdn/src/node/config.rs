@@ -1,8 +1,8 @@
 use crate::network::Network;
 use crate::node::Error;
-use drasyl::message::{ARM_HEADER_LEN, LONG_HEADER_LEN, SHORT_HEADER_LEN};
-use drasyl::node::{Identity, MTU_DEFAULT};
-use drasyl::util;
+use p2p::message::{ARM_HEADER_LEN, LONG_HEADER_LEN, SHORT_HEADER_LEN};
+use p2p::node::{Identity, MTU_DEFAULT};
+use p2p::util;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de;

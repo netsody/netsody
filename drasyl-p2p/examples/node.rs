@@ -1,7 +1,7 @@
-use drasyl::identity::{Identity, PubKey};
-use drasyl::node::{MessageSink, Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT};
-use drasyl::peer::SuperPeerUrl;
-use drasyl::util;
+use drasyl_p2p::identity::{Identity, PubKey};
+use drasyl_p2p::node::{MessageSink, Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT};
+use drasyl_p2p::peer::SuperPeerUrl;
+use drasyl_p2p::util;
 use std::io::{Write, stdin, stdout};
 use std::net::IpAddr;
 use std::str::FromStr;

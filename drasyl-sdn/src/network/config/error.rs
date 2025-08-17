@@ -1,5 +1,5 @@
-use drasyl::identity::PubKey;
 use ipnet::Ipv4Net;
+use p2p::identity::PubKey;
 use std::net::Ipv4Addr;
 use thiserror::Error;
 

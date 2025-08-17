@@ -1,16 +1,16 @@
-use drasyl::identity::Identity;
-use drasyl::node::{
-    ARM_MESSAGES_DEFAULT, HELLO_MAX_AGE_DEFAULT, HELLO_TIMEOUT_DEFAULT, MIN_POW_DIFFICULTY_DEFAULT,
-    NETWORK_ID_DEFAULT,
-};
-use drasyl::util;
-use drasyl::util::{get_addrs, listening_addrs};
 #[cfg(feature = "prometheus")]
 use drasyl_sp::prometheus::prometheus_server;
 use drasyl_sp::sp::{
     Error, MAX_PEERS_DEFAULT, SEND_UNITES_DEFAULT, SuperPeer, SuperPeerOptsBuilder,
     TCP4_LISTEN_DEFAULT, TCP6_LISTEN_DEFAULT, UDP4_LISTEN_DEFAULT, UDP6_LISTEN_DEFAULT,
 };
+use p2p::identity::Identity;
+use p2p::node::{
+    ARM_MESSAGES_DEFAULT, HELLO_MAX_AGE_DEFAULT, HELLO_TIMEOUT_DEFAULT, MIN_POW_DIFFICULTY_DEFAULT,
+    NETWORK_ID_DEFAULT,
+};
+use p2p::util;
+use p2p::util::{get_addrs, listening_addrs};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
 

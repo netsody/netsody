@@ -10,7 +10,7 @@ To build and view the API documentation locally:
 
 ```bash
 # From the repository root
-cargo doc --package drasyl --open --no-deps
+cargo doc --package drasyl-p2p --open --no-deps
 ```
 
 This will generate the documentation and open it in your default web browser.
@@ -21,7 +21,7 @@ To run the example node:
 
 ```bash
 # From the repository root
-cargo run --package drasyl --example node
+cargo run --package drasyl-p2p --example node
 ```
 
 This will start a drasyl node with default configuration. The node will automatically generate an identity if none exists and begin participating in the network. You can use this example to send and receive text messages with other peers in the network. The node will display its public key on startup, which you can use to establish connections with other nodes.

@@ -5,11 +5,11 @@ mod inner;
 
 use crate::network::Network;
 pub use config::*;
-use drasyl::identity::PubKey;
-use drasyl::node::{MessageSink, Node, SendHandle};
-use drasyl::util;
 pub use error::*;
 pub use inner::*;
+use p2p::identity::PubKey;
+use p2p::node::{MessageSink, Node, SendHandle};
+use p2p::util;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::MutexGuard;
