@@ -35,7 +35,7 @@ use crate::util::{bytes_to_hex, hex_to_bytes};
 ///
 /// ```rust
 /// use std::str::FromStr;
-/// use drasyl::identity::PubKey;
+/// use drasyl_p2p::identity::PubKey;
 ///
 /// // Parse a public key from a hex string
 /// let pk = PubKey::from_str("668178a3be9ad22f4f6e94c835ac824cf365db86bb486ab4a42c021dec09c0e4").expect("Invalid public key");

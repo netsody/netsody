@@ -1,5 +1,5 @@
+use crate::agent::Agent;
 use crate::network::{EffectiveAccessRuleList, EffectiveRoutingList, Network};
-use crate::node::SdnNode;
 use crate::rest_api::RestApiClient;
 use crate::rest_api::auth::AuthToken;
 use crate::rest_api::error::Error;
@@ -26,18 +26,18 @@ use url;
 use url::Url;
 
 impl RestApiServer {
-    pub(crate) async fn status(State(sdn_node): State<Arc<SdnNode>>, _: AuthToken) -> Json<Status> {
+    pub(crate) async fn status(State(agent): State<Arc<Agent>>, _: AuthToken) -> Json<Status> {
         trace!("Status request received");
 
         // opts
-        let opts = sdn_node.drasyl_node().opts().clone();
+        let opts = agent.node().opts().clone();
 
         // peers
         trace!("Getting peers");
-        let default_route = *sdn_node.drasyl_node().peers_list().default_route();
+        let default_route = *agent.node().peers_list().default_route();
         let mut super_peers = HashMap::new();
         let mut node_peers = HashMap::new();
-        for (pk, peer) in &sdn_node.drasyl_node().peers_list().peers.pin() {
+        for (pk, peer) in &agent.node().peers_list().peers.pin() {
             match peer {
                 Peer::SuperPeer(super_peer) => {
                     super_peers.insert(*pk, SuperPeerStatus::new(super_peer));
@@ -48,13 +48,13 @@ impl RestApiServer {
             }
         }
 
-        let mtu = sdn_node.inner.mtu;
+        let mtu = agent.inner.mtu;
 
         // networks
         trace!("Locking networks to get status");
         let mut networks = HashMap::new();
         {
-            let guard = sdn_node.inner.networks.lock().await;
+            let guard = agent.inner.networks.lock().await;
             for (config_url, network) in &*guard {
                 networks.insert(config_url.clone(), NetworkStatus::new(network));
             }
@@ -90,7 +90,7 @@ pub struct Status {
     default_route: PubKey,
     super_peers: HashMap<PubKey, SuperPeerStatus>,
     node_peers: HashMap<PubKey, NodePeerStatus>,
-    // drasyl-sdn
+    // drasyl-agent
     pub mtu: u16,
     pub networks: HashMap<Url, NetworkStatus>,
 }

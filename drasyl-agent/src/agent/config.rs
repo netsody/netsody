@@ -1,5 +1,5 @@
+use crate::agent::Error;
 use crate::network::Network;
-use crate::node::Error;
 use p2p::message::{ARM_HEADER_LEN, LONG_HEADER_LEN, SHORT_HEADER_LEN};
 use p2p::node::{Identity, MTU_DEFAULT};
 use p2p::util;
@@ -20,7 +20,7 @@ pub struct PrometheusConfig {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct SdnNodeConfig {
+pub struct AgentConfig {
     #[serde(rename = "identity")]
     pub id: Identity,
     #[serde(
@@ -35,7 +35,7 @@ pub struct SdnNodeConfig {
     pub prometheus: Option<PrometheusConfig>,
 }
 
-impl SdnNodeConfig {
+impl AgentConfig {
     pub fn new(id: Identity) -> Self {
         Self {
             id,
@@ -47,16 +47,16 @@ impl SdnNodeConfig {
     }
 
     pub fn load(path: &str) -> Result<Self, Error> {
-        trace!("Loading SDN config from {}", path);
+        trace!("Loading agent config from {}", path);
         let config_content = fs::read_to_string(path)?;
         trace!("Successfully read config file");
-        let config: SdnNodeConfig = toml::from_str(&config_content)?;
+        let config: AgentConfig = toml::from_str(&config_content)?;
         trace!("Successfully parsed config file");
         Ok(config)
     }
 
     pub fn load_or_generate(path: &str) -> Result<Self, Error> {
-        trace!("Loading or generating SDN config from {}", path);
+        trace!("Loading or generating agent config from {}", path);
 
         // options
         let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
@@ -74,7 +74,7 @@ impl SdnNodeConfig {
             let id = Identity::generate(min_pow_difficulty)?;
             trace!("Generated new identity with public key: {}", id.pk);
 
-            let config = SdnNodeConfig::new(id);
+            let config = AgentConfig::new(id);
 
             // Serialize and save the config
             config.save(path)?;
@@ -87,7 +87,7 @@ impl SdnNodeConfig {
     }
 
     pub fn save(&self, path: &str) -> Result<(), Error> {
-        trace!("Saving SDN config to {}", path);
+        trace!("Saving agent config to {}", path);
 
         // Serialize the config
         let config_content = toml::to_string_pretty(self)?;

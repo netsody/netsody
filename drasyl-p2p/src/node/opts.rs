@@ -72,7 +72,7 @@ lazy_static! {
 /// # Example
 ///
 /// ```rust
-/// use drasyl::node::{Node, NodeOpts, NodeOptsBuilder, Identity, MIN_POW_DIFFICULTY_DEFAULT};
+/// use drasyl_p2p::node::{Node, NodeOpts, NodeOptsBuilder, Identity, MIN_POW_DIFFICULTY_DEFAULT};
 ///
 /// async fn example() {
 ///     // Create or load an identity

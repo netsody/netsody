@@ -1,8 +1,8 @@
+use crate::agent::Error;
+use crate::agent::inner::AgentInner;
+use crate::agent::inner::is_drasyl_control_packet;
 use crate::network::config::EffectiveRoutingList;
 use crate::network::{LocalNodeState, Network, NetworkInner, TunState};
-use crate::node::Error;
-use crate::node::inner::SdnNodeInner;
-use crate::node::inner::is_drasyl_control_packet;
 use etherparse::Ipv4HeaderSlice;
 use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
@@ -30,9 +30,9 @@ use {std::fs, std::io::Write};
 /// If a config cannot be received within this time, the fetch is considered failed.
 pub(crate) const CONFIG_FETCH_TIMEOUT: u64 = 5_000;
 
-impl SdnNodeInner {
+impl AgentInner {
     pub(crate) async fn housekeeping_runner(
-        inner: Arc<SdnNodeInner>,
+        inner: Arc<AgentInner>,
         housekeeping_shutdown: CancellationToken,
     ) {
         let mut interval = tokio::time::interval(Duration::from_millis(10_000));
@@ -50,7 +50,7 @@ impl SdnNodeInner {
         }
     }
 
-    async fn housekeeping(&self, inner: &Arc<SdnNodeInner>) -> Result<(), Error> {
+    async fn housekeeping(&self, inner: &Arc<AgentInner>) -> Result<(), Error> {
         trace!("Locking networks to get network keys");
         let urls: Vec<Url> = {
             let networks = inner.networks.lock().await;
@@ -72,7 +72,7 @@ impl SdnNodeInner {
     #[instrument(fields(network = %config_url), skip_all)]
     async fn housekeeping_network(
         &self,
-        inner: Arc<SdnNodeInner>,
+        inner: Arc<AgentInner>,
         config_url: Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
@@ -183,7 +183,7 @@ impl SdnNodeInner {
 
     async fn update_routes_and_hostnames(
         &self,
-        inner: Arc<SdnNodeInner>,
+        inner: Arc<AgentInner>,
         config_url: Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
         current: Option<LocalNodeState>,
@@ -244,7 +244,7 @@ impl SdnNodeInner {
 
     pub(crate) async fn teardown_network(
         &self,
-        inner: Arc<SdnNodeInner>,
+        inner: Arc<AgentInner>,
         config_url: Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
@@ -282,7 +282,7 @@ impl SdnNodeInner {
 
     async fn setup_network(
         &self,
-        inner: Arc<SdnNodeInner>,
+        inner: Arc<AgentInner>,
         config_url: Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
         current: Option<LocalNodeState>,
@@ -362,7 +362,7 @@ impl SdnNodeInner {
     #[instrument(skip_all)]
     pub(crate) async fn update_rx_tries(
         &self,
-        inner: Arc<SdnNodeInner>,
+        inner: Arc<AgentInner>,
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         trace!("Rebuild tries");
@@ -426,7 +426,7 @@ impl SdnNodeInner {
 
     fn create_tun_device(
         &self,
-        inner: Arc<SdnNodeInner>,
+        inner: Arc<AgentInner>,
         ip: Ipv4Addr,
         netmask: u8,
         name: Option<String>,
@@ -546,7 +546,7 @@ impl SdnNodeInner {
     }
 
     async fn tun_runner(
-        inner: Arc<SdnNodeInner>,
+        inner: Arc<AgentInner>,
         device: Arc<TunDevice>,
         cancellation_token: CancellationToken,
         ip: Ipv4Addr,

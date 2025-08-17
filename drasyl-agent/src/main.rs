@@ -1,8 +1,8 @@
 use clap::arg;
 use clap::{Parser, Subcommand};
-use drasyl_sdn::node::{SdnNode, SdnNodeConfig};
-use drasyl_sdn::rest_api::{RestApiClient, RestApiServer};
-use drasyl_sdn::version_info::VersionInfo;
+use drasyl_agent::agent::{Agent, AgentConfig};
+use drasyl_agent::rest_api::{RestApiClient, RestApiServer};
+use drasyl_agent::version_info::VersionInfo;
 #[cfg(target_os = "windows")]
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
@@ -58,7 +58,7 @@ struct Cli {
     /// Path to a log file [defaults to stdout]
     #[arg(long, value_name = "file", global = true)]
     log_file: Option<PathBuf>,
-    /// Log filter in `RUST_LOG` syntax (e.g. `info`, or `drasyl=warn,drasyl_sdn=trace`).
+    /// Log filter in `RUST_LOG` syntax (e.g. `info`, or `drasyl=warn,drasyl_agent=trace`).
     /// If set, this overrides `RUST_LOG`.
     #[arg(long, value_name = "level", default_value = "info", global = true)]
     log_level: Option<String>,
@@ -68,7 +68,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Runs the drasyl daemon
+    /// Runs the drasyl agent
     Run {
         /// Path to config file
         #[arg(long, value_name = "file", default_value = "config.toml")]
@@ -78,7 +78,7 @@ enum Commands {
         token: PathBuf,
     },
     #[cfg(target_os = "windows")]
-    /// Runs the drasyl daemon as a Windows service
+    /// Runs the drasyl agent as a Windows service
     RunService {
         /// Path to config file
         #[arg(long, value_name = "file", default_value = "config.toml")]
@@ -87,15 +87,15 @@ enum Commands {
         #[arg(long, value_name = "file", default_value = "auth.token")]
         token: PathBuf,
     },
-    /// Shows the status of the running drasyl daemon
+    /// Shows the status of the running drasyl agent
     Status {
         /// Path to authentication token file
         #[arg(long, value_name = "file", default_value = "auth.token")]
         token: PathBuf,
     },
-    /// Shows the version of the drasyl daemon
+    /// Shows the version of the drasyl agent
     Version,
-    /// Adds a network to the running drasyl daemon
+    /// Adds a network to the running drasyl agent
     Add {
         /// Path to authentication token file
         #[arg(long, value_name = "file", default_value = "auth.token")]
@@ -103,7 +103,7 @@ enum Commands {
         /// The URL of the network to add
         url: String,
     },
-    /// Removes a network from the running drasyl daemon
+    /// Removes a network from the running drasyl agent
     Remove {
         /// Path to authentication token file
         #[arg(long, value_name = "file", default_value = "auth.token")]
@@ -111,7 +111,7 @@ enum Commands {
         /// The URL of the network to remove
         url: String,
     },
-    /// Disables a network in the running drasyl daemon
+    /// Disables a network in the running drasyl agent
     Disable {
         /// Path to authentication token file
         #[arg(long, value_name = "file", default_value = "auth.token")]
@@ -119,7 +119,7 @@ enum Commands {
         /// The URL of the network to disable
         url: String,
     },
-    /// Enables a network in the running drasyl daemon
+    /// Enables a network in the running drasyl agent
     Enable {
         /// Path to authentication token file
         #[arg(long, value_name = "file", default_value = "auth.token")]
@@ -175,9 +175,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     setup_logging(cli.log_file, cli.log_level)?;
 
     match cli.command {
-        Commands::Run { config, token } => run_sdn_node(config, token, None),
+        Commands::Run { config, token } => run_agent(config, token, None),
         #[cfg(target_os = "windows")]
-        Commands::RunService { config, token } => run_sdn_node_win(config, token),
+        Commands::RunService { config, token } => run_agent_win(config, token),
         Commands::Status { token } => show_status(token),
         Commands::Version => show_version(),
         Commands::Add { token, url } => add_network(token, &url),
@@ -187,14 +187,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     }
 }
 
-fn run_sdn_node(
+fn run_agent(
     config_path: PathBuf,
     token_path: PathBuf,
     cancellation_token: Option<CancellationToken>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     // config
     let config_path = config_path.to_str().unwrap();
-    let config = SdnNodeConfig::load_or_generate(config_path).expect("Failed to load SDN config");
+    let config = AgentConfig::load_or_generate(config_path).expect("Failed to load agent config");
 
     // identity
     info!("I am {}", config.id.pk);
@@ -203,7 +203,7 @@ fn run_sdn_node(
 
     rt.block_on(async {
         let token_path = token_path.to_str().expect("Invalid token path").to_owned();
-        let node = Arc::new(SdnNode::start(config, config_path.to_string(), token_path).await);
+        let node = Arc::new(Agent::start(config, config_path.to_string(), token_path).await);
         let rest_api = RestApiServer::new(node.clone());
 
         let node_clone = node.clone();
@@ -260,10 +260,10 @@ fn run_sdn_node(
 }
 
 #[cfg(target_os = "windows")]
-define_windows_service!(ffi_service_main, run_sdn_node_win_entry);
+define_windows_service!(ffi_service_main, run_agent_win_entry);
 
 #[cfg(target_os = "windows")]
-fn run_sdn_node_win_entry(arguments: Vec<OsString>) {
+fn run_agent_win_entry(arguments: Vec<OsString>) {
     let cancellation_token = CancellationToken::new();
     let child_token = cancellation_token.child_token();
 
@@ -308,9 +308,9 @@ fn run_sdn_node_win_entry(arguments: Vec<OsString>) {
         CONFIG_PATH.lock().unwrap().as_ref(),
         TOKEN_PATH.lock().unwrap().as_ref(),
     ) {
-        // Start the actual SDN node
-        if let Err(e) = run_sdn_node(config_path.clone(), token_path.clone(), Some(child_token)) {
-            error!("Failed to start SDN node: {}", e);
+        // Start the actual agent
+        if let Err(e) = run_agent(config_path.clone(), token_path.clone(), Some(child_token)) {
+            error!("Failed to start agent: {}", e);
         }
     } else {
         error!("Configuration paths not available in service context");
@@ -343,7 +343,7 @@ static CONFIG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 static TOKEN_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 #[cfg(target_os = "windows")]
-fn run_sdn_node_win(
+fn run_agent_win(
     config_path: PathBuf,
     token_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
@@ -358,7 +358,7 @@ fn run_sdn_node_win(
     Ok(())
 }
 
-/// display detailed version information for the drasyl-sdn application
+/// display detailed version information for the drasyl-agent application
 fn show_version() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let info = VersionInfo::new();
 

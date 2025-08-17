@@ -254,7 +254,7 @@ impl fmt::Display for LongHeader {
 /// # Example
 ///
 /// ```rust
-/// use drasyl::message::MessageType;
+/// use drasyl_p2p::message::MessageType;
 ///
 /// // Create message types for different protocol operations
 /// let ack_type = MessageType::ACK;

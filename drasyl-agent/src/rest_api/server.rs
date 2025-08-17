@@ -1,4 +1,4 @@
-use crate::node::SdnNode;
+use crate::agent::Agent;
 use crate::rest_api;
 use crate::rest_api::{API_LISTEN_DEFAULT, API_TOKEN_LEN_DEFAULT, error, load_auth_token};
 use axum::Router;
@@ -9,11 +9,11 @@ use tokio::net::TcpListener;
 use tracing::{info, trace};
 
 pub struct RestApiServer {
-    node: Arc<SdnNode>,
+    node: Arc<Agent>,
 }
 
 impl RestApiServer {
-    pub fn new(node: Arc<SdnNode>) -> Self {
+    pub fn new(node: Arc<Agent>) -> Self {
         Self { node }
     }
 

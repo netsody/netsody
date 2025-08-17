@@ -1,4 +1,4 @@
-use drasyl_sdn::rest_api::Status;
+use agent::rest_api::Status;
 use std::fmt::{Debug, Formatter};
 use tray_icon::TrayIconEvent;
 use tray_icon::menu::MenuEvent;

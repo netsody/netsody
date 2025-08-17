@@ -1,4 +1,4 @@
-name: libdrasyl
+name: P2P FFI
 
 on:
   push:
@@ -54,7 +54,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build with FFI feature
-        run: cargo build --verbose --package drasyl --features ffi --release
+        run: cargo build --verbose --package drasyl-p2p --features ffi --release
 
       - name: Upload FFI artifact
         uses: actions/upload-artifact@v4

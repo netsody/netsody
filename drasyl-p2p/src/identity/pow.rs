@@ -34,7 +34,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 ///
 /// ```rust
 /// use std::str::FromStr;
-/// use drasyl::identity::{Pow, PubKey};
+/// use drasyl_p2p::identity::{Pow, PubKey};
 ///
 /// // A valid proof of work for a given public key and difficulty
 /// let pk = PubKey::from_str("9331341e09d313baa4027a2fccea4fd471b9637f2305de714009c46b9192e006").expect("Invalid public key");
