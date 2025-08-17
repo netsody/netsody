@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Run node" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
-    <option name="command" value="run --package drasyl --features prometheus --example node" />
+    <option name="command" value="run --package drasyl-p2p --features prometheus --example node" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
       <env name="DRASYL_HELLO_MAX_AGE" value="60000" />

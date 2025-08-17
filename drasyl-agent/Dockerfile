@@ -1,7 +1,7 @@
 FROM rust:1.86-bullseye AS build
 COPY . /build
 WORKDIR /build/
-RUN cargo install --path drasyl-sdn
+RUN cargo install --path drasyl-agent
 
 FROM debian:bullseye-slim
 COPY --from=build /usr/local/cargo/bin/drasyl /usr/local/bin/drasyl

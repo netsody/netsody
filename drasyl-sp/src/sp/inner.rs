@@ -4,13 +4,13 @@ use crate::sp::error::Error;
 use crate::sp::tcp::TcpConnection;
 use crate::sp::{MAX_HOP_COUNT, Peer, PeersList, SuperPeerOpts, TransportProt};
 use bytes::Bytes;
-use drasyl::crypto::{AgreementPubKey, AgreementSecKey};
-use drasyl::identity::PubKey;
-use drasyl::message::{
+use futures::SinkExt;
+use p2p::crypto::{AgreementPubKey, AgreementSecKey};
+use p2p::identity::PubKey;
+use p2p::message::{
     AckMessage, HelloSuperPeerMessage, LongHeader, MessageType, UniteMessage,
     log_hello_super_peer_message,
 };
-use futures::SinkExt;
 use papaya::HashMap as PapayaHashMap;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;

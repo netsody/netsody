@@ -4,9 +4,9 @@ mod app;
 mod glow_tools;
 mod user_event;
 
+use agent::rest_api;
 use app::App;
 use arboard::Clipboard;
-use drasyl_sdn::rest_api;
 use rest_api::RestApiClient;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender, channel};

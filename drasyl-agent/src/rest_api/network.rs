@@ -1,5 +1,5 @@
 use super::client::RestApiClient;
-use crate::node::SdnNode;
+use crate::agent::Agent;
 use crate::rest_api::{AuthToken, RestApiServer, auth, error};
 use axum::Json;
 use axum::extract::State;
@@ -35,12 +35,12 @@ pub struct NetworkResponse {
 
 impl RestApiServer {
     pub(crate) async fn add_network(
-        State(sdn_node): State<Arc<SdnNode>>,
+        State(agent): State<Arc<Agent>>,
         _: AuthToken,
         Json(request): Json<AddNetworkRequest>,
     ) -> Json<NetworkResponse> {
         trace!("Add network request received: {:?}", request);
-        match Self::add_network_internal(sdn_node, &request.config_url).await {
+        match Self::add_network_internal(agent, &request.config_url).await {
             Ok(_) => Json(NetworkResponse {
                 success: true,
                 message: format!("Network '{}' added successfully", request.config_url),
@@ -53,12 +53,12 @@ impl RestApiServer {
     }
 
     pub(crate) async fn remove_network(
-        State(sdn_node): State<Arc<SdnNode>>,
+        State(agent): State<Arc<Agent>>,
         _: auth::AuthToken,
         Json(request): Json<RemoveNetworkRequest>,
     ) -> Json<NetworkResponse> {
         trace!("Remove network request received: {:?}", request);
-        match Self::remove_network_internal(sdn_node, &request.config_url).await {
+        match Self::remove_network_internal(agent, &request.config_url).await {
             Ok(_) => Json(NetworkResponse {
                 success: true,
                 message: format!("Network '{}' removed successfully", request.config_url),
@@ -70,11 +70,8 @@ impl RestApiServer {
         }
     }
 
-    async fn add_network_internal(
-        sdn_node: Arc<SdnNode>,
-        config_url: &str,
-    ) -> Result<(), error::Error> {
-        sdn_node
+    async fn add_network_internal(agent: Arc<Agent>, config_url: &str) -> Result<(), error::Error> {
+        agent
             .add_network(config_url)
             .await
             .map_err(|e| error::Error::NetworkConfigFetchFailed {
@@ -83,23 +80,24 @@ impl RestApiServer {
     }
 
     async fn remove_network_internal(
-        sdn_node: Arc<SdnNode>,
+        agent: Arc<Agent>,
         config_url: &str,
     ) -> Result<(), error::Error> {
-        sdn_node.remove_network(config_url).await.map_err(|e| {
-            error::Error::NetworkConfigFetchFailed {
+        agent
+            .remove_network(config_url)
+            .await
+            .map_err(|e| error::Error::NetworkConfigFetchFailed {
                 reason: e.to_string(),
-            }
-        })
+            })
     }
 
     pub(crate) async fn disable_network(
-        State(sdn_node): State<Arc<SdnNode>>,
+        State(agent): State<Arc<Agent>>,
         _: AuthToken,
         Json(request): Json<DisableNetworkRequest>,
     ) -> Json<NetworkResponse> {
         trace!("Disable network request received: {:?}", request);
-        match Self::disable_network_internal(sdn_node, &request.config_url).await {
+        match Self::disable_network_internal(agent, &request.config_url).await {
             Ok(_) => Json(NetworkResponse {
                 success: true,
                 message: format!("Network '{}' disabled successfully", request.config_url),
@@ -112,12 +110,12 @@ impl RestApiServer {
     }
 
     pub(crate) async fn enable_network(
-        State(sdn_node): State<Arc<SdnNode>>,
+        State(agent): State<Arc<Agent>>,
         _: AuthToken,
         Json(request): Json<EnableNetworkRequest>,
     ) -> Json<NetworkResponse> {
         trace!("Enable network request received: {:?}", request);
-        match Self::enable_network_internal(sdn_node, &request.config_url).await {
+        match Self::enable_network_internal(agent, &request.config_url).await {
             Ok(_) => Json(NetworkResponse {
                 success: true,
                 message: format!("Network '{}' enabled successfully", request.config_url),
@@ -130,10 +128,10 @@ impl RestApiServer {
     }
 
     async fn disable_network_internal(
-        sdn_node: Arc<SdnNode>,
+        agent: Arc<Agent>,
         config_url: &str,
     ) -> Result<(), error::Error> {
-        sdn_node.disable_network(config_url).await.map_err(|e| {
+        agent.disable_network(config_url).await.map_err(|e| {
             error::Error::NetworkConfigFetchFailed {
                 reason: e.to_string(),
             }
@@ -141,14 +139,15 @@ impl RestApiServer {
     }
 
     async fn enable_network_internal(
-        sdn_node: Arc<SdnNode>,
+        agent: Arc<Agent>,
         config_url: &str,
     ) -> Result<(), error::Error> {
-        sdn_node.enable_network(config_url).await.map_err(|e| {
-            error::Error::NetworkConfigFetchFailed {
+        agent
+            .enable_network(config_url)
+            .await
+            .map_err(|e| error::Error::NetworkConfigFetchFailed {
                 reason: e.to_string(),
-            }
-        })
+            })
     }
 }
 

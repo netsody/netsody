@@ -5,11 +5,11 @@ mod inner;
 
 use crate::network::Network;
 pub use config::*;
-use drasyl::identity::PubKey;
-use drasyl::node::{MessageSink, Node, SendHandle};
-use drasyl::util;
 pub use error::*;
 pub use inner::*;
+use p2p::identity::PubKey;
+use p2p::node::{MessageSink, Node, SendHandle};
+use p2p::util;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::MutexGuard;
@@ -18,17 +18,17 @@ use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{error, info, trace, warn};
 use url::Url;
 
-pub struct SdnNode {
-    pub(crate) inner: Arc<SdnNodeInner>,
+pub struct Agent {
+    pub(crate) inner: Arc<AgentInner>,
 }
 
-impl SdnNode {
-    pub async fn start(config: SdnNodeConfig, config_path: String, token_path: String) -> Self {
-        info!("Start SDN node.");
+impl Agent {
+    pub async fn start(config: AgentConfig, config_path: String, token_path: String) -> Self {
+        info!("Start agent.");
 
         // start node
         let cancellation_token = CancellationToken::new();
-        let (node, recv_buf_rx) = SdnNodeInner::bind_node(&config)
+        let (node, recv_buf_rx) = AgentInner::bind_node(&config)
             .await
             .expect("Failed to bind node");
 
@@ -40,7 +40,7 @@ impl SdnNode {
         let tun_tx = Arc::new(tun_tx);
         let drasyl_rx = Arc::new(drasyl_rx);
 
-        let inner = Arc::new(SdnNodeInner::new(
+        let inner = Arc::new(AgentInner::new(
             config.id,
             config.networks,
             cancellation_token,
@@ -50,19 +50,19 @@ impl SdnNode {
             drasyl_rx.clone(),
             config_path,
             token_path,
-            config.mtu.unwrap_or(SdnNodeConfig::default_mtu()),
+            config.mtu.unwrap_or(AgentConfig::default_mtu()),
         ));
 
         let mut join_set = JoinSet::new();
 
         // node runner task
-        join_set.spawn(SdnNodeInner::node_runner(
+        join_set.spawn(AgentInner::node_runner(
             inner.clone(),
             inner.cancellation_token.child_token(),
         ));
 
         // housekeeping task
-        join_set.spawn(SdnNodeInner::housekeeping_runner(
+        join_set.spawn(AgentInner::housekeeping_runner(
             inner.clone(),
             inner.cancellation_token.child_token(),
         ));
@@ -78,7 +78,7 @@ impl SdnNode {
             }
         });
 
-        info!("SDN node started.");
+        info!("Agent started.");
 
         Self { inner }
     }
@@ -88,12 +88,12 @@ impl SdnNode {
     }
 
     pub async fn shutdown(&self) {
-        info!("Shutdown SDN node.");
+        info!("Shutdown agent.");
         self.inner.shutdown().await;
-        info!("SDN node shut down.");
+        info!("Agent shut down.");
     }
 
-    pub fn drasyl_node(&self) -> Arc<Node> {
+    pub fn node(&self) -> Arc<Node> {
         self.inner.node.clone()
     }
 
@@ -224,7 +224,7 @@ impl SdnNode {
         trace!("Saving configuration");
 
         // load current configuration
-        let mut config = SdnNodeConfig::load(&self.inner.config_path)?;
+        let mut config = AgentConfig::load(&self.inner.config_path)?;
 
         // update networks from inner state
         config.networks = (*networks).clone();

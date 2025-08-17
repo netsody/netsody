@@ -2,9 +2,9 @@ pub(crate) mod config;
 
 use arc_swap::ArcSwap;
 pub use config::*;
-use drasyl::node::SendHandle;
 use ipnet::Ipv4Net;
 use ipnet_trie::IpnetTrie;
+use p2p::node::SendHandle;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;

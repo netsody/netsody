@@ -1,15 +1,10 @@
+use crate::agent::{AgentConfig, ChannelSink, Error};
 use crate::network::Network;
 use crate::network::config::{EffectiveRoutingList, NetworkConfig};
-use crate::node::{ChannelSink, Error, SdnNodeConfig};
 use arc_swap::ArcSwap;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-use drasyl::identity::{Identity, PubKey};
-use drasyl::message::LONG_HEADER_MAGIC_NUMBER;
-use drasyl::node::{Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT, SendHandle};
-use drasyl::peer::SuperPeerUrl;
-use drasyl::util;
 use etherparse::Ipv4HeaderSlice;
 use flume::{Receiver, Sender};
 use http::Request;
@@ -18,6 +13,11 @@ use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
+use p2p::identity::{Identity, PubKey};
+use p2p::message::LONG_HEADER_MAGIC_NUMBER;
+use p2p::node::{Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT, SendHandle};
+use p2p::peer::SuperPeerUrl;
+use p2p::util;
 
 use ipnet::IpNet;
 use ipnet_trie::IpnetTrie;
@@ -34,7 +34,7 @@ use url::Url;
 
 type TrieRx = IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>>;
 
-pub struct SdnNodeInner {
+pub struct AgentInner {
     pub(crate) id: Identity,
     pub(crate) networks: Arc<Mutex<HashMap<Url, Network>>>,
     pub(crate) cancellation_token: CancellationToken,
@@ -50,7 +50,7 @@ pub struct SdnNodeInner {
     client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
 }
 
-impl SdnNodeInner {
+impl AgentInner {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         id: Identity,
@@ -90,7 +90,7 @@ impl SdnNodeInner {
     }
 
     pub(crate) async fn bind_node(
-        config: &SdnNodeConfig,
+        config: &AgentConfig,
     ) -> Result<(Arc<Node>, Arc<Receiver<(PubKey, Vec<u8>)>>), Error> {
         // options
         let super_peers = SuperPeerUrl::parse_list(&util::get_env(
@@ -178,10 +178,7 @@ impl SdnNodeInner {
         Ok((node, Arc::new(recv_buf_rx)))
     }
 
-    pub(crate) async fn node_runner(
-        inner: Arc<SdnNodeInner>,
-        cancellation_token: CancellationToken,
-    ) {
+    pub(crate) async fn node_runner(inner: Arc<AgentInner>, cancellation_token: CancellationToken) {
         let node = inner.node.clone();
         let recv_buf_rx = inner.recv_buf_rx.clone();
         let drasyl_rx = inner.drasyl_rx.clone();
@@ -487,7 +484,7 @@ impl SdnNodeInner {
 
         // hostnames
         #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        if let Err(e) = crate::node::housekeeping::cleanup_hosts_file() {
+        if let Err(e) = crate::agent::housekeeping::cleanup_hosts_file() {
             error!("Failed to cleanup /etc/hosts: {}", e);
         }
     }

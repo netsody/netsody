@@ -1,4 +1,4 @@
-name: drasyl-sdn
+name: Agent
 
 on:
   push:
@@ -46,7 +46,7 @@ jobs:
             os: windows-latest
             path: target/release/drasyl.exe
 
-    name: Build drasyl-sdn on ${{ matrix.job_name }}
+    name: Build drasyl-agent on ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -61,14 +61,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build drasyl-sdn
-        run: cargo build --verbose --package drasyl-sdn --features dns --release
+      - name: Build drasyl-agent
+        run: cargo build --verbose --package drasyl-agent --features dns --release
 
-      - name: Bundle drasyl-sdn.deb
-        run: ./drasyl-sdn/bundle-debian.sh --release
+      - name: Bundle drasyl-agent.deb
+        run: ./drasyl-agent/bundle-debian.sh --release
         if: success() && startsWith(matrix.job_name, 'linux-')
 
-      - name: Upload drasyl-sdn artifact
+      - name: Upload drasyl-agent artifact
         uses: actions/upload-artifact@v4
         with:
           name: drasyl-${{ matrix.job_name }}

@@ -53,7 +53,7 @@ use tokio::task::JoinError;
 /// # Example
 ///
 /// ```rust
-/// use drasyl::node::Error;
+/// use drasyl_p2p::node::Error;
 ///
 /// fn handle_error(error: Error) {
 ///     match error {
