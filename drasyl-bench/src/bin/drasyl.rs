@@ -1,5 +1,5 @@
-use drasyl::identity::{Identity, PubKey};
-use drasyl::node::{MessageSink, Node, NodeOptsBuilder};
+use p2p::identity::{Identity, PubKey};
+use p2p::node::{MessageSink, Node, NodeOptsBuilder};
 use std::env;
 use std::hint::spin_loop;
 use std::str::FromStr;

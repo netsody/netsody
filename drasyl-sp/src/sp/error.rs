@@ -1,7 +1,7 @@
 use crate::sp::PeersError;
-use drasyl::identity::PubKey;
-use drasyl::message::{MessageType, NetworkId};
-use drasyl::{crypto, message};
+use p2p::identity::PubKey;
+use p2p::message::{MessageType, NetworkId};
+use p2p::{crypto, message};
 use std::io;
 use thiserror::Error;
 use tokio::task::JoinError;

@@ -1,11 +1,11 @@
 use ahash::RandomState;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use drasyl::identity::{Identity, Pow, PubKey, SecKey};
-use drasyl::message::AppMessage;
-use drasyl::message::NetworkId;
-use drasyl::node::NodeInner;
-use drasyl::node::{MTU_DEFAULT, MessageSink, NodeOptsBuilder};
-use drasyl::node::{Node, UdpBinding};
+use drasyl_p2p::identity::{Identity, Pow, PubKey, SecKey};
+use drasyl_p2p::message::AppMessage;
+use drasyl_p2p::message::NetworkId;
+use drasyl_p2p::node::NodeInner;
+use drasyl_p2p::node::{MTU_DEFAULT, MessageSink, NodeOptsBuilder};
+use drasyl_p2p::node::{Node, UdpBinding};
 use papaya::HashMap as PapayaHashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;

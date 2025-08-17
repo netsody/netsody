@@ -1599,7 +1599,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "drasyl"
+name = "drasyl-bench"
+version = "0.1.0"
+dependencies = [
+ "drasyl-p2p",
+ "iroh",
+ "iroh-base",
+ "rand 0.8.5",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "drasyl-p2p"
 version = "0.1.0"
 dependencies = [
  "aegis",
@@ -1627,19 +1640,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "drasyl-bench"
-version = "0.1.0"
-dependencies = [
- "drasyl",
- "iroh",
- "iroh-base",
- "rand 0.8.5",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "drasyl-sdn"
 version = "0.1.0"
 dependencies = [
@@ -1651,7 +1651,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "drasyl",
+ "drasyl-p2p",
  "etherparse",
  "flume",
  "futures",
@@ -1688,7 +1688,7 @@ dependencies = [
  "bytes",
  "criterion",
  "derive_builder",
- "drasyl",
+ "drasyl-p2p",
  "futures",
  "hyper",
  "hyper-util",

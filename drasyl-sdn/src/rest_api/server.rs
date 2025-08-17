@@ -3,7 +3,7 @@ use crate::rest_api;
 use crate::rest_api::{API_LISTEN_DEFAULT, API_TOKEN_LEN_DEFAULT, error, load_auth_token};
 use axum::Router;
 use axum::routing::{get, post};
-use drasyl::util;
+use p2p::util;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{info, trace};

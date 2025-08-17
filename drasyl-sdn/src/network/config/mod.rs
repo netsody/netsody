@@ -2,10 +2,10 @@ mod error;
 
 use crate::network;
 use ahash::RandomState;
-use drasyl::identity::PubKey;
 pub use error::*;
 use ipnet::Ipv4Net;
 use ipnet_trie::IpnetTrie;
+use p2p::identity::PubKey;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -770,8 +770,8 @@ fn is_valid_hostname(hostname: &str) -> bool {
 mod tests {
     use crate::network;
     use crate::network::config::{NetworkConfig, NetworkPolicy};
-    use drasyl::identity::PubKey;
     use ipnet::Ipv4Net;
+    use p2p::identity::PubKey;
     use std::collections::HashSet;
     use std::net::Ipv4Addr;
     use std::str::FromStr;

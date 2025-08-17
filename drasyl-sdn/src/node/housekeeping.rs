@@ -3,13 +3,13 @@ use crate::network::{LocalNodeState, Network, NetworkInner, TunState};
 use crate::node::Error;
 use crate::node::inner::SdnNodeInner;
 use crate::node::inner::is_drasyl_control_packet;
-use drasyl::identity::PubKey;
-use drasyl::node::SendHandle;
-use drasyl::util;
 use etherparse::Ipv4HeaderSlice;
 use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
 use net_route::Handle;
+use p2p::identity::PubKey;
+use p2p::node::SendHandle;
+use p2p::util;
 use std::collections::HashMap;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::hash::{DefaultHasher, Hash, Hasher};

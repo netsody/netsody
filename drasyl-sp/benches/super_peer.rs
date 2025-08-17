@@ -1,11 +1,11 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use drasyl::identity::{Identity, Pow, PubKey, SecKey};
-use drasyl::message::AppMessage;
-use drasyl::message::HelloSuperPeerMessage;
-use drasyl::message::NetworkId;
-use drasyl::node::MTU_DEFAULT;
 use drasyl_sp::sp::SuperPeerInner;
 use drasyl_sp::sp::SuperPeerOptsBuilder;
+use p2p::identity::{Identity, Pow, PubKey, SecKey};
+use p2p::message::AppMessage;
+use p2p::message::HelloSuperPeerMessage;
+use p2p::message::NetworkId;
+use p2p::node::MTU_DEFAULT;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
