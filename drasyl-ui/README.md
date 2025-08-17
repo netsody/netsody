@@ -1,6 +1,6 @@
 # drasyl-ui
 
-**drasyl-ui** is a lightweight desktop client for the locally running [drasyl-sdn](../drasyl-sdn) node. It provides a system tray interface that allows you to monitor and control your drasyl node.
+**drasyl-ui** is a lightweight desktop client for the locally running [drasyl-agent](../drasyl-agent) node. It provides a system tray interface that allows you to monitor and control your drasyl node.
 
 ## Development
 

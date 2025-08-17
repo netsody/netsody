@@ -1,14 +1,14 @@
-use crate::node::SdnNode;
+use crate::agent::Agent;
 use axum::extract::FromRequestParts;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, RequestPartsExt};
 use axum_extra::TypedHeader;
-use drasyl::crypto::random_bytes;
-use drasyl::util::bytes_to_hex;
 use headers::Authorization;
 use headers::authorization::Bearer;
 use http::StatusCode;
 use http::request::Parts;
+use p2p::crypto::random_bytes;
+use p2p::util::bytes_to_hex;
 use serde_json::json;
 use std::env;
 use std::fs;
@@ -109,12 +109,12 @@ pub(crate) fn create_auth_token(
     Ok(token)
 }
 
-impl FromRequestParts<Arc<SdnNode>> for AuthToken {
+impl FromRequestParts<Arc<Agent>> for AuthToken {
     type Rejection = AuthError;
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &Arc<SdnNode>,
+        state: &Arc<Agent>,
     ) -> Result<Self, Self::Rejection> {
         // load existing API token
         let expected_token = load_auth_token(&state.inner.token_path).map_err(|e| {

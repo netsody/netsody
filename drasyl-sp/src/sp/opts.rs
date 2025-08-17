@@ -1,7 +1,7 @@
 use derive_builder::Builder;
-use drasyl::identity::Identity;
-use drasyl::message::NetworkId;
-use drasyl::node::{
+use p2p::identity::Identity;
+use p2p::message::NetworkId;
+use p2p::node::{
     ARM_MESSAGES_DEFAULT, HELLO_MAX_AGE_DEFAULT, HELLO_TIMEOUT_DEFAULT, MIN_POW_DIFFICULTY_DEFAULT,
     MTU_DEFAULT, NETWORK_ID_DEFAULT,
 };

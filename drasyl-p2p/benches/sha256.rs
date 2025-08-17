@@ -1,5 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use drasyl::crypto::{Error, sha256};
+use drasyl_p2p::crypto::{Error, sha256};
 use libsodium_sys as sodium;
 
 fn sha256_libsodium(input: &[u8]) -> Result<[u8; 32], Error> {

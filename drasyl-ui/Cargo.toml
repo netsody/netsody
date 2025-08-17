@@ -7,7 +7,7 @@ edition = "2024"
 vergen-git2 = { version = "1.0.0" }
 
 [dependencies]
-drasyl-sdn = { path = "../drasyl-sdn" }
+agent = { package = "drasyl-agent", path = "../drasyl-agent" }
 tracing = { workspace = true }
 tracing-subscriber  = { workspace = true }
 tokio = { workspace = true }

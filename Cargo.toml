@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "drasyl-p2p",
-    "drasyl-sdn"
+    "drasyl-agent"
 , "drasyl-sp", "drasyl-bench", "drasyl-ui"]
 resolver = "3"
 

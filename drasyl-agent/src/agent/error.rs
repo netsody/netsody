@@ -1,5 +1,5 @@
 use crate::network;
-use drasyl::identity;
+use p2p::identity;
 use std::io;
 use std::string::FromUtf8Error;
 use thiserror::Error;

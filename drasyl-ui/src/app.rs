@@ -1,8 +1,8 @@
 use crate::glow_tools::GlutinWindowContext;
 use crate::user_event::UserEvent;
+use agent::rest_api;
+use agent::rest_api::{NetworkStatus, Status, mask_url};
 use arboard::Clipboard;
-use drasyl_sdn::rest_api;
-use drasyl_sdn::rest_api::{NetworkStatus, Status, mask_url};
 use rest_api::RestApiClient;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
@@ -174,20 +174,18 @@ impl App {
                                 if let MenuItemKind::MenuItem(item) = kind {
                                     let id = item.id();
                                     match id {
-                                        id if id == &MenuId::new("version_daemon") => {
-                                            match result {
-                                                Ok(status) => {
-                                                    item.set_text(format!(
-                                                        "Daemon:\t  {0} ({1})",
-                                                        status.version_info.version,
-                                                        status.version_info.full_commit()
-                                                    ));
-                                                }
-                                                Err(_) => {
-                                                    item.set_text("Daemon:");
-                                                }
+                                        id if id == &MenuId::new("version_agent") => match result {
+                                            Ok(status) => {
+                                                item.set_text(format!(
+                                                    "Agent:\t  {0} ({1})",
+                                                    status.version_info.version,
+                                                    status.version_info.full_commit()
+                                                ));
                                             }
-                                        }
+                                            Err(_) => {
+                                                item.set_text("Agent:");
+                                            }
+                                        },
                                         _ => {}
                                     }
                                 }
@@ -415,7 +413,7 @@ impl App {
         trace!("Adding address item");
         let item = MenuItem::with_id(
             "address",
-            "Waiting for drasyl daemon to become available…",
+            "Waiting for drasyl service to become available…",
             false,
             Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyC)),
         );
@@ -468,7 +466,7 @@ impl App {
             panic!("{e:?}");
         }
 
-        let item = MenuItem::with_id("version_daemon", "Daemon:", true, None);
+        let item = MenuItem::with_id("version_agent", "Agent:", true, None);
         if let Err(e) = about.append(&item) {
             panic!("{e:?}");
         }
@@ -912,7 +910,7 @@ impl ApplicationHandler<UserEvent> for App {
                             trace!("Copied UI version to clipboard: {}", version);
                         }
                     }
-                    id if id == MenuId::new("version_daemon") => {
+                    id if id == MenuId::new("version_agent") => {
                         let version = if let Some(Ok(status)) =
                             self.status.lock().expect("Mutex poisoned").as_ref()
                         {
@@ -925,12 +923,12 @@ impl ApplicationHandler<UserEvent> for App {
                             "None".to_string()
                         };
 
-                        trace!("Copy daemon version: {}", version);
+                        trace!("Copy agent version: {}", version);
 
                         if let Err(e) = self.clipboard.set_text(version.clone()) {
-                            warn!("Failed to copy daemon version to clipboard: {}", e);
+                            warn!("Failed to copy agent version to clipboard: {}", e);
                         } else {
-                            trace!("Copied daemon version to clipboard: {}", version);
+                            trace!("Copied agent version to clipboard: {}", version);
                         }
                     }
                     id if id == MenuId::new("github") => {

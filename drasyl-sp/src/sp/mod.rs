@@ -7,9 +7,9 @@ mod tcp;
 mod udp;
 
 pub use crate::sp::inner::SuperPeerInner;
-use drasyl::crypto::{convert_ed25519_pk_to_curve22519_pk, convert_ed25519_sk_to_curve25519_sk};
 pub use error::*;
 pub use opts::*;
+use p2p::crypto::{convert_ed25519_pk_to_curve22519_pk, convert_ed25519_sk_to_curve25519_sk};
 pub use peers::*;
 use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};
