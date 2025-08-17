@@ -61,7 +61,7 @@ async fn main() -> Result<(), Error> {
             tcp4_listen
                 .to_owned()
                 .parse()
-                .unwrap_or_else(|_| panic!("Invalid TCP6 listen address: {tcp6_listen}")),
+                .unwrap_or_else(|_| panic!("Invalid TCP4 listen address: {tcp4_listen}")),
         )
     };
 
