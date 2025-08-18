@@ -97,9 +97,8 @@ impl NetworkConfig {
                 for (pk, node) in &self.nodes {
                     if !my_pk.eq(pk) {
                         let node_dest: Ipv4Net = node.ip.into();
-                        let accept = (route.groups.is_empty()
-                            || route.groups.iter().any(|g| node.groups.contains(g)))
-                            && self.matching_policy(my_pk, pk);
+                        let accept = route.groups.is_empty()
+                            || route.groups.iter().any(|g| node.groups.contains(g));
 
                         let entry = EffectiveAccessRule {
                             direction: Direction::OUT,
@@ -156,19 +155,20 @@ impl NetworkConfig {
                 }
             } else {
                 for (pk, node) in &self.nodes {
-                    let source: Ipv4Net = node.ip.into();
-                    let accept = route.groups.is_empty()
-                        || route.groups.iter().any(|g| node.groups.contains(g))
-                            && self.matching_policy(my_pk, pk);
-                    let entry = EffectiveAccessRule {
-                        direction: Direction::IN,
-                        source,
-                        dest: *dest,
-                        pk: *pk,
-                        action: if accept { Action::Allow } else { Action::Deny },
-                    };
-                    if entries.insert(entry.clone().into(), entry).is_some() {
-                        return Err(ConfigError::RouteDuplicate);
+                    if !my_pk.eq(pk) {
+                        let source: Ipv4Net = node.ip.into();
+                        let accept = route.groups.is_empty()
+                            || route.groups.iter().any(|g| node.groups.contains(g));
+                        let entry = EffectiveAccessRule {
+                            direction: Direction::IN,
+                            source,
+                            dest: *dest,
+                            pk: *pk,
+                            action: if accept { Action::Allow } else { Action::Deny },
+                        };
+                        if entries.insert(entry.clone().into(), entry).is_some() {
+                            return Err(ConfigError::RouteDuplicate);
+                        }
                     }
                 }
             }
@@ -1300,5 +1300,108 @@ mod tests {
             groups: HashSet::new(),
         };
         assert!(has_route_access(&node3_pk, &route_no_groups, &nodes));
+    }
+
+    #[test]
+    fn test_route_access_without_gateway_access() {
+        let toml_str = r#"
+network = "192.168.1.0/24"
+
+[[node]]
+pk = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ip = "192.168.1.1"
+hostname = "example-node-1"
+groups = ["a"]
+
+[[node]]
+pk = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+ip = "192.168.1.2"
+hostname = "example-gateway"
+groups = ["b"]
+
+[[route]]
+dest = "10.0.0.0/16"
+gw = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+"#;
+
+        let network = NetworkConfig::try_from(toml_str).unwrap();
+
+        // Test for bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        let test_pk =
+            PubKey::from_str("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                .unwrap();
+
+        // Get effective_access_rule_list
+        let effective_access_rule_list = network.effective_access_rule_list(&test_pk).unwrap();
+        // println!("effective_access_rule_list for bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb: {}", effective_access_rule_list);
+
+        // Check the expected access rules
+        let rules = &effective_access_rule_list.0;
+
+        // OUT  10.0.0.0/16        192.168.1.1/32     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ALLOW
+        let expected_out_route_allow = crate::network::config::EffectiveAccessRule {
+            direction: crate::network::config::Direction::OUT,
+            source: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 16).unwrap(),
+            dest: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 1), 32).unwrap(),
+            pk: PubKey::from_str(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+            action: crate::network::config::Action::Allow,
+        };
+        assert!(
+            rules.values().any(|rule| rule == &expected_out_route_allow),
+            "OUT rule for route 10.0.0.0/16 should be ALLOW"
+        );
+
+        // OUT  192.168.1.2/32     192.168.1.1/32     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa DENY
+        let expected_out_gateway_deny = crate::network::config::EffectiveAccessRule {
+            direction: crate::network::config::Direction::OUT,
+            source: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 2), 32).unwrap(),
+            dest: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 1), 32).unwrap(),
+            pk: PubKey::from_str(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+            action: crate::network::config::Action::Deny,
+        };
+        assert!(
+            rules
+                .values()
+                .any(|rule| rule == &expected_out_gateway_deny),
+            "OUT rule for gateway 192.168.1.2/32 should be DENY"
+        );
+
+        // IN   192.168.1.1/32     10.0.0.0/16        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ALLOW
+        let expected_in_route_allow = crate::network::config::EffectiveAccessRule {
+            direction: crate::network::config::Direction::IN,
+            source: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 1), 32).unwrap(),
+            dest: Ipv4Net::new(Ipv4Addr::new(10, 0, 0, 0), 16).unwrap(),
+            pk: PubKey::from_str(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+            action: crate::network::config::Action::Allow,
+        };
+        assert!(
+            rules.values().any(|rule| rule == &expected_in_route_allow),
+            "IN rule for route 10.0.0.0/16 should be ALLOW"
+        );
+
+        // IN   192.168.1.1/32     192.168.1.2/32     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa DENY
+        let expected_in_gateway_deny = crate::network::config::EffectiveAccessRule {
+            direction: crate::network::config::Direction::IN,
+            source: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 1), 32).unwrap(),
+            dest: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 2), 32).unwrap(),
+            pk: PubKey::from_str(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+            action: crate::network::config::Action::Deny,
+        };
+        assert!(
+            rules.values().any(|rule| rule == &expected_in_gateway_deny),
+            "IN rule for gateway 192.168.1.2/32 should be DENY"
+        );
     }
 }
