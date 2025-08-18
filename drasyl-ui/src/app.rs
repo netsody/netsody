@@ -296,6 +296,12 @@ impl App {
                     panic!("{e:?}");
                 }
 
+                // separator
+                trace!("Adding separator");
+                if let Err(e) = submenu.append(&PredefinedMenuItem::separator()) {
+                    panic!("{e:?}");
+                }
+
                 // remove action
                 let item = MenuItem::with_id(
                     format!("remove_network {config_url_str}"),
