@@ -502,6 +502,8 @@ pub struct SuperPeerUrl {
     pub tcp_port: u16,
     /// Public key of the super peer.
     pub pk: PubKey,
+    /// Network ID to which the super peer belongs.
+    pub network_id: i32,
 }
 
 impl SuperPeerUrl {
@@ -533,8 +535,9 @@ impl FromStr for SuperPeerUrl {
             if let Some((addr, query)) = url_str.split_once('?') {
                 let mut public_key = None;
                 let mut tcp_port = 443;
+                let mut network_id = 1i32;
 
-                // Parse Query Parameter für Public Key und TCP Port
+                // Parse Query Parameter für Public Key, Network ID und TCP Port
                 for param in query.split('&') {
                     if let Some((key, value)) = param.split_once('=') {
                         match key {
@@ -549,6 +552,11 @@ impl FromStr for SuperPeerUrl {
                                     tcp_port = port;
                                 }
                             }
+                            "networkId" => {
+                                if let Ok(id) = value.parse::<i32>() {
+                                    network_id = id;
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -559,6 +567,7 @@ impl FromStr for SuperPeerUrl {
                         addr: addr.to_string(),
                         pk,
                         tcp_port,
+                        network_id,
                     })
                 } else {
                     Err(SuperPeerUrlError::NoPublicKey)
@@ -576,8 +585,8 @@ impl fmt::Display for SuperPeerUrl {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "udp://{}?publicKey={}&networkId=1&tcpPort={}",
-            self.addr, self.pk, self.tcp_port
+            "udp://{}?publicKey={}&networkId={}&tcpPort={}",
+            self.addr, self.pk, self.network_id, self.tcp_port
         )
     }
 }
