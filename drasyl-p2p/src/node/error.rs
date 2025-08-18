@@ -91,6 +91,9 @@ pub enum Error {
     #[error("Message from other network: {}", i32::from_be_bytes(*.0))]
     NetworkIdInvalid(NetworkId),
 
+    #[error("Super peers have inconsistent network IDs: expected {}, but found {}", i32::from_be_bytes(*.0), i32::from_be_bytes(*.1))]
+    SuperPeerNetworkIdMismatch(NetworkId, NetworkId),
+
     #[error("Invalid proof of work")]
     PowInvalid,
 

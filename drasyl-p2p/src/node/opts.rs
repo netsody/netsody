@@ -1,5 +1,4 @@
 use crate::identity::{Identity, PubKey};
-use crate::message::NetworkId;
 use crate::peer::SuperPeerUrl;
 use derive_builder::Builder;
 use lazy_static::lazy_static;
@@ -7,9 +6,6 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-/// Default network identifier for the drasyl network.
-/// Nodes with different network IDs cannot communicate with each other.
-pub const NETWORK_ID_DEFAULT: i32 = 1;
 /// Default setting for message encryption.
 /// When true, all messages are encrypted using the node's cryptographic keys.
 pub const ARM_MESSAGES_DEFAULT: bool = true;
@@ -93,7 +89,6 @@ lazy_static! {
 /// # Default Values
 ///
 /// Most fields have sensible default values that can be overridden using the builder:
-/// * `network_id`: [`NETWORK_ID_DEFAULT`]
 /// * `arm_messages`: [`ARM_MESSAGES_DEFAULT`]
 /// * `max_peers`: [`MAX_PEERS_DEFAULT`]
 /// * `min_pow_difficulty`: [`MIN_POW_DIFFICULTY_DEFAULT`]
@@ -117,10 +112,6 @@ pub struct NodeOpts {
         serde(skip_serializing, skip_deserializing, default = "dummy_message_sink")
     )]
     pub message_sink: Arc<dyn MessageSink>,
-    /// The network identifier to ensure nodes only communicate within the same network.
-    /// Default: [`NETWORK_ID_DEFAULT`]
-    #[builder(default = "NETWORK_ID_DEFAULT.to_be_bytes()")]
-    pub network_id: NetworkId,
     /// List of IP addresses to bind UDP sockets to; if empty, all available addresses are used.
     /// Default: empty vector (all available addresses)
     #[builder(default)]

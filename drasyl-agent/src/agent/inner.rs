@@ -103,7 +103,6 @@ impl AgentInner {
         ))
         .expect("Invalid super peer urls");
         let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
-        let network_id = util::get_env("NETWORK_ID", 1i32).to_be_bytes();
         let arm_messages = util::get_env("ARM_MESSAGES", true);
         let udp_addrs = util::get_env("UDP_ADDRS", String::new());
         let udp_port = util::get_env("UDP_PORT", String::new());
@@ -126,7 +125,6 @@ impl AgentInner {
         let mut builder = NodeOptsBuilder::default();
         builder
             .id(config.id.clone())
-            .network_id(network_id)
             .arm_messages(arm_messages)
             .udp_addrs(
                 udp_addrs
