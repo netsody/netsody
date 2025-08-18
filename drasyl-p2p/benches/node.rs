@@ -17,7 +17,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_util::sync::CancellationToken;
 
 fn create_test_node_rx(
-    network_id: &NetworkId,
+    network_id: NetworkId,
     id: &Identity,
 ) -> (NodeInner, Receiver<(PubKey, Vec<u8>)>) {
     let runtime = Runtime::new().unwrap();
@@ -25,7 +25,6 @@ fn create_test_node_rx(
         let (recv_buf_tx, recv_buf_rx) = mpsc::channel::<(PubKey, Vec<u8>)>(64);
 
         let opts = NodeOptsBuilder::default()
-            .network_id(*network_id)
             .arm_messages(false)
             .id(id.clone())
             .message_sink(Arc::new(ChannelSink(recv_buf_tx)))
@@ -44,6 +43,7 @@ fn create_test_node_rx(
         (
             NodeInner::new(
                 opts,
+                network_id,
                 peers,
                 None,
                 None,
@@ -57,9 +57,8 @@ fn create_test_node_rx(
     })
 }
 
-async fn create_test_node_tx(network_id: &NetworkId, id: &Identity) -> Node {
+async fn create_test_node_tx(id: &Identity) -> Node {
     let opts = NodeOptsBuilder::default()
-        .network_id(*network_id)
         .arm_messages(false)
         .id(id.clone())
         .udp_port(Some(0))
@@ -96,7 +95,7 @@ fn benchmark_node(c: &mut Criterion) {
         (-2131760488i32).into(),
     );
 
-    let (node_rx, _recv_buf_rx) = create_test_node_rx(&network_id, &id_1);
+    let (node_rx, _recv_buf_rx) = create_test_node_rx(network_id, &id_1);
     let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
     let bytes = vec![0u8; 1024];
     let mut app = create_app(&network_id, &id_2.pk, &id_2.pow, &id_1.pk);
@@ -122,7 +121,7 @@ fn benchmark_node(c: &mut Criterion) {
         });
     });
 
-    let node_tx = runtime.block_on(async { create_test_node_tx(&network_id, &id_1).await });
+    let node_tx = runtime.block_on(async { create_test_node_tx(&id_1).await });
 
     group.bench_function("APP tx", |b| {
         b.iter(|| runtime.block_on(async { black_box(node_tx.send_to(&id_3.pk, &bytes).await) }));

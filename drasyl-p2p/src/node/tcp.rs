@@ -131,7 +131,7 @@ impl NodeInner {
         }
 
         let hello = match HelloSuperPeerMessage::build(
-            &inner.opts.network_id,
+            &inner.network_id,
             &inner.opts.id.pk,
             &inner.opts.id.pow,
             tx_key.as_ref(),

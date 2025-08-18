@@ -3,11 +3,12 @@ use p2p::identity::Identity;
 use p2p::message::NetworkId;
 use p2p::node::{
     ARM_MESSAGES_DEFAULT, HELLO_MAX_AGE_DEFAULT, HELLO_TIMEOUT_DEFAULT, MIN_POW_DIFFICULTY_DEFAULT,
-    MTU_DEFAULT, NETWORK_ID_DEFAULT,
+    MTU_DEFAULT,
 };
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 
 pub const MAX_HOP_COUNT: u8 = 7u8;
+pub const NETWORK_ID_DEFAULT: i32 = 1;
 pub const UDP4_LISTEN_DEFAULT: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 22527);
 pub const UDP6_LISTEN_DEFAULT: SocketAddrV6 =
     SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), 22527, 0, 0);

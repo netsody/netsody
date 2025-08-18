@@ -231,7 +231,16 @@ impl Node {
             return Err(Error::NoSuperPeers);
         }
 
+        // Check that all super peers have the same network_id and create them
+        let network_id = opts.super_peers[0].network_id;
         for super_peer in &opts.super_peers {
+            if super_peer.network_id != network_id {
+                return Err(Error::SuperPeerNetworkIdMismatch(
+                    network_id.to_be_bytes(),
+                    super_peer.network_id.to_be_bytes(),
+                ));
+            }
+
             let super_peer_key = super_peer.pk;
             let super_peer = SuperPeer::new(
                 opts.arm_messages,
@@ -256,6 +265,7 @@ impl Node {
 
         let inner = Arc::new(NodeInner::new(
             opts,
+            network_id.to_be_bytes(),
             peers,
             agreement_sk,
             agreement_pk,

@@ -72,6 +72,7 @@ impl From<node::Error> for c_int {
             node::Error::SendHandleClosed => -132,
             node::Error::SendingRelayedError { .. } => -133,
             node::Error::RecipientIsSuperPeer { .. } => -134,
+            node::Error::SuperPeerNetworkIdMismatch(_, _) => -135,
         }
     }
 }
@@ -277,15 +278,6 @@ pub extern "C" fn drasyl_node_opts_builder_message_sink(
     0
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn drasyl_node_opts_builder_network_id(
-    builder: &mut NodeOptsBuilder,
-    network_id: i32,
-) -> c_int {
-    builder.network_id(network_id.to_be_bytes());
-    0
-}
-
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_node_opts_builder_udp_addrs(
@@ -450,11 +442,6 @@ pub extern "C" fn drasyl_node_opts_builder_free(builder: *mut NodeOptsBuilder) -
 // TODO: drasyl_node_opts_id
 
 // TODO: drasyl_node_opts_message_sink
-
-#[unsafe(no_mangle)]
-pub extern "C" fn drasyl_node_opts_network_id(opts: &mut NodeOpts) -> i32 {
-    i32::from_be_bytes(opts.network_id)
-}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_node_opts_udp_port(opts: &mut NodeOpts) -> i32 {

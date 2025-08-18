@@ -14,7 +14,6 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let identity_file = util::get_env("IDENTITY_FILE", "node.identity".to_string());
-    let network_id = util::get_env("NETWORK_ID", 1i32).to_be_bytes();
     let arm_messages = util::get_env("ARM_MESSAGES", true);
     let udp_addrs = util::get_env("UDP_ADDRS", String::new());
     let udp_port = util::get_env("UDP_PORT", String::new());
@@ -45,7 +44,6 @@ async fn main() {
     let recv_buf_rx = Arc::new(Mutex::new(recv_buf_rx));
     let opts = NodeOptsBuilder::default()
         .id(id)
-        .network_id(network_id)
         .arm_messages(arm_messages)
         .udp_addrs(
             udp_addrs

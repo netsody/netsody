@@ -239,7 +239,7 @@ impl SendHandle {
             // TODO: Consider using a buffer pool to avoid repeated allocations.
             let app = if best_addr.is_none() || short_id.is_none() {
                 AppMessage::build(
-                    &inner.opts.network_id,
+                    &inner.network_id,
                     &inner.opts.id.pk,
                     &inner.opts.id.pow,
                     state.tx_key.as_ref(),

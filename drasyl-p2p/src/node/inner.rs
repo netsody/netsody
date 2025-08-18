@@ -1,5 +1,6 @@
 use crate::crypto::{AgreementPubKey, AgreementSecKey};
 use crate::identity::PubKey;
+use crate::message::NetworkId;
 use crate::message::{
     AckMessage, AppMessage, Endpoint, EndpointsList, HELLO_MAX_ENDPOINTS, HelloNodePeerMessage,
     LongHeader, MessageType, SHORT_HEADER_ID_LEN, SHORT_ID_NONE, ShortHeader, ShortId,
@@ -24,6 +25,7 @@ use tracing::{debug, instrument, trace, warn};
 #[doc(hidden)]
 pub struct NodeInner {
     pub(crate) opts: NodeOpts,
+    pub(crate) network_id: NetworkId,
     coarse_timer: AtomicU64,
     pub(crate) peers_list: PeersList,
     pub(crate) udp_bindings: ArcSwap<Vec<Arc<UdpBinding>>>,
@@ -38,6 +40,7 @@ impl NodeInner {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         opts: NodeOpts,
+        network_id: NetworkId,
         peers: PapayaHashMap<PubKey, Peer, RandomState>,
         agreement_sk: Option<AgreementSecKey>,
         agreement_pk: Option<AgreementPubKey>,
@@ -52,6 +55,7 @@ impl NodeInner {
 
         Self {
             opts,
+            network_id,
             coarse_timer: AtomicU64::new(Self::clock()),
             peers_list: peers,
             udp_bindings: ArcSwap::new(Arc::new(udp_bindings)),
@@ -99,7 +103,7 @@ impl NodeInner {
         // long header
         let (long_header, body_slice) = LongHeader::parse(buf)?;
 
-        if long_header.network_id != self.opts.network_id {
+        if long_header.network_id != self.network_id {
             return Err(Error::NetworkIdInvalid(long_header.network_id));
         }
 
@@ -302,7 +306,7 @@ impl NodeInner {
         trace!("Got HELLO. Reply with ACK");
         let ack_len = AckMessage::build(
             response_buf,
-            &self.opts.network_id,
+            &self.network_id,
             &self.opts.id.pk,
             &self.opts.id.pow,
             node_peer.tx_key().as_ref(),
@@ -344,7 +348,7 @@ impl NodeInner {
 
             let time = self.current_time();
             let hello = HelloNodePeerMessage::build(
-                &self.opts.network_id,
+                &self.network_id,
                 &self.opts.id.pk,
                 &self.opts.id.pow,
                 node_peer.tx_key().as_ref(),
@@ -431,7 +435,7 @@ impl NodeInner {
                         let path = PeerPath::new();
                         let time = self.current_time();
                         let hello = HelloNodePeerMessage::build(
-                            &self.opts.network_id,
+                            &self.network_id,
                             &self.opts.id.pk,
                             &self.opts.id.pow,
                             node_peer.tx_key().as_ref(),

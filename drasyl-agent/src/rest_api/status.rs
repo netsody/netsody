@@ -112,11 +112,6 @@ impl fmt::Display for Status {
         writeln!(f, "    Secret Key: {}", self.opts.id.sk)?;
         writeln!(f, "    Public Key: {}", self.opts.id.pk)?;
         writeln!(f, "    PoW: {}", self.opts.id.pow)?;
-        writeln!(
-            f,
-            "  Network ID: {:?}",
-            u32::from_be_bytes(self.opts.network_id)
-        )?;
         writeln!(f, "  UDP:")?;
         writeln!(
             f,

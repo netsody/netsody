@@ -354,7 +354,7 @@ impl NodeInner {
 
                 trace!("Contact peer via endpoint to test reachability/maintain link: {path_key}");
                 let hello = HelloNodePeerMessage::build(
-                    &self.opts.network_id,
+                    &self.network_id,
                     &self.opts.id.pk,
                     &self.opts.id.pow,
                     tx_key.as_ref(),
@@ -476,7 +476,7 @@ impl NodeInner {
         // send HELLO
         trace!("Send HELLO to super peer");
         let hello = HelloSuperPeerMessage::build(
-            &self.opts.network_id,
+            &self.network_id,
             &self.opts.id.pk,
             &self.opts.id.pow,
             super_peer.tx_key().as_ref(),
