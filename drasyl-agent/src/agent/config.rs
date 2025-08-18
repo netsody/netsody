@@ -2,6 +2,7 @@ use crate::agent::Error;
 use crate::network::Network;
 use p2p::message::{ARM_HEADER_LEN, LONG_HEADER_LEN, SHORT_HEADER_LEN};
 use p2p::node::{Identity, MTU_DEFAULT};
+use p2p::peer::SuperPeerUrl;
 use p2p::util;
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,6 +32,7 @@ pub struct AgentConfig {
     )]
     pub networks: HashMap<Url, Network>,
     pub mtu: Option<u16>,
+    pub super_peers: Option<Vec<SuperPeerUrl>>,
     #[cfg(feature = "prometheus")]
     pub prometheus: Option<PrometheusConfig>,
 }
@@ -41,6 +43,7 @@ impl AgentConfig {
             id,
             networks: Default::default(),
             mtu: Default::default(),
+            super_peers: Default::default(),
             #[cfg(feature = "prometheus")]
             prometheus: Default::default(),
         }

@@ -16,7 +16,6 @@ use hyper_util::rt::TokioExecutor;
 use p2p::identity::{Identity, PubKey};
 use p2p::message::LONG_HEADER_MAGIC_NUMBER;
 use p2p::node::{Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT, SendHandle};
-use p2p::peer::SuperPeerUrl;
 use p2p::util;
 
 use ipnet::IpNet;
@@ -93,15 +92,18 @@ impl AgentInner {
         config: &AgentConfig,
     ) -> Result<(Arc<Node>, Arc<Receiver<(PubKey, Vec<u8>)>>), Error> {
         // options
-        let super_peers = SuperPeerUrl::parse_list(&util::get_env(
-            "SUPER_PEERS",
-            SUPER_PEERS_DEFAULT
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(" "),
+        let super_peers = config
+            .super_peers
+            .clone()
+            .unwrap_or(SUPER_PEERS_DEFAULT.clone()); /*SuperPeerUrl::parse_list(&util::get_env(
+        "SUPER_PEERS",
+        SUPER_PEERS_DEFAULT
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" "),
         ))
-        .expect("Invalid super peer urls");
+        .expect("Invalid super peer urls");*/
         let min_pow_difficulty = util::get_env("MIN_POW_DIFFICULTY", 24);
         let arm_messages = util::get_env("ARM_MESSAGES", true);
         let udp_addrs = util::get_env("UDP_ADDRS", String::new());
