@@ -495,6 +495,7 @@ pub enum SuperPeerUrlError {
 #[doc(hidden)]
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "String", into = "String"))]
 pub struct SuperPeerUrl {
     /// Hostname or IP address of the super peer.
     pub addr: String,
@@ -581,6 +582,14 @@ impl FromStr for SuperPeerUrl {
     }
 }
 
+impl TryFrom<String> for SuperPeerUrl {
+    type Error = SuperPeerUrlError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_str(&value)
+    }
+}
+
 impl fmt::Display for SuperPeerUrl {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
@@ -588,5 +597,11 @@ impl fmt::Display for SuperPeerUrl {
             "udp://{}?publicKey={}&networkId={}&tcpPort={}",
             self.addr, self.pk, self.network_id, self.tcp_port
         )
+    }
+}
+
+impl From<SuperPeerUrl> for String {
+    fn from(url: SuperPeerUrl) -> Self {
+        url.to_string()
     }
 }
