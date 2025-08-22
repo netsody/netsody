@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::MutexGuard;
 use tokio::task;
+use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, instrument, trace, warn};
@@ -483,10 +484,11 @@ impl AgentInner {
                 _ = tun_token_clone.cancelled() => {
                     trace!("TUN runner token cancelled.");
                 }
-                _ = Self::tun_runner(inner_clone, tun_device_clone, tun_token_clone2, ip, network_inner_clone) => {
-                    error!("TUN runner terminated. Must have crashed. Cancel agent token.");
+                result = Self::tun_runner(inner_clone, tun_device_clone, tun_token_clone2, ip, network_inner_clone) => {
+                    if let Err(e) = result {
+                        error!("TUN runner crashed. Cancel agent token: {}", e);
+                    }
                     agent_token.cancel();
-                    // std::process::exit(1); // TODO: would be nicer to just stop this task
                 }
             }
             trace!("TUN task done.");
@@ -564,15 +566,16 @@ impl AgentInner {
         cancellation_token: CancellationToken,
         ip: Ipv4Addr,
         network_inner: Arc<NetworkInner>,
-    ) {
+    ) -> Result<(), String> {
         trace!("TUN runner started");
 
-        let node = inner.node.clone();
         let tun_tx = inner.tun_tx.clone();
 
         // options
         let tun_threads = util::get_env("TUN_THREADS", 3);
         let mtu = inner.mtu;
+
+        let mut join_set: JoinSet<Result<(), String>> = JoinSet::new();
 
         // tun <-> drasyl packet processing
         #[allow(unused_variables)]
@@ -589,11 +592,14 @@ impl AgentInner {
             let child_token = cancellation_token.child_token();
             let inner_clone = inner.clone();
             let network_inner_clone = network_inner.clone();
-            tokio::spawn(async move {
+            join_set.spawn(async move {
                 let mut buf = vec![0u8; mtu as usize];
                 tokio::select! {
                     _ = child_token.cancelled() => {}
-                    _ = async move {
+                    _ = cancellation_token_clone.cancelled() => {
+                        Ok(())
+                    }
+                    result = async move {
                         trace!("tun <-> drasyl packet processing thread started");
                         loop {
                             match dev_clone.recv(&mut buf).await {
@@ -691,24 +697,26 @@ impl AgentInner {
                                 }
                                 Err(e) => {
                                     error!("Failed to receive packet from TUN device: {}", e);
-                                    break
+                                    return Err(format!("Failed to receive packet from TUN device: {}", e));
                                 }
                             }
                         }
-                    } => {}
+                    } => {
+                        result
+                    }
                 }
             });
         }
 
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                trace!("TUN runner cancelled");
-            }
-            _ = node.cancelled() => {
-                trace!("Node cancelled");
-                cancellation_token.cancel();
+        let monitoring_token = cancellation_token.clone();
+        while let Some(result) = join_set.join_next().await {
+            if let Err(e) = result {
+                return Err(format!("TUN task failed: {}", e));
             }
         }
+
+        trace!("TUN runner done.");
+        Ok(())
     }
 
     pub(crate) async fn remove_routes(
