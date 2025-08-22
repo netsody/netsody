@@ -40,7 +40,10 @@ impl AgentInner {
         loop {
             tokio::select! {
                 biased;
-                _ = housekeeping_shutdown.cancelled() => break,
+                _ = housekeeping_shutdown.cancelled() => {
+                    trace!("Housekeeping runner cancelled");
+                    break
+                },
                 _ = interval.tick() => {
                     if let Err(e) = inner.housekeeping(&inner).await {
                         error!("Error in housekeeping: {e}");
@@ -48,6 +51,8 @@ impl AgentInner {
                 }
             }
         }
+
+        trace!("Housekeeping runner finished");
     }
 
     async fn housekeeping(&self, inner: &Arc<AgentInner>) -> Result<(), Error> {
@@ -433,7 +438,8 @@ impl AgentInner {
         network_inner: Arc<NetworkInner>,
     ) -> (CancellationToken, Arc<AsyncDevice>) {
         // create tun device
-        let cancellation_token = CancellationToken::new();
+        let agent_token = inner.cancellation_token.clone();
+        let tun_token = agent_token.child_token();
         // options
         let mtu = inner.mtu;
 
@@ -463,24 +469,31 @@ impl AgentInner {
 
         // crate tun task
         // TODO: guard einführen der aufräumt wenn der task hier stirbt
-        let cancellation_token_clone = cancellation_token.clone();
         let inner_clone = inner.clone();
         let tun_device_clone = tun_device.clone();
         let network_inner_clone = network_inner.clone();
-        let child_token = cancellation_token_clone.child_token();
+        let tun_token_clone = tun_token.clone();
+        let tun_token_clone2 = tun_token.clone();
         task::spawn(async move {
             tokio::select! {
                 biased;
-                _ = cancellation_token_clone.cancelled() => {}
-                _ = Self::tun_runner(inner_clone, tun_device_clone, child_token, ip, network_inner_clone) => {
-                    error!("TUN runner terminated. Must have crashed.");
-                    std::process::exit(1); // TODO: would be nicer to just stop this task
+                _ = agent_token.cancelled() => {
+                    trace!("Agent token cancelled. Cancel TUN runner.");
+                }
+                _ = tun_token_clone.cancelled() => {
+                    trace!("TUN runner token cancelled.");
+                }
+                _ = Self::tun_runner(inner_clone, tun_device_clone, tun_token_clone2, ip, network_inner_clone) => {
+                    error!("TUN runner terminated. Must have crashed. Cancel agent token.");
+                    agent_token.cancel();
+                    // std::process::exit(1); // TODO: would be nicer to just stop this task
                 }
             }
+            trace!("TUN task done.");
         });
         trace!("TUN task spawned");
 
-        (cancellation_token, tun_device)
+        (tun_token, tun_device)
     }
 
     async fn remove_tun_device(&self, network: &mut Network) {
@@ -552,6 +565,8 @@ impl AgentInner {
         ip: Ipv4Addr,
         network_inner: Arc<NetworkInner>,
     ) {
+        trace!("TUN runner started");
+
         let node = inner.node.clone();
         let tun_tx = inner.tun_tx.clone();
 
@@ -579,95 +594,104 @@ impl AgentInner {
                 tokio::select! {
                     _ = child_token.cancelled() => {}
                     _ = async move {
-                        while let Ok(size) = dev_clone.recv(&mut buf).await {
-                            let buf = &buf[..size];
-                            if let Ok(ip_hdr) = Ipv4HeaderSlice::from_slice(buf) {
-                                if enabled!(Level::TRACE) {
-                                    trace!(
-                                        src=?ip_hdr.source_addr(),
-                                        dst=?ip_hdr.destination_addr(),
-                                        payload_len=?buf.len(),
-                                        "Forwarding packet from TUN device to drasyl: {} -> {} ({} bytes)",
-                                        ip_hdr.source_addr(),
-                                        ip_hdr.destination_addr(),
-                                        buf.len()
-                                    );
-                                }
-
-                                // filter drasyl control plane messages
-                                if is_drasyl_control_packet(buf) {
-                                    trace!(
-                                        src=?ip_hdr.source_addr(),
-                                        dst=?ip_hdr.destination_addr(),
-                                        "Dropping drasyl control plane packet: {} -> {} (control traffic filtered)",
-                                        ip_hdr.source_addr(),
-                                        ip_hdr.destination_addr()
-                                    );
-                                    continue;
-                                }
-
-                                let source = IpNet::from(IpAddr::V4(ip_hdr.source_addr()));
-                                if let Some((source_trie_entry_source, source_trie)) = network_inner_clone.trie_tx.load().longest_match(&source) {
-                                    trace!(
-                                        src=?ip_hdr.source_addr(),
-                                        dst=?ip_hdr.destination_addr(),
-                                        "Found source trie entry with net {}",
-                                        source_trie_entry_source
-                                    );
-                                    let dest_addr = ip_hdr.destination_addr();
-
-                                    #[cfg(target_os = "macos")]
-                                    if ip == dest_addr {
-                                        // loopback
-                                        if let Err(e) = dev_clone.send(buf).await {
-                                            warn!(
-                                                src=?ip_hdr.source_addr(),
-                                                dst=?ip_hdr.destination_addr(),
-                                                tun_device=?dev_clone.name().unwrap_or("unknown".to_string()),
-                                                error=?e,
-                                                "Failed to send loopback packet to TUN device: {}", e
-                                            );
-                                        }
-                                        continue;
-                                    }
-                                    let dest = IpNet::from(IpAddr::V4(dest_addr));
-                                    if let Some((_, send_handle)) = source_trie.longest_match(&dest)
-                                    {
-                                        if let Err(e) = tun_tx.try_send((buf.to_vec(), send_handle.clone())) {
-                                            warn!(
-                                                src=?ip_hdr.source_addr(),
-                                                dst=?ip_hdr.destination_addr(),
-                                                error=?e,
-                                                "Failed to forward packet to drasyl: {}", e
-                                            );
-                                        }
-                                        else {
+                        trace!("tun <-> drasyl packet processing thread started");
+                        loop {
+                            match dev_clone.recv(&mut buf).await {
+                                Ok(size) => {
+                                    let buf = &buf[..size];
+                                    if let Ok(ip_hdr) = Ipv4HeaderSlice::from_slice(buf) {
+                                        if enabled!(Level::TRACE) {
                                             trace!(
                                                 src=?ip_hdr.source_addr(),
                                                 dst=?ip_hdr.destination_addr(),
-                                                "Successfully forwarded packet to drasyl: {} -> {}",
+                                                payload_len=?buf.len(),
+                                                "Forwarding packet from TUN device to drasyl: {} -> {} ({} bytes)",
+                                                ip_hdr.source_addr(),
+                                                ip_hdr.destination_addr(),
+                                                buf.len()
+                                            );
+                                        }
+
+                                        // filter drasyl control plane messages
+                                        if is_drasyl_control_packet(buf) {
+                                            trace!(
+                                                src=?ip_hdr.source_addr(),
+                                                dst=?ip_hdr.destination_addr(),
+                                                "Dropping drasyl control plane packet: {} -> {} (control traffic filtered)",
+                                                ip_hdr.source_addr(),
+                                                ip_hdr.destination_addr()
+                                            );
+                                            continue;
+                                        }
+
+                                        let source = IpNet::from(IpAddr::V4(ip_hdr.source_addr()));
+                                        if let Some((source_trie_entry_source, source_trie)) = network_inner_clone.trie_tx.load().longest_match(&source) {
+                                            trace!(
+                                                src=?ip_hdr.source_addr(),
+                                                dst=?ip_hdr.destination_addr(),
+                                                "Found source trie entry with net {}",
+                                                source_trie_entry_source
+                                            );
+                                            let dest_addr = ip_hdr.destination_addr();
+
+                                            #[cfg(target_os = "macos")]
+                                            if ip == dest_addr {
+                                                // loopback
+                                                if let Err(e) = dev_clone.send(buf).await {
+                                                    warn!(
+                                                        src=?ip_hdr.source_addr(),
+                                                        dst=?ip_hdr.destination_addr(),
+                                                        tun_device=?dev_clone.name().unwrap_or("unknown".to_string()),
+                                                        error=?e,
+                                                        "Failed to send loopback packet to TUN device: {}", e
+                                                    );
+                                                }
+                                                continue;
+                                            }
+                                            let dest = IpNet::from(IpAddr::V4(dest_addr));
+                                            if let Some((_, send_handle)) = source_trie.longest_match(&dest)
+                                            {
+                                                if let Err(e) = tun_tx.try_send((buf.to_vec(), send_handle.clone())) {
+                                                    warn!(
+                                                        src=?ip_hdr.source_addr(),
+                                                        dst=?ip_hdr.destination_addr(),
+                                                        error=?e,
+                                                        "Failed to forward packet to drasyl: {}", e
+                                                    );
+                                                }
+                                                else {
+                                                    trace!(
+                                                        src=?ip_hdr.source_addr(),
+                                                        dst=?ip_hdr.destination_addr(),
+                                                        "Successfully forwarded packet to drasyl: {} -> {}",
+                                                        ip_hdr.source_addr(),
+                                                        ip_hdr.destination_addr()
+                                                    );
+                                                }
+                                            } else {
+                                                warn!(
+                                                    src=?ip_hdr.source_addr(),
+                                                    dst=?ip_hdr.destination_addr(),
+                                                    "No outbound route found for destination: {} -> {} (missing destination route in routing table)",
+                                                    ip_hdr.source_addr(),
+                                                    ip_hdr.destination_addr()
+                                                );
+                                            }
+                                        }
+                                        else {
+                                            warn!(
+                                                src=?ip_hdr.source_addr(),
+                                                dst=?ip_hdr.destination_addr(),
+                                                "No outbound route found for source: {} -> {} (source IP not in routing table)",
                                                 ip_hdr.source_addr(),
                                                 ip_hdr.destination_addr()
                                             );
                                         }
-                                    } else {
-                                        warn!(
-                                            src=?ip_hdr.source_addr(),
-                                            dst=?ip_hdr.destination_addr(),
-                                            "No outbound route found for destination: {} -> {} (missing destination route in routing table)",
-                                            ip_hdr.source_addr(),
-                                            ip_hdr.destination_addr()
-                                        );
                                     }
                                 }
-                                else {
-                                    warn!(
-                                        src=?ip_hdr.source_addr(),
-                                        dst=?ip_hdr.destination_addr(),
-                                        "No outbound route found for source: {} -> {} (source IP not in routing table)",
-                                        ip_hdr.source_addr(),
-                                        ip_hdr.destination_addr()
-                                    );
+                                Err(e) => {
+                                    error!("Failed to receive packet from TUN device: {}", e);
+                                    break
                                 }
                             }
                         }

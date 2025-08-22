@@ -193,11 +193,14 @@ impl AgentInner {
             // drasyl -> tun
             let node = node.clone();
             let recv_buf_rx = recv_buf_rx.clone();
-            let child_token = cancellation_token.child_token();
+            let token_clone = cancellation_token.clone();
             let inner_clone = inner.clone();
             tokio::spawn(async move {
                 tokio::select! {
-                    _ = child_token.cancelled() => {}
+                    biased;
+                    _ = token_clone.cancelled() => {
+                        trace!("Token cancelled. Exiting tun <-> drasyl packet processing.");
+                    }
                     _ = async move {
                         while let Ok((sender_key, buf)) = recv_buf_rx.recv_async().await {
                             match Ipv4HeaderSlice::from_slice(&buf) {
@@ -299,19 +302,24 @@ impl AgentInner {
                                 }
                             }
                         }
-                    } => {}
+                    } => {
+                        trace!("Tun <-> drasyl packet processing done.");
+                    }
                 }
             });
         }
 
         #[allow(unused_variables)]
         for i in 0..c2d_threads {
-            // channel -> drasyl
+            // channel -> drasyl processing
             let drasyl_rx = drasyl_rx.clone();
-            let child_token = cancellation_token.child_token();
+            let token_close = cancellation_token.clone();
             tokio::spawn(async move {
                 tokio::select! {
-                    _ = child_token.cancelled() => {}
+                    biased;
+                    _ = token_close.cancelled() => {
+                        trace!("Token cancelled. Exiting channel -> drasyl processing.");
+                    }
                     _ = async move {
                         while let Ok((buf, send_handle)) = drasyl_rx.recv_async().await {
                             if let Err(e) = send_handle.send(&buf).await {
@@ -326,14 +334,20 @@ impl AgentInner {
                                 );
                             }
                         }
-                    } => {}
+                    } => {
+                        trace!("Channel -> drasyl processing done.");
+                    }
                 }
             });
         }
 
         tokio::select! {
-            _ = cancellation_token.cancelled() => {}
+            biased;
+            _ = cancellation_token.cancelled() => {
+                trace!("Token cancelled. Exiting node runner.");
+            }
             _ = node.cancelled() => {
+                trace!("Cancelled by node. Exiting node runner.");
                 cancellation_token.cancel();
             }
         }
@@ -450,6 +464,7 @@ impl AgentInner {
     }
 
     pub(crate) async fn shutdown(&self) {
+        trace!("Cancel agent token");
         self.cancellation_token.cancel();
 
         // remove physical routes
