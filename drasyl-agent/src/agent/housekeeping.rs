@@ -35,7 +35,7 @@ impl AgentInner {
     pub(crate) async fn housekeeping_runner(
         inner: Arc<AgentInner>,
         housekeeping_shutdown: CancellationToken,
-    ) {
+    ) -> Result<(), String> {
         let mut interval = tokio::time::interval(Duration::from_millis(10_000));
 
         loop {
@@ -54,6 +54,7 @@ impl AgentInner {
         }
 
         trace!("Housekeeping runner finished");
+        Ok(())
     }
 
     async fn housekeeping(&self, inner: &Arc<AgentInner>) -> Result<(), Error> {
@@ -575,7 +576,7 @@ impl AgentInner {
         let tun_threads = util::get_env("TUN_THREADS", 3);
         let mtu = inner.mtu;
 
-        let mut join_set: JoinSet<Result<(), String>> = JoinSet::new();
+        let mut join_set = JoinSet::new();
 
         // tun <-> drasyl packet processing
         #[allow(unused_variables)]
@@ -589,18 +590,18 @@ impl AgentInner {
             };
             let dev_clone = device.clone();
             let tun_tx = tun_tx.clone();
-            let child_token = cancellation_token.child_token();
+            let cancellation_token_clone = cancellation_token.clone();
             let inner_clone = inner.clone();
             let network_inner_clone = network_inner.clone();
             join_set.spawn(async move {
-                let mut buf = vec![0u8; mtu as usize];
                 tokio::select! {
-                    _ = child_token.cancelled() => {}
                     _ = cancellation_token_clone.cancelled() => {
+                        trace!("Token cancelled. Exiting tun <-> drasyl packet processing task ({}/{}).", i + 1, tun_threads);
                         Ok(())
                     }
                     result = async move {
-                        trace!("tun <-> drasyl packet processing thread started");
+                        trace!("tun <-> drasyl packet processing task started ({}/{}).", i + 1, tun_threads);
+                        let mut buf = vec![0u8; mtu as usize];
                         loop {
                             match dev_clone.recv(&mut buf).await {
                                 Ok(size) => {
