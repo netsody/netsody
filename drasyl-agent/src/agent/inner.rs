@@ -179,7 +179,6 @@ impl AgentInner {
     }
 
     pub(crate) async fn node_runner(inner: Arc<AgentInner>, cancellation_token: CancellationToken) {
-        let node = inner.node.clone();
         let recv_buf_rx = inner.recv_buf_rx.clone();
         let drasyl_rx = inner.drasyl_rx.clone();
 
@@ -191,7 +190,6 @@ impl AgentInner {
         #[allow(unused_variables)]
         for i in 0..tun_threads {
             // drasyl -> tun
-            let node = node.clone();
             let recv_buf_rx = recv_buf_rx.clone();
             let token_clone = cancellation_token.clone();
             let inner_clone = inner.clone();
@@ -199,7 +197,7 @@ impl AgentInner {
                 tokio::select! {
                     biased;
                     _ = token_clone.cancelled() => {
-                        trace!("Token cancelled. Exiting tun <-> drasyl packet processing.");
+                        trace!("Token cancelled. Exiting tun <-> drasyl packet processing task ({}/{}).", i + 1, tun_threads);
                     }
                     _ = async move {
                         while let Ok((sender_key, buf)) = recv_buf_rx.recv_async().await {
@@ -318,7 +316,7 @@ impl AgentInner {
                 tokio::select! {
                     biased;
                     _ = token_close.cancelled() => {
-                        trace!("Token cancelled. Exiting channel -> drasyl processing.");
+                        trace!("Token cancelled. Exiting channel -> drasyl processing task ({}/{}).", i + 1, c2d_threads);
                     }
                     _ = async move {
                         while let Ok((buf, send_handle)) = drasyl_rx.recv_async().await {
@@ -346,7 +344,7 @@ impl AgentInner {
             _ = cancellation_token.cancelled() => {
                 trace!("Token cancelled. Exiting node runner.");
             }
-            _ = node.cancelled() => {
+            _ = inner.node.cancelled() => {
                 trace!("Cancelled by node. Exiting node runner.");
                 cancellation_token.cancel();
             }
