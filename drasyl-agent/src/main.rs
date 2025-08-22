@@ -201,17 +201,18 @@ fn run_agent(
 
     let rt = Runtime::new().unwrap();
 
-    rt.block_on(async {
-        let token_path = token_path.to_str().expect("Invalid token path").to_owned();
-        let node = Arc::new(Agent::start(config, config_path.to_string(), token_path).await);
-        let rest_api = RestApiServer::new(node.clone());
+    let result = rt.block_on(async {
+        {
+            let token_path = token_path.to_str().expect("Invalid token path").to_owned();
+            let agent = Arc::new(Agent::start(config, config_path.to_string(), token_path).await);
+            let rest_api = RestApiServer::new(agent.clone());
 
-        let node_clone = node.clone();
-        let cancellation_token = cancellation_token.unwrap_or_default();
+            let agent_clone = agent.clone();
+            let cancellation_token = cancellation_token.unwrap_or_default();
 
-        tokio::select! {
-            biased;
-            _ = async {
+            tokio::select! {
+                biased;
+                _ = async {
                 #[cfg(unix)]
                 {
                     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())?;
@@ -233,30 +234,33 @@ fn run_agent(
                 Ok::<_, std::io::Error>(())
             } => {
                 trace!("Shutdown initiated via SIGTERM.");
-                node_clone.shutdown().await;
+                agent_clone.shutdown().await;
             }
-            res = rest_api.bind() => {
-                match res {
-                    Ok(_) => {
-                        trace!("rest_api shut down");
-                    }
-                    Err(e) => {
-                        let msg = format!("rest_api failed to bind: {e}");
-                        error!("{}", msg);
-                        return Err(msg.into());
+                res = rest_api.bind() => {
+                    match res {
+                        Ok(_) => {
+                            trace!("rest_api shut down");
+                        }
+                        Err(e) => {
+                            let msg = format!("rest_api failed to bind: {e}");
+                            error!("{}", msg);
+                            return Err(msg.into());
+                        }
                     }
                 }
-            }
-            _ = node.cancelled() => {
-                trace!("Node cancelled.");
-            },
-            _ = cancellation_token.cancelled() => {
-                trace!("Cancellation token cancelled");
+                _ = agent.cancelled() => {
+                    trace!("Node cancelled.");
+                },
+                _ = cancellation_token.cancelled() => {
+                    trace!("Cancellation token cancelled");
+                }
             }
         }
 
         Ok(())
-    })
+    });
+    trace!("Runtime finished");
+    result
 }
 
 #[cfg(target_os = "windows")]

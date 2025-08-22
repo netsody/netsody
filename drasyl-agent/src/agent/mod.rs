@@ -58,13 +58,13 @@ impl Agent {
         // node runner task
         join_set.spawn(AgentInner::node_runner(
             inner.clone(),
-            inner.cancellation_token.child_token(),
+            inner.cancellation_token.clone(),
         ));
 
         // housekeeping task
         join_set.spawn(AgentInner::housekeeping_runner(
             inner.clone(),
-            inner.cancellation_token.child_token(),
+            inner.cancellation_token.clone(),
         ));
 
         let monitoring_token = inner.cancellation_token.clone();

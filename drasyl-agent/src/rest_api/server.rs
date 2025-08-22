@@ -71,7 +71,12 @@ impl RestApiServer {
         let listener = TcpListener::bind(listen)
             .await
             .map_err(error::Error::Bind)?;
+        let cancellation_token = self.node.inner.cancellation_token.clone();
         axum::serve(listener, api)
+            .with_graceful_shutdown(async move {
+                cancellation_token.cancelled().await;
+                trace!("Token cancelled. REST API server shutting down...");
+            })
             .await
             .map_err(error::Error::Serve)?;
 
