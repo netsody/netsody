@@ -70,6 +70,8 @@ impl NodeInner {
 
     #[instrument(skip_all)]
     async fn housekeeping(&self, inner: &Arc<NodeInner>) -> Result<(), Error> {
+        trace!("Start housekeeping");
+
         self.remove_stale_peers_housekeeping();
 
         let my_addrs = Node::my_addrs()?;
@@ -82,6 +84,8 @@ impl NodeInner {
 
         #[cfg(feature = "prometheus")]
         self.housekeeping_prometheus(inner);
+
+        trace!("Finished housekeeping");
 
         Ok(())
     }
