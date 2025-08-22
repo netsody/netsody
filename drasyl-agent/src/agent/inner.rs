@@ -26,6 +26,7 @@ use std::fs;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, trace, warn};
 use tun_rs::AsyncDevice as TunDevice;
@@ -178,7 +179,10 @@ impl AgentInner {
         Ok((node, Arc::new(recv_buf_rx)))
     }
 
-    pub(crate) async fn node_runner(inner: Arc<AgentInner>, cancellation_token: CancellationToken) {
+    pub(crate) async fn node_runner(
+        inner: Arc<AgentInner>,
+        node_shutdown: CancellationToken,
+    ) -> Result<(), String> {
         let recv_buf_rx = inner.recv_buf_rx.clone();
         let drasyl_rx = inner.drasyl_rx.clone();
 
@@ -186,122 +190,132 @@ impl AgentInner {
         let c2d_threads = util::get_env("C2D_THREADS", 3);
         let tun_threads = util::get_env("TUN_THREADS", 3);
 
-        // tun <-> drasyl packet processing
+        let mut join_set: JoinSet<Result<(), String>> = JoinSet::new();
+
+        // drasyl <-> tun packet processing
         #[allow(unused_variables)]
         for i in 0..tun_threads {
             // drasyl -> tun
             let recv_buf_rx = recv_buf_rx.clone();
-            let token_clone = cancellation_token.clone();
+            let token_clone = node_shutdown.clone();
             let inner_clone = inner.clone();
-            tokio::spawn(async move {
+            join_set.spawn(async move {
                 tokio::select! {
                     biased;
                     _ = token_clone.cancelled() => {
-                        trace!("Token cancelled. Exiting tun <-> drasyl packet processing task ({}/{}).", i + 1, tun_threads);
+                        trace!("Token cancelled. Exiting drasyl <-> tun packet processing task ({}/{}).", i + 1, tun_threads);
+                        Ok(())
                     }
-                    _ = async move {
-                        while let Ok((sender_key, buf)) = recv_buf_rx.recv_async().await {
-                            match Ipv4HeaderSlice::from_slice(&buf) {
-                                Ok(ip_hdr) => {
-                                    if enabled!(Level::TRACE) {
-                                        trace!(
-                                            peer=?sender_key,
-                                            src=?ip_hdr.source_addr(),
-                                            dst=?ip_hdr.destination_addr(),
-                                            payload_len=?buf.len(),
-                                            "Forwarding packet from drasyl to TUN device: {} -> {} ({} bytes)",
-                                            ip_hdr.source_addr(),
-                                            ip_hdr.destination_addr(),
-                                            buf.len()
-                                        );
-                                    }
-
-                                    // filter drasyl control plane messages
-                                    if is_drasyl_control_packet(&buf) {
-                                        trace!(
-                                            peer=?sender_key,
-                                            src=?ip_hdr.source_addr(),
-                                            dst=?ip_hdr.destination_addr(),
-                                            "Dropping drasyl control plane packet: {} -> {} (control traffic filtered)",
-                                            ip_hdr.source_addr(),
-                                            ip_hdr.destination_addr()
-                                        );
-                                        continue;
-                                    }
-
-                                    let source = IpNet::from(IpAddr::V4(ip_hdr.source_addr()));
-                                    if let Some((_, source_trie)) = inner_clone.trie_rx.load().longest_match(&source) {
-                                        let dest = IpNet::from(IpAddr::V4(ip_hdr.destination_addr()));
-                                        if let Some((_, (expected_key, tun_device))) = source_trie.longest_match(&dest)
-                                        {
-                                            if !sender_key.eq(expected_key) {
-                                                warn!(
-                                                    peer=?sender_key,
-                                                    expected_peer=?expected_key,
-                                                    src=?ip_hdr.source_addr(),
-                                                    dst=?ip_hdr.destination_addr(),
-                                                    "Security violation: packet source mismatch - received from peer {} with source IP {} but expected peer {} for this route",
-                                                    sender_key,
-                                                    ip_hdr.source_addr(),
-                                                    expected_key
-                                                );
-                                            }
-                                            else if let Err(e) = tun_device.send(&buf).await {
-                                                warn!(
-                                                    peer=?sender_key,
-                                                    src=?ip_hdr.source_addr(),
-                                                    dst=?ip_hdr.destination_addr(),
-                                                    tun_device=?tun_device.name().unwrap_or("unknown".to_string()),
-                                                    error=?e,
-                                                    "Failed to forward packet to TUN device: {}", e
-                                                );
-                                            }
-                                            else {
+                    result = async move {
+                        trace!("drasyl <-> tun packet processing task started ({}/{}).", i + 1, tun_threads);
+                        loop {
+                            match recv_buf_rx.recv_async().await {
+                                Ok((sender_key, buf)) => {
+                                    match Ipv4HeaderSlice::from_slice(&buf) {
+                                        Ok(ip_hdr) => {
+                                            if enabled!(Level::TRACE) {
                                                 trace!(
                                                     peer=?sender_key,
                                                     src=?ip_hdr.source_addr(),
                                                     dst=?ip_hdr.destination_addr(),
-                                                    tun_device=?tun_device.name().unwrap_or("unknown".to_string()),
-                                                    "Successfully forwarded packet to TUN device: {} -> {}",
+                                                    payload_len=?buf.len(),
+                                                    "Forwarding packet from drasyl to TUN device: {} -> {} ({} bytes)",
+                                                    ip_hdr.source_addr(),
+                                                    ip_hdr.destination_addr(),
+                                                    buf.len()
+                                                );
+                                            }
+
+                                            // filter drasyl control plane messages
+                                            if is_drasyl_control_packet(&buf) {
+                                                trace!(
+                                                    peer=?sender_key,
+                                                    src=?ip_hdr.source_addr(),
+                                                    dst=?ip_hdr.destination_addr(),
+                                                    "Dropping drasyl control plane packet: {} -> {} (control traffic filtered)",
+                                                    ip_hdr.source_addr(),
+                                                    ip_hdr.destination_addr()
+                                                );
+                                                continue;
+                                            }
+
+                                            let source = IpNet::from(IpAddr::V4(ip_hdr.source_addr()));
+                                            if let Some((_, source_trie)) = inner_clone.trie_rx.load().longest_match(&source) {
+                                                let dest = IpNet::from(IpAddr::V4(ip_hdr.destination_addr()));
+                                                if let Some((_, (expected_key, tun_device))) = source_trie.longest_match(&dest)
+                                                {
+                                                    if !sender_key.eq(expected_key) {
+                                                        warn!(
+                                                            peer=?sender_key,
+                                                            expected_peer=?expected_key,
+                                                            src=?ip_hdr.source_addr(),
+                                                            dst=?ip_hdr.destination_addr(),
+                                                            "Security violation: packet source mismatch - received from peer {} with source IP {} but expected peer {} for this route",
+                                                            sender_key,
+                                                            ip_hdr.source_addr(),
+                                                            expected_key
+                                                        );
+                                                    }
+                                                    else if let Err(e) = tun_device.send(&buf).await {
+                                                        warn!(
+                                                            peer=?sender_key,
+                                                            src=?ip_hdr.source_addr(),
+                                                            dst=?ip_hdr.destination_addr(),
+                                                            error=?e,
+                                                            "Failed to forward packet to TUN device: {}", e
+                                                        );
+                                                    }
+                                                    else {
+                                                        trace!(
+                                                            peer=?sender_key,
+                                                            src=?ip_hdr.source_addr(),
+                                                            dst=?ip_hdr.destination_addr(),
+                                                            "Successfully forwarded packet to TUN device: {} -> {}",
+                                                            ip_hdr.source_addr(),
+                                                            ip_hdr.destination_addr()
+                                                        );
+                                                    }
+                                                } else {
+                                                    warn!(
+                                                        peer=?sender_key,
+                                                        src=?ip_hdr.source_addr(),
+                                                        dst=?ip_hdr.destination_addr(),
+                                                        "No inbound route found for destination: {} -> {} (missing destination route in routing table)",
+                                                        ip_hdr.source_addr(),
+                                                        ip_hdr.destination_addr()
+                                                    );
+                                                }
+                                            }
+                                            else {
+                                                warn!(
+                                                    peer=?sender_key,
+                                                    src=?ip_hdr.source_addr(),
+                                                    dst=?ip_hdr.destination_addr(),
+                                                    "No inbound route found for source: {} -> {} (source IP not in routing table)",
                                                     ip_hdr.source_addr(),
                                                     ip_hdr.destination_addr()
                                                 );
                                             }
-                                        } else {
-                                            warn!(
+                                        }
+                                        Err(e) => {
+                                            error!(
                                                 peer=?sender_key,
-                                                src=?ip_hdr.source_addr(),
-                                                dst=?ip_hdr.destination_addr(),
-                                                "No inbound route found for destination: {} -> {} (missing destination route in routing table)",
-                                                ip_hdr.source_addr(),
-                                                ip_hdr.destination_addr()
+                                                error=?e,
+                                                "Failed to decode IP packet from peer {}: {}",
+                                                sender_key,
+                                                e
                                             );
                                         }
                                     }
-                                    else {
-                                        warn!(
-                                            peer=?sender_key,
-                                            src=?ip_hdr.source_addr(),
-                                            dst=?ip_hdr.destination_addr(),
-                                            "No inbound route found for source: {} -> {} (source IP not in routing table)",
-                                            ip_hdr.source_addr(),
-                                            ip_hdr.destination_addr()
-                                        );
-                                    }
                                 }
                                 Err(e) => {
-                                    error!(
-                                        peer=?sender_key,
-                                        error=?e,
-                                        "Failed to decode IP packet from peer {}: {}",
-                                        sender_key,
-                                        e
-                                    );
+                                    error!("Failed to receive packet from drasyl: {}", e);
+                                    return Err(format!("Failed to receive packet from drasyl: {}", e));
                                 }
                             }
                         }
                     } => {
-                        trace!("Tun <-> drasyl packet processing done.");
+                        result
                     }
                 }
             });
@@ -311,44 +325,53 @@ impl AgentInner {
         for i in 0..c2d_threads {
             // channel -> drasyl processing
             let drasyl_rx = drasyl_rx.clone();
-            let token_close = cancellation_token.clone();
-            tokio::spawn(async move {
+            let token_close = node_shutdown.clone();
+            join_set.spawn(async move {
                 tokio::select! {
                     biased;
                     _ = token_close.cancelled() => {
                         trace!("Token cancelled. Exiting channel -> drasyl processing task ({}/{}).", i + 1, c2d_threads);
+                        Ok(())
                     }
-                    _ = async move {
-                        while let Ok((buf, send_handle)) = drasyl_rx.recv_async().await {
-                            if let Err(e) = send_handle.send(&buf).await {
-                                warn!(
-                                    packet_size=?buf.len(),
-                                    recipient=?send_handle.recipient,
-                                    error=?e,
-                                    "Failed to send packet to drasyl network: recipient={}, packet_size={} bytes, error={}",
-                                    send_handle.recipient,
-                                    buf.len(),
-                                    e
-                                );
+                    result = async move {
+                        trace!("channel -> drasyl processing task started ({}/{}).", i + 1, c2d_threads);
+                        loop {
+                            match drasyl_rx.recv_async().await {
+                                Ok((buf, send_handle)) => {
+                                    if let Err(e) = send_handle.send(&buf).await {
+                                        warn!(
+                                            packet_size=?buf.len(),
+                                            recipient=?send_handle.recipient,
+                                            error=?e,
+                                            "Failed to send packet to drasyl network: recipient={}, packet_size={} bytes, error={}",
+                                            send_handle.recipient,
+                                            buf.len(),
+                                            e
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to receive packet from channel: {}", e);
+                                    return Err(format!("Failed to receive packet from channel: {}", e));
+                                }
                             }
                         }
                     } => {
-                        trace!("Channel -> drasyl processing done.");
+                        result
                     }
                 }
             });
         }
 
-        tokio::select! {
-            biased;
-            _ = cancellation_token.cancelled() => {
-                trace!("Token cancelled. Exiting node runner.");
-            }
-            _ = inner.node.cancelled() => {
-                trace!("Cancelled by node. Exiting node runner.");
-                cancellation_token.cancel();
+        let monitoring_token = node_shutdown.clone();
+        while let Some(result) = join_set.join_next().await {
+            if let Err(e) = result {
+                return Err(format!("Node task failed: {}", e));
             }
         }
+
+        trace!("Node runner done.");
+        Ok(())
     }
 
     pub(crate) async fn fetch_network_config(&self, url: &str) -> Result<NetworkConfig, Error> {
