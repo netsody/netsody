@@ -71,7 +71,7 @@ impl App {
                         id if id == &MenuId::new("address") => match result {
                             Ok(status) => {
                                 let pk = status.opts.id.pk;
-                                item.set_text(format!("Public key: {pk}"));
+                                item.set_text(format!("Public Key: {pk}"));
                                 item.set_enabled(true);
                             }
                             Err(e) => {
