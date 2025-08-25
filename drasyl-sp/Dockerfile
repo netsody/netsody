@@ -1,4 +1,4 @@
-FROM rust:1.86-bullseye AS build
+FROM rust:1.88-bullseye AS build
 COPY . /build
 WORKDIR /build/
 RUN cargo install --path drasyl-sp --features prometheus
