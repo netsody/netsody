@@ -363,7 +363,6 @@ impl AgentInner {
             });
         }
 
-        let monitoring_token = node_shutdown.clone();
         while let Some(result) = join_set.join_next().await {
             if let Err(e) = result {
                 return Err(format!("Node task failed: {}", e));
