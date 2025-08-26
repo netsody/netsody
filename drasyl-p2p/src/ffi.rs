@@ -67,7 +67,7 @@ impl From<node::Error> for c_int {
             node::Error::HelloAddressInvalid(_) => -127,
             node::Error::SuperPeerResolveWrongFamily => -128,
             node::Error::SendHandleAlreadyCreated => -129,
-            node::Error::BindError(_) => -130,
+            node::Error::BindError(_, _) => -130,
             node::Error::ShortIdOutdated => -131,
             node::Error::SendHandleClosed => -132,
             node::Error::SendingRelayedError { .. } => -133,

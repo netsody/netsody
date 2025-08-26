@@ -85,8 +85,8 @@ pub enum Error {
     #[error("Bind parse error: {0}")]
     BindParseError(AddrParseError),
 
-    #[error("Bind error: {0}")]
-    BindError(io::Error),
+    #[error("Bind error for {1}: {0}")]
+    BindError(io::Error, SocketAddr),
 
     #[error("Message from other network: {}", i32::from_be_bytes(*.0))]
     NetworkIdInvalid(NetworkId),
