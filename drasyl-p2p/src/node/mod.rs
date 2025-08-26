@@ -216,7 +216,7 @@ impl Node {
                             udp_socket,
                         )));
                     }
-                    Err(e) => return Err(Error::BindError(e)),
+                    Err(e) => return Err(Error::BindError(e, addr)),
                 }
             }
         }
