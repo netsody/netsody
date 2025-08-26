@@ -709,7 +709,6 @@ impl AgentInner {
             });
         }
 
-        let monitoring_token = cancellation_token.clone();
         while let Some(result) = join_set.join_next().await {
             if let Err(e) = result {
                 return Err(format!("TUN task failed: {}", e));
