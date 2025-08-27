@@ -51,7 +51,7 @@ mkdir -p "${PKG_DIR}/lib/systemd/system"
 cat > "${PKG_DIR}/lib/systemd/system/drasyl.service" << 'EOF'
 [Unit]
 Description=drasyl
-After=network-online.target network.target
+After=network-online.target
 Wants=network-online.target
 
 [Service]
