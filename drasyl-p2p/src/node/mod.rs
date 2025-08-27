@@ -121,7 +121,7 @@ use std::sync::atomic::AtomicPtr;
 pub(crate) use tcp::*;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
-use tracing::{error, instrument, trace};
+use tracing::{error, instrument, trace, warn};
 pub use udp::*;
 
 /// The central access point for communication over the drasyl network.
@@ -216,9 +216,20 @@ impl Node {
                             udp_socket,
                         )));
                     }
-                    Err(e) => return Err(Error::BindError(e, addr)),
+                    Err(e) => {
+                        if opts.udp_addrs.is_empty() {
+                            warn!(%addr, "Failed to bind new UDP server: {e}");
+                        } else {
+                            return Err(Error::BindError(e, addr));
+                        }
+                    }
                 }
             }
+        }
+
+        // Check if we have any UDP bindings, if not, return an error
+        if udp_bindings.is_empty() {
+            return Err(Error::NoUdpBindings);
         }
 
         // peers
