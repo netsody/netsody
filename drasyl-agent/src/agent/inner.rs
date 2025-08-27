@@ -497,7 +497,7 @@ impl AgentInner {
         #[cfg(feature = "dns")]
         {
             trace!("Shutdown DNS");
-            self.dns.shutdown();
+            self.dns.shutdown().await;
         }
     }
 }
