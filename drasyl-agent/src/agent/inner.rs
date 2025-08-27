@@ -1,6 +1,6 @@
 use crate::agent::{AgentConfig, ChannelSink, Error};
 use crate::network::Network;
-use crate::network::config::{EffectiveRoutingList, NetworkConfig};
+use crate::network::config::NetworkConfig;
 use arc_swap::ArcSwap;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -18,9 +18,9 @@ use p2p::message::LONG_HEADER_MAGIC_NUMBER;
 use p2p::node::{Node, NodeOptsBuilder, SUPER_PEERS_DEFAULT, SendHandle};
 use p2p::util;
 
+use crate::agent::routing::AgentRouting;
 use ipnet::IpNet;
 use ipnet_trie::IpnetTrie;
-use net_route::Handle;
 use std::collections::HashMap;
 use std::fs;
 use std::net::IpAddr;
@@ -40,7 +40,7 @@ pub struct AgentInner {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) node: Arc<Node>,
     recv_buf_rx: Arc<Receiver<(PubKey, Vec<u8>)>>,
-    pub(crate) routes_handle: Arc<Handle>,
+    pub(crate) routing: AgentRouting,
     pub(crate) trie_rx: ArcSwap<TrieRx>,
     pub(crate) tun_tx: Arc<Sender<(Vec<u8>, Arc<SendHandle>)>>,
     drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
@@ -76,7 +76,7 @@ impl AgentInner {
             cancellation_token,
             node,
             recv_buf_rx,
-            routes_handle: Arc::new(Handle::new().expect("Failed to create route handle")),
+            routing: AgentRouting::new(),
             trie_rx: ArcSwap::new(Arc::new(IpnetTrie::new())),
             tun_tx,
             drasyl_rx,
@@ -487,35 +487,8 @@ impl AgentInner {
         trace!("Cancel agent token");
         self.cancellation_token.cancel();
 
-        // remove physical routes
-        trace!("remove physical routes");
-        let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
-        {
-            trace!("Locking networks for shutdown");
-            let networks = self.networks.lock().await;
-
-            for network in networks.values() {
-                if let Some(state) = network.state.as_ref() {
-                    all_physical_routes.push((
-                        network
-                            .tun_state
-                            .as_ref()
-                            .and_then(|tun| tun.device.if_index().ok()),
-                        state.routes.clone(),
-                    ));
-                }
-            }
-            trace!("Got networks for shutdown");
-        }
-
-        let routes_handle = self.routes_handle.clone();
-        let task = tokio::spawn(async move {
-            for (if_index, physical_routes) in all_physical_routes {
-                trace!("Remove physical routes: {}", physical_routes);
-                Self::remove_routes(routes_handle.clone(), physical_routes, if_index).await;
-            }
-        });
-        futures::executor::block_on(task).unwrap();
+        trace!("Shutdown routing");
+        self.routing.shutdown(self.networks.clone()).await;
 
         // hostnames
         #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]

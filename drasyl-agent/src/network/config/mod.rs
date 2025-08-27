@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 
 #[derive(PartialEq, Debug, Clone, Deserialize)]
 pub struct NetworkConfig {
@@ -652,8 +652,8 @@ impl Hash for NetworkPolicy {
 
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EffectiveRoute {
-    dest: Ipv4Net,
-    gw: Ipv4Addr,
+    pub(crate) dest: Ipv4Net,
+    pub(crate) gw: Ipv4Addr,
     state: RouteState,
 }
 
@@ -680,17 +680,6 @@ impl EffectiveRoute {
             gw: self.gw,
             state: RouteState::Removing,
         }
-    }
-
-    #[allow(unused_variables)]
-    pub(crate) fn net_route(&self, if_index: Option<u32>) -> net_route::Route {
-        let route = net_route::Route::new(IpAddr::V4(self.dest.addr()), self.dest.prefix_len())
-            .with_gateway(IpAddr::V4(self.gw));
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        let route = route.with_metric(4900);
-        #[cfg(target_os = "windows")]
-        let route = route.with_ifindex(if_index.expect("Interface index is required"));
-        route
     }
 }
 

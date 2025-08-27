@@ -2,6 +2,7 @@ mod config;
 mod error;
 mod housekeeping;
 mod inner;
+mod routing;
 
 use crate::network::Network;
 pub use config::*;
