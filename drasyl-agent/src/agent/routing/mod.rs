@@ -46,7 +46,7 @@ impl AgentRouting {
             tun_device,
             &mut applied_routes,
         )
-            .await;
+        .await;
 
         applied_routes
     }

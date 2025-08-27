@@ -22,8 +22,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, instrument, trace, warn};
 use tun_rs::{AsyncDevice as TunDevice, AsyncDevice, DeviceBuilder as TunDeviceBuilder};
 use url::Url;
-#[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-use {std::fs, std::io::Write};
 
 /// Timeout in milliseconds for fetching network config.
 /// If a config cannot be received within this time, the fetch is considered failed.
@@ -231,15 +229,12 @@ impl AgentInner {
                 }
             }
 
-            // hostnames
-            #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-            match current.as_ref().map(|state| state.hostnames.clone()) {
-                Some(current_hostnames) if current_hostnames == desired.hostnames => {}
-                _ => {
-                    if let Err(e) = update_hosts_file(networks).await {
-                        error!("failed to update /etc/hosts: {}", e);
-                    }
-                }
+            #[cfg(feature = "dns")]
+            {
+                trace!("Update DNS");
+                self.dns
+                    .update_network_hostnames(current, desired, networks)
+                    .await;
             }
         }
     }
@@ -271,10 +266,10 @@ impl AgentInner {
             self.update_tx_trie(network).await;
             self.update_rx_tries(inner.clone(), networks).await;
 
-            // hostnames
-            #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-            if let Err(e) = update_hosts_file(networks).await {
-                error!("failed to update /etc/hosts: {}", e);
+            #[cfg(feature = "dns")]
+            {
+                trace!("Update DNS");
+                self.dns.update_all_hostnames(networks).await;
             }
         }
     }
@@ -710,74 +705,4 @@ impl AgentInner {
         trace!("TUN runner done.");
         Ok(())
     }
-}
-
-#[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-async fn update_hosts_file(networks: &MutexGuard<'_, HashMap<Url, Network>>) -> Result<(), Error> {
-    // read existing /etc/hosts
-    let hosts_content = fs::read_to_string("/etc/hosts")?;
-    trace!("read /etc/hosts");
-
-    // filter out existing drasyl entries
-    let lines: Vec<&str> = hosts_content
-        .lines()
-        .filter(|line| !line.contains("# managed by drasyl"))
-        .collect();
-
-    // create temporary file next to /etc/hosts
-    let temp_path = "/etc/.hosts.drasyl";
-    let mut temp_file = fs::File::create(temp_path)?;
-    trace!("created temporary file at {}", temp_path);
-
-    // write existing entries
-    for line in lines {
-        writeln!(temp_file, "{line}")?;
-    }
-
-    for (_, network) in networks.iter() {
-        if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
-            for (ip, hostname) in hostnames {
-                writeln!(
-                    temp_file,
-                    "{ip:<15} {hostname} {hostname}.drasyl.network   # managed by drasyl"
-                )?;
-            }
-        }
-    }
-    trace!("added new drasyl entries");
-
-    // write file directly
-    fs::rename(temp_path, "/etc/hosts")?;
-    trace!("updated /etc/hosts");
-
-    Ok(())
-}
-
-#[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-pub(crate) fn cleanup_hosts_file() -> Result<(), Error> {
-    // read existing /etc/hosts
-    let hosts_content = fs::read_to_string("/etc/hosts")?;
-    trace!("read /etc/hosts");
-
-    // filter out drasyl entries
-    let lines: Vec<&str> = hosts_content
-        .lines()
-        .filter(|line| !line.contains("# managed by drasyl"))
-        .collect();
-
-    // create temporary file next to /etc/hosts
-    let temp_path = "/etc/.hosts.drasyl";
-    let mut temp_file = fs::File::create(temp_path)?;
-    trace!("created temporary file at {}", temp_path);
-
-    // write remaining entries
-    for line in lines {
-        writeln!(temp_file, "{line}")?;
-    }
-
-    // write file directly
-    fs::rename(temp_path, "/etc/hosts")?;
-    trace!("cleaned up /etc/hosts");
-
-    Ok(())
 }
