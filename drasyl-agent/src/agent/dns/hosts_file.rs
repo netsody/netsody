@@ -16,18 +16,10 @@ impl AgentDns {
 
     pub(crate) async fn update_network_hostnames_hosts_file(
         &self,
-        current: Option<LocalNodeState>,
-        desired: LocalNodeState,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
-        match current.as_ref().map(|state| state.hostnames.clone()) {
-            Some(current_hostnames) if current_hostnames == desired.hostnames => {}
-            _ => {
-                if let Err(e) = Self::update_hosts_file(networks).await {
-                    error!("failed to update /etc/hosts: {}", e);
-                }
-            }
-        }
+        // we do not support updating hostnames for a single network
+        self.update_all_hostnames_host_file(networks).await;
     }
 
     pub(crate) async fn update_all_hostnames_host_file(
@@ -40,7 +32,7 @@ impl AgentDns {
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    async fn update_hosts_file(
+    pub(crate) async fn update_hosts_file(
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) -> Result<(), Error> {
         // read existing /etc/hosts

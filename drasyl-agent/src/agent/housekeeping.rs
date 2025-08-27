@@ -2,7 +2,8 @@ use crate::agent::Error;
 use crate::agent::inner::AgentInner;
 use crate::agent::inner::is_drasyl_control_packet;
 use crate::network::{LocalNodeState, Network, NetworkInner, TunState};
-use etherparse::Ipv4HeaderSlice;
+use etherparse::ip_number::UDP;
+use etherparse::{Ipv4HeaderSlice, UdpHeaderSlice};
 use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
 use p2p::identity::PubKey;
@@ -233,7 +234,7 @@ impl AgentInner {
             {
                 trace!("Update DNS");
                 self.dns
-                    .update_network_hostnames(current, desired, networks)
+                    .update_network_hostnames(current, desired, config_url, networks)
                     .await;
             }
         }
@@ -456,8 +457,11 @@ impl AgentInner {
         let tun_device = Arc::new(dev_builder.build_async().expect("Failed to build device"));
         trace!("TUN device created: {:?}", tun_device.name());
 
+        // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
+        #[cfg(feature = "dns")]
+        let dns_server_ip = crate::agent::dns::AgentDns::server_ip_for(ip, netmask);
+
         // crate tun task
-        // TODO: guard einführen der aufräumt wenn der task hier stirbt
         let inner_clone = inner.clone();
         let tun_device_clone = tun_device.clone();
         let network_inner_clone = network_inner.clone();
@@ -472,7 +476,15 @@ impl AgentInner {
                 _ = tun_token_clone.cancelled() => {
                     trace!("TUN runner token cancelled.");
                 }
-                result = Self::tun_runner(inner_clone, tun_device_clone, tun_token_clone2, ip, network_inner_clone) => {
+                result = Self::tun_runner(
+                    inner_clone,
+                    tun_device_clone,
+                    tun_token_clone2,
+                    ip,
+                    network_inner_clone,
+                    #[cfg(feature = "dns")]
+                    dns_server_ip,
+                ) => {
                     if let Err(e) = result {
                         error!("TUN runner crashed. Cancel agent token: {}", e);
                     }
@@ -554,6 +566,8 @@ impl AgentInner {
         cancellation_token: CancellationToken,
         ip: Ipv4Addr,
         network_inner: Arc<NetworkInner>,
+        #[cfg(feature = "dns")]
+        dns_server_ip: Option<Ipv4Addr>,
     ) -> Result<(), String> {
         trace!("TUN runner started");
 
@@ -616,6 +630,26 @@ impl AgentInner {
                                                 ip_hdr.destination_addr()
                                             );
                                             continue;
+                                        }
+
+                                        #[cfg(feature = "dns")]
+                                        {
+                                            // filter DNS messages
+                                            if let Some(dns_server_ip) = dns_server_ip && ip_hdr.protocol() == UDP && ip_hdr.source_addr() == ip && ip_hdr.destination_addr() == dns_server_ip {
+                                                // get IP payload
+                                                let payload = &buf[ip_hdr.slice().len()..];
+                                                if let Ok(udp_hdr) = UdpHeaderSlice::from_slice(payload)
+                                                    && udp_hdr.destination_port() == 53 {
+                                                        trace!("Got potential DNS request: {} -> {}", ip_hdr.source_addr(), ip_hdr.destination_addr());
+                                                        // get UDP payload
+                                                        let payload = &payload[udp_hdr.slice().len()..];
+                                                        if inner_clone.dns.on_packet(payload, ip_hdr.source_addr(), udp_hdr.source_port(), dns_server_ip, udp_hdr.destination_port(), dev_clone.clone()).await {
+                                                            // packet has been processed as a DNS request. Skip further processing.
+                                                            continue;
+                                                        }
+
+                                                    }
+                                            }
                                         }
 
                                         let source = IpNet::from(IpAddr::V4(ip_hdr.source_addr()));

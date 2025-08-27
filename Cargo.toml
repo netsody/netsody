@@ -8,7 +8,7 @@ resolver = "3"
 [workspace.dependencies]
 tracing = { version = "0.1.41"}
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "fmt", "ansi", "time", "local-time"] }
-tokio = { version = "1.47.1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "net", "time", "macros", "sync", "process"] }
 tokio-util = "0.7.16"
 ahash = "0.8.12"
 thiserror = "2.0.16"
