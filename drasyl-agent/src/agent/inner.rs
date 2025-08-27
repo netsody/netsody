@@ -41,6 +41,8 @@ pub struct AgentInner {
     pub(crate) node: Arc<Node>,
     recv_buf_rx: Arc<Receiver<(PubKey, Vec<u8>)>>,
     pub(crate) routing: AgentRouting,
+    #[cfg(feature = "dns")]
+    pub(crate) dns: crate::agent::dns::AgentDns,
     pub(crate) trie_rx: ArcSwap<TrieRx>,
     pub(crate) tun_tx: Arc<Sender<(Vec<u8>, Arc<SendHandle>)>>,
     drasyl_rx: Arc<Receiver<(Vec<u8>, Arc<SendHandle>)>>,
@@ -77,6 +79,8 @@ impl AgentInner {
             node,
             recv_buf_rx,
             routing: AgentRouting::new(),
+            #[cfg(feature = "dns")]
+            dns: crate::agent::dns::AgentDns::new(),
             trie_rx: ArcSwap::new(Arc::new(IpnetTrie::new())),
             tun_tx,
             drasyl_rx,
@@ -490,10 +494,10 @@ impl AgentInner {
         trace!("Shutdown routing");
         self.routing.shutdown(self.networks.clone()).await;
 
-        // hostnames
-        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        if let Err(e) = crate::agent::housekeeping::cleanup_hosts_file() {
-            error!("Failed to cleanup /etc/hosts: {}", e);
+        #[cfg(feature = "dns")]
+        {
+            trace!("Shutdown DNS");
+            self.dns.shutdown();
         }
     }
 }
