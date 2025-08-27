@@ -1,4 +1,6 @@
 mod config;
+#[cfg(feature = "dns")]
+mod dns;
 mod error;
 mod housekeeping;
 mod inner;
