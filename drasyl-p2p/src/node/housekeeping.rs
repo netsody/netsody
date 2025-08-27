@@ -95,6 +95,7 @@ impl NodeInner {
         // collect addresses we bind to
         if self.opts.udp_addrs.is_empty() {
             let my_addrs = get_addrs().map_err(Error::GetAddrsFailed)?;
+            trace!("UDP addresses: {:?}", my_addrs);
             let my_addrs_only: Vec<IpAddr> =
                 my_addrs.clone().into_iter().map(|(_, ip)| ip).collect();
 
