@@ -57,7 +57,7 @@ Wants=network-online.target
 [Service]
 ExecStart=/usr/bin/drasyl run
 Restart=always
-KillMode=process
+RestartSec=3
 WorkingDirectory=/etc/drasyl/
 Environment=RUST_BACKTRACE=full
 Environment=DRASYL_UDP_SOCKETS=1
