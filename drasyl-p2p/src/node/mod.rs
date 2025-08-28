@@ -104,7 +104,7 @@ mod send_handle;
 mod tcp;
 mod udp;
 
-use crate::crypto::{convert_ed25519_pk_to_curve22519_pk, convert_ed25519_sk_to_curve25519_sk};
+use crate::crypto::{convert_ed25519_pk_to_curve25519_pk, convert_ed25519_sk_to_curve25519_sk};
 pub use crate::identity::{Identity, PubKey};
 use crate::peer::{Peer, PeersList, SuperPeer};
 use crate::util::get_addrs;
@@ -170,7 +170,7 @@ impl Node {
         let (agreement_sk, agreement_pk) = if opts.arm_messages {
             (
                 Some(convert_ed25519_sk_to_curve25519_sk(&opts.id.sk.into())?),
-                Some(convert_ed25519_pk_to_curve22519_pk(&opts.id.pk.into())?),
+                Some(convert_ed25519_pk_to_curve25519_pk(&opts.id.pk.into())?),
             )
         } else {
             (None, None)
