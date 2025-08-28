@@ -29,6 +29,9 @@ blake2b_simd = "1.0.3"
 sha2 = { version = "0.11.0-rc.0", features = ["zeroize"] }
 zeroize = "1.8.1"
 
+[patch.crates-io]
+sha2 = { version = "0.11.0-rc.0", features = ["zeroize"] }
+
 [dev-dependencies]
 criterion = { version = "0.7", features = ["async_tokio", "html_reports"] }
 tracing-subscriber  = { workspace = true }
