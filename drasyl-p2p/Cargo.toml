@@ -26,7 +26,7 @@ prometheus = { workspace = true, optional = true, features = ["push"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core", "asm", "zeroize"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
 blake2b_simd = "1.0.3"
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.11.0-rc.0", features = ["zeroize"] }
 zeroize = "1.8.1"
 
 [dev-dependencies]
@@ -73,9 +73,3 @@ crate-type = ["lib", "cdylib"]
 ffi = []
 serde = ["dep:serde"]
 prometheus = ["dep:prometheus"]
-
-[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
-sha2   = { version = "0.10.9", default-features = false, features = ["asm"] }
-
-[target.'cfg(target_arch = "aarch64")'.dependencies]
-sha2   = { version = "0.10.9", default-features = false, features = ["asm-aarch64"] }

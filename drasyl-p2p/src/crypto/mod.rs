@@ -12,7 +12,7 @@ use blake2b_simd::Params;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256, Sha512};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 pub(crate) const SHA256_BYTES: usize = 32;
 pub(crate) const ED25519_SECRETKEYBYTES: usize = 64;
@@ -127,7 +127,7 @@ pub fn convert_ed25519_sk_to_curve25519_sk(sk: &SigningSecKey) -> Result<Agreeme
         .map_err(|_| Error::DalekError)?;
 
     // 1) SHA-512(seed)
-    let mut h: Zeroizing<[u8; 64]> = Zeroizing::new(Sha512::digest(&seed).into());
+    let mut h: [u8; 64] = Sha512::digest(&seed).into();
 
     // 2) X25519 clamping
     h[0] &= 248;
@@ -137,6 +137,8 @@ pub fn convert_ed25519_sk_to_curve25519_sk(sk: &SigningSecKey) -> Result<Agreeme
     // 3) return first 32 Bytes
     let mut out = [0u8; 32];
     out.copy_from_slice(&h[..32]);
+
+    h.zeroize();
 
     Ok(out)
 }
