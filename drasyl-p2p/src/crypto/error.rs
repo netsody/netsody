@@ -6,8 +6,8 @@ pub enum Error {
     #[error("Generated session keys are identical")]
     SessionKeysIdentical,
 
-    #[error("A Libsodium cryptographic error occurred")]
-    LibsodiumError,
+    #[error("A dalek cryptographic error occurred")]
+    DalekError,
 
     #[error("An AEGIS cryptographic error occurred")]
     DecryptFailed,

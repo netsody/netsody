@@ -11,7 +11,7 @@ pub struct SessionKey([u8; AEGIS_KEYBYTES]);
 
 impl SessionKey {
     /// Get the raw bytes of the session key.
-    pub(crate) fn as_bytes(&self) -> &[u8; AEGIS_KEYBYTES] {
+    pub fn as_bytes(&self) -> &[u8; AEGIS_KEYBYTES] {
         &self.0
     }
 }
