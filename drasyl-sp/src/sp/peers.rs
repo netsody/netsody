@@ -3,7 +3,7 @@ use ahash::RandomState;
 use arc_swap::ArcSwapOption;
 use p2p::crypto;
 use p2p::crypto::SessionKey;
-use p2p::crypto::{compute_kx_session_keys, convert_ed25519_pk_to_curve22519_pk};
+use p2p::crypto::{compute_kx_session_keys, convert_ed25519_pk_to_curve25519_pk};
 use p2p::identity::Pow;
 use p2p::identity::PubKey;
 use p2p::message::HELLO_ENDPOINT_LEN;
@@ -204,7 +204,7 @@ impl PeersList {
             let peer = Peer {
                 valid_pow,
                 session_keys: if inner.opts.arm_messages && valid_pow {
-                    let agreement_pk = convert_ed25519_pk_to_curve22519_pk(&(*pk).into())?;
+                    let agreement_pk = convert_ed25519_pk_to_curve25519_pk(&(*pk).into())?;
                     Some(SessionKeys::new(compute_kx_session_keys(
                         &inner
                             .agreement_pk

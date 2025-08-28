@@ -9,7 +9,7 @@ mod udp;
 pub use crate::sp::inner::SuperPeerInner;
 pub use error::*;
 pub use opts::*;
-use p2p::crypto::{convert_ed25519_pk_to_curve22519_pk, convert_ed25519_sk_to_curve25519_sk};
+use p2p::crypto::{convert_ed25519_pk_to_curve25519_pk, convert_ed25519_sk_to_curve25519_sk};
 pub use peers::*;
 use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};
@@ -43,7 +43,7 @@ impl SuperPeer {
         let (agreement_sk, agreement_pk) = if opts.arm_messages {
             (
                 Some(convert_ed25519_sk_to_curve25519_sk(&opts.id.sk.into())?),
-                Some(convert_ed25519_pk_to_curve22519_pk(&opts.id.pk.into())?),
+                Some(convert_ed25519_pk_to_curve25519_pk(&opts.id.pk.into())?),
             )
         } else {
             (None, None)

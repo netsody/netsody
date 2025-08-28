@@ -24,7 +24,7 @@ use tracing::{trace, warn};
 
 // Crate-internal imports
 use crate::crypto::{
-    AgreementPubKey, AgreementSecKey, compute_kx_session_keys, convert_ed25519_pk_to_curve22519_pk,
+    AgreementPubKey, AgreementSecKey, compute_kx_session_keys, convert_ed25519_pk_to_curve25519_pk,
 };
 // Crate-internal imports
 use crate::crypto::SessionKey;
@@ -103,7 +103,7 @@ impl SuperPeer {
             Some(SessionKeys::new(compute_kx_session_keys(
                 agreement_pk.ok_or(Error::AgreementPkNotPresent)?,
                 agreement_sk.ok_or(Error::AgreementSkNotPresent)?,
-                &convert_ed25519_pk_to_curve22519_pk(&(*pk).into())?,
+                &convert_ed25519_pk_to_curve25519_pk(&(*pk).into())?,
             )?))
         } else {
             None
