@@ -4,10 +4,12 @@ mod dns;
 mod error;
 mod housekeeping;
 mod inner;
+mod network_listener;
 mod node;
 mod routing;
 mod tun;
 
+use crate::agent::network_listener::NetworkListener;
 use crate::network::Network;
 pub use config::*;
 pub use error::*;
@@ -34,6 +36,7 @@ impl Agent {
         config_path: String, // Path to configuration file
         token_path: String,  // Path to store authentication tokens
         tun_device: Option<Arc<TunDevice>>, // Optional TUN device for network tunneling
+        network_listener: Option<NetworkListener>, // Optional callback for network changes
     ) -> Result<Self, Error> {
         info!("Start agent.");
 
@@ -80,6 +83,7 @@ impl Agent {
             config_path,
             token_path,
             config.mtu.unwrap_or(AgentConfig::default_mtu()),
+            network_listener,
         ));
 
         let mut join_set = JoinSet::new();

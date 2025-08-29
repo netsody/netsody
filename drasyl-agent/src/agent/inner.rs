@@ -1,4 +1,4 @@
-use crate::agent::Error;
+pub(crate) use crate::agent::Error;
 use crate::network::Network;
 use crate::network::config::NetworkConfig;
 use arc_swap::ArcSwap;
@@ -17,6 +17,7 @@ use p2p::identity::{Identity, PubKey};
 use p2p::message::LONG_HEADER_MAGIC_NUMBER;
 use p2p::node::{Node, SendHandle};
 
+use crate::agent::network_listener::{NetworkChange, NetworkListener};
 use crate::agent::routing::AgentRouting;
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
@@ -48,6 +49,8 @@ pub struct AgentInner {
     pub(crate) config_path: String,
     pub(crate) token_path: String,
     pub(crate) mtu: u16,
+    pub(crate) network_listener: Option<Arc<NetworkListener>>,
+    pub(crate) last_network_change: Option<NetworkChange>,
     client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
 }
 
@@ -65,6 +68,7 @@ impl AgentInner {
         config_path: String,
         token_path: String,
         mtu: u16,
+        network_listener: Option<NetworkListener>,
     ) -> Self {
         let https = HttpsConnectorBuilder::new()
             .with_webpki_roots()
@@ -89,6 +93,8 @@ impl AgentInner {
             config_path,
             token_path,
             mtu,
+            network_listener: network_listener.map(Arc::new),
+            last_network_change: None,
             client: Client::builder(TokioExecutor::new())
                 .pool_max_idle_per_host(0)
                 .build::<_, Empty<Bytes>>(https),
