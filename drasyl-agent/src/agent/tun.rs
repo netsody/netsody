@@ -134,6 +134,7 @@ impl AgentInner {
                                                 #[cfg(feature = "dns")]
                                                 {
                                                     // filter DNS messages
+                                                    trace!("Filter DNS messages");
                                                     if ip_hdr.protocol() == UDP && inner_clone.dns.is_server_ip(ip_hdr.destination_addr()) {
                                                         // get IP payload
                                                         let payload = &buf[ip_hdr.slice().len()..];
@@ -143,7 +144,7 @@ impl AgentInner {
                                                             // get UDP payload
                                                             let payload = &payload[udp_hdr.slice().len()..];
                                                             if inner_clone.dns.on_packet(payload, ip_hdr.source_addr(), udp_hdr.source_port(), ip_hdr.destination_addr(), udp_hdr.destination_port(), dev_clone.clone()).await {
-                                                                // packet has been processed as a DNS request. Skip further processing.
+                                                                trace!("Packet has been processed as a DNS request. Skip further processing.");
                                                                 continue;
                                                             }
 
