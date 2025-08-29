@@ -1,10 +1,10 @@
-name: P2P FFI
+name: P2P
 
 on:
   push:
-    branches: [ "master" ]
+    branches:
+      - master
   pull_request:
-    branches: [ "master" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,25 +24,25 @@ jobs:
         include:
           - job_name: linux-amd64
             os: ubuntu-22.04
-            path: target/release/libdrasyl.so
+            path: target/release/libdrasyl_p2p.so
 
           - job_name: linux-arm64
             os: [ self-hosted, linux, ARM64 ]
-            path: target/release/libdrasyl.so
+            path: target/release/libdrasyl_p2p.so
 
           - job_name: macos-amd64
             os: macOS-13
-            path: target/release/libdrasyl.dylib
+            path: target/release/libdrasyl_p2p.dylib
 
           - job_name: macos-arm64
             os: macOS-latest
-            path: target/release/libdrasyl.dylib
+            path: target/release/libdrasyl_p2p.dylib
 
           - job_name: windows-amd64
             os: windows-latest
-            path: target/release/drasyl.dll
+            path: target/release/drasyl_p2p.dll
 
-    name: Build FFI on ${{ matrix.job_name }}
+    name: Build drasyl-p2p on ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -53,10 +53,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build with FFI feature
+      - name: Build drasyl-p2p FFI
         run: cargo build --verbose --package drasyl-p2p --features ffi --release
 
-      - name: Upload FFI artifact
+      - name: Upload drasyl-p2p artifact
         uses: actions/upload-artifact@v4
         with:
           name: libdrasyl-${{ matrix.job_name }}
