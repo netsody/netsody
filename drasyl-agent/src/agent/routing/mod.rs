@@ -53,26 +53,20 @@ impl AgentRouting {
             current_routes, desired_routes
         );
 
-        // #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        // {
-        //     trace!("Updating routes using net_route");
-        //     self.update_routes_net_route(
-        //         current_routes,
-        //         desired_routes,
-        //         tun_device,
-        //         &mut applied_routes,
-        //     )
-        //     .await;
-        // }
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        {
+            trace!("Updating routes using net_route");
+            self.update_routes_net_route(
+                current_routes,
+                desired_routes,
+                tun_device,
+                &mut applied_routes,
+            )
+            .await;
+        }
         #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
             trace!("No supported platform detected for updating routes, skipping");
-        }
-
-        if let Some(desired_routes) = desired_routes.as_ref() {
-            for (_, route) in desired_routes.iter() {
-                applied_routes.add(route.as_applied_route());
-            }
         }
 
         applied_routes
