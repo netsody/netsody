@@ -61,7 +61,8 @@ impl AgentInner {
         trace!("Finished housekeeping");
 
         // ensure network listener is fired on network changes
-        self.notify_on_network_change(&networks, inner.clone());
+        self.notify_on_network_change(&networks, inner.clone())
+            .await;
 
         Ok(())
     }
