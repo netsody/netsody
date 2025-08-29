@@ -7,9 +7,10 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, trace, warn};
-use tun_rs::{AsyncDevice as TunDevice, DeviceBuilder as TunDeviceBuilder};
+use tun_rs::AsyncDevice as TunDevice;
 
 impl AgentInner {
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) fn create_tun_device(config: &AgentConfig) -> Result<Arc<TunDevice>, Error> {
         // create tun device
         // options
@@ -17,7 +18,7 @@ impl AgentInner {
 
         // create tun device
         trace!("Create TUN device");
-        let mut dev_builder = TunDeviceBuilder::new().mtu(mtu);
+        let mut dev_builder = tun_rs::DeviceBuilder::new().mtu(mtu);
         if cfg!(any(target_os = "windows", target_os = "linux")) {
             dev_builder = dev_builder.name("drasyl");
         } else if cfg!(target_os = "macos") {
