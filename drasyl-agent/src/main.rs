@@ -205,7 +205,7 @@ fn run_agent(
         {
             let token_path = token_path.to_str().expect("Invalid token path").to_owned();
             let agent = Arc::new(
-                Agent::start(config, config_path.to_string(), token_path, None)
+                Agent::start(config, config_path.to_string(), token_path, None, None)
                     .await
                     .expect("Failed to start agent"),
             );
