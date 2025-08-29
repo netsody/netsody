@@ -10,6 +10,7 @@ use hickory_proto::xfer::Protocol;
 use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageResponse, ZoneType};
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use hickory_server::store::in_memory::InMemoryAuthority;
+use ipnet::Ipv4Net;
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, ErrorKind};
@@ -17,7 +18,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
-use ipnet::Ipv4Net;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
@@ -44,10 +44,12 @@ impl AgentDns {
             .store(Arc::new(Self::build_catalog(networks)));
 
         for (i, (_, network)) in networks.iter().enumerate() {
-            if !network.disabled && let Some(state) = network.state.as_ref() {
-                if i == 0 {
+            if !network.disabled
+                && let Some(state) = network.state.as_ref()
+                && i == 0 {
                     // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
-                    let network = Ipv4Net::new(state.ip, state.subnet.prefix_len()).expect("Invalid IP/netmask combination");
+                    let network = Ipv4Net::new(state.ip, state.subnet.prefix_len())
+                        .expect("Invalid IP/netmask combination");
                     let broadcast = network.broadcast();
                     // Decrement the broadcast address by 1 to get the DNS server IP
                     let dns_server = Ipv4Addr::from(u32::from(broadcast).saturating_sub(1));
@@ -56,12 +58,11 @@ impl AgentDns {
                     self.server_ip.store(dns_server.to_bits(), SeqCst);
 
                     // Add DNS configuration with scutil
-                    let domains = vec!["drasyl.network", "stis25.uhh-net.de"];
+                    let domains = vec!["drasyl.network"];
                     if let Err(e) = scutil_add(&dns_server, &domains).await {
                         error!("Failed to add DNS configuration: {}", e);
                     }
                 }
-            }
         }
     }
 
@@ -146,7 +147,7 @@ impl AgentDns {
         let reporter = ResponseHandle {
             src: dst,
             dst: src,
-            dev
+            dev,
         };
         trace!("Created response handler for source {}", src);
 
@@ -186,8 +187,8 @@ impl AgentDns {
                             300,
                             RData::A(A(ip)),
                         )
-                            .set_dns_class(DNSClass::IN)
-                            .clone(),
+                        .set_dns_class(DNSClass::IN)
+                        .clone(),
                         0,
                     );
                 }
@@ -291,24 +292,30 @@ impl ResponseHandler for ResponseHandle {
         let src_ip = match self.src.ip() {
             IpAddr::V4(ip) => ip,
             _ => {
-                return Err(Error::new(ErrorKind::InvalidInput, "src: Only IPv4 supported"));
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "src: Only IPv4 supported",
+                ));
             }
         };
         let dst_ip = match self.dst.ip() {
             IpAddr::V4(ip) => ip,
             _ => {
-                return Err(Error::new(ErrorKind::InvalidInput, "dst: Only IPv4 supported"));
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "dst: Only IPv4 supported",
+                ));
             }
         };
 
         let builder = PacketBuilder::ipv4(
-            src_ip.octets(),   // Source IP (DNS server)
-            dst_ip.octets(),   // Destination IP
-            64,     // TTL
+            src_ip.octets(), // Source IP (DNS server)
+            dst_ip.octets(), // Destination IP
+            64,              // TTL
         )
         .udp(
-            self.src.port(),   // Source Port (DNS Server)
-            self.dst.port(),   // Destination Port
+            self.src.port(), // Source Port (DNS Server)
+            self.dst.port(), // Destination Port
         );
 
         // Serialize the packet

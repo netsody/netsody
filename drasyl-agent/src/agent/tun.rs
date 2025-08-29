@@ -1,10 +1,10 @@
 use crate::agent::{AgentConfig, AgentInner, Error, is_drasyl_control_packet};
+use etherparse::ip_number::UDP;
 use etherparse::{Ipv4HeaderSlice, UdpHeaderSlice};
 use ipnet::IpNet;
 use p2p::util;
 use std::net::IpAddr;
 use std::sync::Arc;
-use etherparse::ip_number::UDP;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, trace, warn};
