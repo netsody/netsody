@@ -36,6 +36,9 @@ pub enum Error {
     #[error("Identity error: {0}")]
     IdentityError(#[from] identity::Error),
 
+    #[error("Node error: {0}")]
+    NodeError(#[from] p2p::node::Error),
+
     #[error("TOML serialization error: {0}")]
     TomlSerError(#[from] toml::ser::Error),
 
@@ -47,4 +50,7 @@ pub enum Error {
 
     #[error("Network not found: {config_url}")]
     NetworkNotFound { config_url: String },
+
+    #[error("Unsupported TUN creation platform")]
+    UnsupportedTunCreationPlatform,
 }

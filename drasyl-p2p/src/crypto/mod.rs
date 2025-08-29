@@ -95,7 +95,7 @@ pub fn compute_kx_session_keys(
     }
 }
 
-pub fn convert_ed25519_pk_to_curve22519_pk(pk: &SigningPubKey) -> Result<AgreementPubKey, Error> {
+pub fn convert_ed25519_pk_to_curve25519_pk(pk: &SigningPubKey) -> Result<AgreementPubKey, Error> {
     let mut agreement_key = [0u8; CURVE25519_PUBLICKEYBYTES];
     let result = unsafe {
         sodium::crypto_sign_ed25519_pk_to_curve25519(agreement_key.as_mut_ptr(), pk.as_ptr())

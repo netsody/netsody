@@ -204,7 +204,11 @@ fn run_agent(
     let result = rt.block_on(async {
         {
             let token_path = token_path.to_str().expect("Invalid token path").to_owned();
-            let agent = Arc::new(Agent::start(config, config_path.to_string(), token_path).await);
+            let agent = Arc::new(
+                Agent::start(config, config_path.to_string(), token_path, None, None)
+                    .await
+                    .expect("Failed to start agent"),
+            );
             let rest_api = RestApiServer::new(agent.clone());
 
             let agent_clone = agent.clone();
