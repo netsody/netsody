@@ -31,16 +31,16 @@ echo "📱 iOS deployment target: ${IPHONEOS_DEPLOYMENT_TARGET}"
 
 echo "🚀 Building for iOS device (${TARGET_DEVICE})..."
 if [[ "${BUILD_TYPE}" == "release" ]]; then
-    cargo build --package "${CRATE_NAME}" --lib --features ffi --target "${TARGET_DEVICE}" --release
+    cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_DEVICE}" --release
 else
-    cargo build --package "${CRATE_NAME}" --lib --features ffi --target "${TARGET_DEVICE}"
+    cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_DEVICE}"
 fi
 
 echo "🚀 Building for iOS simulator (${TARGET_SIMULATOR})..."
 if [[ "${BUILD_TYPE}" == "release" ]]; then
-    cargo build --package "${CRATE_NAME}" --lib --features ffi --target "${TARGET_SIMULATOR}" --release
+    cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_SIMULATOR}" --release
 else
-    cargo build --package "${CRATE_NAME}" --lib --features ffi --target "${TARGET_SIMULATOR}"
+    cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_SIMULATOR}"
 fi
 
 echo "📁 Creating include directory..."

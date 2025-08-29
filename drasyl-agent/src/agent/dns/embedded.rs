@@ -11,6 +11,7 @@ use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageRespo
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use hickory_server::store::in_memory::InMemoryAuthority;
 use ipnet::Ipv4Net;
+use p2p::util::bytes_to_hex;
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, ErrorKind};
@@ -22,7 +23,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
 use tokio::sync::MutexGuard;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, instrument, trace};
 use tun_rs::AsyncDevice;
 use url::Url;
 
@@ -43,26 +44,33 @@ impl AgentDns {
         self.embedded_catalog
             .store(Arc::new(Self::build_catalog(networks)));
 
-        for (i, (_, network)) in networks.iter().enumerate() {
+        let mut i = 0;
+        for (_, network) in networks.iter() {
             if !network.disabled
                 && let Some(state) = network.state.as_ref()
-                && i == 0 {
-                    // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
-                    let network = Ipv4Net::new(state.ip, state.subnet.prefix_len())
-                        .expect("Invalid IP/netmask combination");
-                    let broadcast = network.broadcast();
-                    // Decrement the broadcast address by 1 to get the DNS server IP
-                    let dns_server = Ipv4Addr::from(u32::from(broadcast).saturating_sub(1));
-                    trace!("DNS server IP calculated: {}", dns_server);
+                && i == 0
+            {
+                // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
+                let network = Ipv4Net::new(state.ip, state.subnet.prefix_len())
+                    .expect("Invalid IP/netmask combination");
+                let broadcast = network.broadcast();
+                // Decrement the broadcast address by 1 to get the DNS server IP
+                let dns_server = Ipv4Addr::from(u32::from(broadcast).saturating_sub(1));
+                trace!("DNS server IP calculated: {}", dns_server);
 
-                    self.server_ip.store(dns_server.to_bits(), SeqCst);
+                self.server_ip.store(dns_server.to_bits(), SeqCst);
 
+                #[cfg(target_os = "macos")]
+                {
                     // Add DNS configuration with scutil
                     let domains = vec!["drasyl.network"];
                     if let Err(e) = scutil_add(&dns_server, &domains).await {
                         error!("Failed to add DNS configuration: {}", e);
                     }
                 }
+
+                i += 1;
+            }
         }
     }
 
@@ -165,14 +173,18 @@ impl AgentDns {
     }
 
     pub(crate) async fn shutdown_embedded(&self) {
-        if let Err(e) = scutil_remove().await {
-            error!("Failed to remove DNS configuration: {}", e);
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(e) = scutil_remove().await {
+                error!("Failed to remove DNS configuration: {}", e);
+            }
         }
     }
 
     #[allow(unused)]
     #[allow(clippy::unreadable_literal)]
     pub fn build_catalog(networks: &mut MutexGuard<HashMap<Url, Network>>) -> Catalog {
+        trace!("Building DNS catalog");
         let mut catalog = Catalog::new();
 
         let origin: Name = Name::parse("drasyl.network.", None).unwrap();
@@ -180,6 +192,7 @@ impl AgentDns {
         for network in networks.values() {
             if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
                 for (ip, hostname) in hostnames {
+                    trace!("Adding DNS A record: {}.drasyl.network -> {}", hostname, ip);
                     authority.upsert_mut(
                         Record::from_rdata(
                             Name::parse(format!("{hostname}.drasyl.network.").as_str(), None)
@@ -251,6 +264,7 @@ impl ResponseHandle {
 
 #[async_trait::async_trait]
 impl ResponseHandler for ResponseHandle {
+    #[instrument(fields(id = %response.header().id()), skip_all)]
     async fn send_response<'a>(
         &mut self,
         response: MessageResponse<
@@ -263,14 +277,19 @@ impl ResponseHandler for ResponseHandle {
         >,
     ) -> io::Result<ResponseInfo> {
         let id = response.header().id();
+        trace!("Starting DNS response encoding for ID: {}", id);
         debug!(
             id,
             response_code = %response.header().response_code(),
             "sending response",
         );
+
         let mut buffer = Vec::with_capacity(512);
+        trace!("Created buffer with capacity 512 bytes");
+
         let encode_result = {
             let mut encoder = BinEncoder::new(&mut buffer);
+            trace!("Created binary encoder");
 
             // Set an appropriate maximum on the encoder.
             let max_size = self.max_size_for_response(&response);
@@ -280,34 +299,45 @@ impl ResponseHandler for ResponseHandle {
             );
             encoder.set_max_size(max_size);
 
+            trace!("Starting destructive emit of response");
             response.destructive_emit(&mut encoder)
         };
 
         let info = encode_result.or_else(|error| {
             error!(%error, "error encoding message");
+            trace!("Falling back to SERVFAIL response due to encoding error");
             Self::encode_fallback_servfail_response(id, &mut buffer)
         })?;
+        trace!("Response encoding completed successfully");
 
         // Create a UDP packet with the DNS response
+        trace!("Extracting source IP address");
         let src_ip = match self.src.ip() {
             IpAddr::V4(ip) => ip,
             _ => {
+                trace!("Source IP is not IPv4, returning error");
                 return Err(Error::new(
                     ErrorKind::InvalidInput,
                     "src: Only IPv4 supported",
                 ));
             }
         };
+        trace!("Source IP extracted: {}", src_ip);
+
+        trace!("Extracting destination IP address");
         let dst_ip = match self.dst.ip() {
             IpAddr::V4(ip) => ip,
             _ => {
+                trace!("Destination IP is not IPv4, returning error");
                 return Err(Error::new(
                     ErrorKind::InvalidInput,
                     "dst: Only IPv4 supported",
                 ));
             }
         };
+        trace!("Destination IP extracted: {}", dst_ip);
 
+        trace!("Creating IPv4 packet builder with TTL 64");
         let builder = PacketBuilder::ipv4(
             src_ip.octets(), // Source IP (DNS server)
             dst_ip.octets(), // Destination IP
@@ -317,12 +347,28 @@ impl ResponseHandler for ResponseHandle {
             self.src.port(), // Source Port (DNS Server)
             self.dst.port(), // Destination Port
         );
+        trace!(
+            "Packet builder created for ports {} -> {}",
+            self.src.port(),
+            self.dst.port()
+        );
 
         // Serialize the packet
-        let mut packet = Vec::with_capacity(builder.size(buffer.len()));
+        trace!("Calculating packet size and creating packet vector");
+        let packet_size = builder.size(buffer.len());
+        trace!("Packet size calculated: {} bytes", packet_size);
+        let mut packet = Vec::with_capacity(packet_size);
+        trace!("Starting packet serialization");
         builder
             .write(&mut packet, &buffer)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        trace!(
+            "Packet serialization completed, packet size: {} bytes",
+            packet.len()
+        );
+
+        // Trace the whole packet payload as hex for debugging
+        trace!("Packet payload (hex): {}", bytes_to_hex(&packet));
 
         // Send the packet to the TUN device
         self.dev.send(&packet).await?;

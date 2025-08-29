@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod embedded;
 #[cfg(target_os = "linux")]
 mod hosts_file;
@@ -15,20 +15,20 @@ use tun_rs::AsyncDevice;
 use url::Url;
 
 pub(crate) struct AgentDns {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     embedded_catalog: arc_swap::ArcSwap<hickory_server::authority::Catalog>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     server_ip: AtomicU32,
 }
 
 impl AgentDns {
     pub(crate) fn new() -> Self {
         Self {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             embedded_catalog: arc_swap::ArcSwap::from_pointee(
                 hickory_server::authority::Catalog::new(),
             ),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             server_ip: AtomicU32::default(),
         }
     }
@@ -38,17 +38,17 @@ impl AgentDns {
     }
 
     pub(crate) async fn shutdown(&self) {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            trace!("Shutting down DNS using embedded DNS");
+            self.shutdown_embedded().await;
+        }
         #[cfg(target_os = "linux")]
         {
             trace!("Shutting down DNS using hosts file");
             self.shutdown_hosts_file();
         }
-        #[cfg(target_os = "macos")]
-        {
-            trace!("Shutting down DNS using embedded DNS");
-            self.shutdown_embedded().await;
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
         {
             trace!("No supported platform detected for shutting down DNS, skipping");
         }
@@ -63,17 +63,17 @@ impl AgentDns {
         match current.as_ref().map(|state| state.hostnames.clone()) {
             Some(current_hostnames) if current_hostnames == desired.hostnames => {}
             _ => {
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                {
+                    trace!("Update network hostnames using embedded DNS");
+                    self.update_network_hostnames_embedded(networks).await;
+                }
                 #[cfg(target_os = "linux")]
                 {
                     trace!("Update network hostnames using hosts file");
                     self.update_network_hostnames_hosts_file(networks).await;
                 }
-                #[cfg(target_os = "macos")]
-                {
-                    trace!("Update network hostnames using hosts file");
-                    self.update_network_hostnames_embedded(networks).await;
-                }
-                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
                 {
                     trace!(
                         "No supported platform detected for updating network hostnames, skipping"
@@ -87,6 +87,11 @@ impl AgentDns {
         &self,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            trace!("Update all hostnames using embedded DNS");
+            self.update_all_hostnames_embedded(networks).await;
+        }
         #[cfg(target_os = "linux")]
         {
             trace!("Update all hostnames using hosts file");
@@ -95,12 +100,7 @@ impl AgentDns {
             self.embedded_catalog
                 .store(Arc::new(build_catalog(networks)));
         }
-        #[cfg(target_os = "macos")]
-        {
-            trace!("Update all hostnames using embedded DNS");
-            self.update_all_hostnames_embedded(networks).await;
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
         {
             trace!("No supported platform detected for updating all hostnames, skipping");
         }
@@ -127,13 +127,13 @@ impl AgentDns {
             message_bytes.len()
         );
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             trace!("Processing DNS packet using embedded DNS");
             self.on_packet_embedded(message_bytes, src, src_port, dst, dst_port, dev)
                 .await
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
             trace!("No supported platform detected for processing DNS packet, skipping");
             false
