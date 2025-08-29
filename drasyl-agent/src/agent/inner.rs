@@ -50,7 +50,7 @@ pub struct AgentInner {
     pub(crate) token_path: String,
     pub(crate) mtu: u16,
     pub(crate) network_listener: Option<Arc<NetworkListener>>,
-    pub(crate) last_network_change: Option<NetworkChange>,
+    pub(crate) last_network_change: Mutex<Option<NetworkChange>>,
     client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
 }
 
@@ -94,7 +94,7 @@ impl AgentInner {
             token_path,
             mtu,
             network_listener: network_listener.map(Arc::new),
-            last_network_change: None,
+            last_network_change: Mutex::default(),
             client: Client::builder(TokioExecutor::new())
                 .pool_max_idle_per_host(0)
                 .build::<_, Empty<Bytes>>(https),
