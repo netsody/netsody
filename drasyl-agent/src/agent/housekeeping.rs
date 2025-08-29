@@ -8,6 +8,7 @@ use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::MutexGuard;
@@ -253,12 +254,12 @@ impl AgentInner {
             network.state = None;
 
             // tun device
-            // if let Some(tun_state) = network.tun_state.as_ref() {
-            //     trace!("Remove existing TUN device by cancelling token");
-            //     self.tun_device
-            //         .remove_address(IpAddr::V4(tun_state.ip))
-            //         .expect("Failed to add address");
-            // }
+            if let Some(tun_state) = network.tun_state.as_ref() {
+                trace!("Remove existing TUN device by cancelling token");
+                self.tun_device
+                    .remove_address(IpAddr::V4(tun_state.ip))
+                    .expect("Failed to add address");
+            }
             network.tun_state = None;
 
             // access rules
@@ -283,10 +284,10 @@ impl AgentInner {
     ) {
         if let Some(network) = networks.get_mut(&config_url) {
             // tun device
-            // inner
-            //     .tun_device
-            //     .add_address_v4(desired.ip, desired.subnet.prefix_len())
-            //     .expect("Failed to add address");
+            inner
+                .tun_device
+                .add_address_v4(desired.ip, desired.subnet.prefix_len())
+                .expect("Failed to add address");
 
             network.tun_state = Some(TunState { ip: desired.ip });
 

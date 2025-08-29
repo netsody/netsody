@@ -7,6 +7,9 @@ use crate::network::{LocalNodeState, Network};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::SeqCst;
+use arc_swap::Guard;
 use ipnet::Ipv4Net;
 use tokio::sync::MutexGuard;
 use tracing::trace;
@@ -16,6 +19,8 @@ use url::Url;
 pub(crate) struct AgentDns {
     #[cfg(target_os = "macos")]
     embedded_catalog: arc_swap::ArcSwap<hickory_server::authority::Catalog>,
+    #[cfg(target_os = "macos")]
+    server_ip: AtomicU32,
 }
 
 impl AgentDns {
@@ -25,22 +30,13 @@ impl AgentDns {
             embedded_catalog: arc_swap::ArcSwap::from_pointee(
                 hickory_server::authority::Catalog::new(),
             ),
+            #[cfg(target_os = "macos")]
+            server_ip: AtomicU32::default(),
         }
     }
 
-    pub(crate) fn server_ip_for(ip: Ipv4Addr, netmask: u8) -> Option<Ipv4Addr> {
-        if cfg!(target_os = "macos") {
-            // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
-            let network = Ipv4Net::new(ip, netmask).expect("Invalid IP/netmask combination");
-            let broadcast = network.broadcast();
-            // Decrement the broadcast address by 1 to get the DNS server IP
-            let server_ip = Ipv4Addr::from(u32::from(broadcast).saturating_sub(1));
-            trace!("DNS server IP calculated: {}", server_ip);
-            Some(server_ip)
-        }
-        else {
-            None
-        }
+    pub(crate) fn is_server_ip(&self, ip: Ipv4Addr) -> bool {
+        self.server_ip.load(SeqCst) == ip.to_bits()
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -136,7 +132,6 @@ impl AgentDns {
 
         #[cfg(target_os = "macos")]
         {
-            trace!("Update all hostnames using embedded DNS");
             trace!("Processing DNS packet using embedded DNS");
             self.on_packet_embedded(message_bytes, src, src_port, dst, dst_port, dev)
                 .await
