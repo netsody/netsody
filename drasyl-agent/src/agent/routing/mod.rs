@@ -66,7 +66,14 @@ impl AgentRouting {
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
-            trace!("No supported platform detected for updating routes, skipping");
+            trace!(
+                "No supported platform detected for updating routes. Assuming we're running on a mobile platform where the network listener handles route updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
+            );
+            if let Some(desired_routes) = desired_routes.as_ref() {
+                for (_, route) in desired_routes.iter() {
+                    applied_routes.add(route.as_applied_route());
+                }
+            }
         }
 
         applied_routes
