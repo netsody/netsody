@@ -1,21 +1,14 @@
 pub(crate) mod config;
 
-use arc_swap::ArcSwap;
 pub use config::*;
 use ipnet::Ipv4Net;
-use ipnet_trie::IpnetTrie;
-use p2p::node::SendHandle;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
-use tun_rs::AsyncDevice as TunDevice;
 
 #[derive(Clone)]
 pub struct TunState {
-    pub(crate) cancellation_token: CancellationToken,
-    pub(crate) device: Arc<TunDevice>,
+    pub(crate) ip: Ipv4Addr,
 }
 
 #[derive(PartialEq, Clone)]
@@ -33,18 +26,6 @@ impl LocalNodeState {
     }
 }
 
-pub struct NetworkInner {
-    pub(crate) trie_tx: ArcSwap<IpnetTrie<IpnetTrie<Arc<SendHandle>>>>,
-}
-
-impl Default for NetworkInner {
-    fn default() -> Self {
-        Self {
-            trie_tx: ArcSwap::from_pointee(IpnetTrie::new()),
-        }
-    }
-}
-
 #[derive(Deserialize, Serialize, Clone)]
 pub struct Network {
     pub(crate) config_url: String,
@@ -54,8 +35,6 @@ pub struct Network {
     pub(crate) name: Option<String>,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub(crate) state: Option<LocalNodeState>,
-    #[serde(skip_deserializing, skip_serializing, default)]
-    pub(crate) inner: Arc<NetworkInner>,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub(crate) tun_state: Option<TunState>,
 }

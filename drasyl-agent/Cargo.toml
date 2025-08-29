@@ -15,7 +15,7 @@ tokio-util = { workspace = true }
 serde = { workspace = true }
 ahash = { workspace = true }
 thiserror = { workspace = true }
-tun-rs = { version = "2", features = ["async"] }
+tun-rs = { version = "2.7.2", features = ["async"] }
 hyper = { workspace = true, features = ["client", "http1"] }
 bytes = { workspace = true }
 hyper-util = { workspace = true, features = ["http1", "client"] }

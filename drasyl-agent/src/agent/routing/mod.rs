@@ -21,16 +21,20 @@ impl AgentRouting {
         }
     }
 
-    pub(crate) async fn shutdown(&self, networks: Arc<Mutex<HashMap<Url, Network>>>) {
+    pub(crate) async fn shutdown(
+        &self,
+        networks: Arc<Mutex<HashMap<Url, Network>>>,
+        tun_device: Arc<AsyncDevice>,
+    ) {
         trace!("Shutting down routing using net_route");
-        self.shutdown_net_route(networks).await;
+        self.shutdown_net_route(networks, tun_device).await;
     }
 
     pub(crate) async fn update_routes(
         &self,
         current_routes: Option<EffectiveRoutingList>,
         desired_routes: Option<EffectiveRoutingList>,
-        tun_device: Option<Arc<AsyncDevice>>,
+        tun_device: Arc<AsyncDevice>,
     ) -> EffectiveRoutingList {
         #[allow(unused_mut)]
         let mut applied_routes = EffectiveRoutingList::default();
@@ -54,7 +58,7 @@ impl AgentRouting {
     pub(crate) async fn remove_routes(
         &self,
         routes: EffectiveRoutingList,
-        tun_device: Option<Arc<AsyncDevice>>,
+        tun_device: Arc<AsyncDevice>,
     ) {
         trace!("Removing routes using net_route");
         self.remove_routes_net_route(routes, tun_device).await;

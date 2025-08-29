@@ -130,24 +130,6 @@ impl App {
                                                             Self::network_ip(network)
                                                         ));
                                                     }
-                                                    id if id.0.starts_with("network_device ") => {
-                                                        item.set_text(format!(
-                                                            "Device:\t  {0}",
-                                                            network.tun_device.clone().map_or(
-                                                                "None".to_string(),
-                                                                |tun_device| tun_device.to_string()
-                                                            )
-                                                        ));
-                                                    }
-                                                    id if id.0.starts_with("network_enabled ") => {
-                                                        item.set_text(format!(
-                                                            "Device:\t  {0}",
-                                                            network.tun_device.clone().map_or(
-                                                                "None".to_string(),
-                                                                |tun_device| tun_device.to_string()
-                                                            )
-                                                        ));
-                                                    }
                                                     _ => {}
                                                 }
                                             } else if let MenuItemKind::Check(item) = kind {
@@ -254,23 +236,6 @@ impl App {
                 let item = MenuItem::with_id(
                     format!("network_ip {config_url_str}"),
                     format!("IP:{tabs}  {0}", Self::network_ip(network)),
-                    true,
-                    None,
-                );
-                if let Err(e) = submenu.append(&item) {
-                    panic!("{e:?}");
-                }
-
-                // TUN device
-                let item = MenuItem::with_id(
-                    format!("network_device {config_url_str}"),
-                    format!(
-                        "Device:\t  {0}",
-                        network
-                            .tun_device
-                            .clone()
-                            .map_or("None".to_string(), |tun_device| tun_device.to_string())
-                    ),
                     true,
                     None,
                 );
@@ -865,33 +830,6 @@ impl ApplicationHandler<UserEvent> for App {
                                     warn!("Failed to copy network IP to clipboard: {}", e);
                                 } else {
                                     trace!("Copied network IP to clipboard: {}", url);
-                                }
-                            } else {
-                                trace!("Network not found in status");
-                            }
-                        } else {
-                            trace!("No status available");
-                        }
-                    }
-                    id if id.0.starts_with("network_device ") => {
-                        let url = id.0.split_once(' ').unwrap().1;
-                        trace!("Copy network TUN device for network: {}", url);
-
-                        if let Some(Ok(status)) =
-                            self.status.lock().expect("Mutex poisoned").as_ref()
-                        {
-                            if let Some(network) = status.networks.get(&Url::parse(url).unwrap()) {
-                                if let Some(tun_device) = network.tun_device.as_ref() {
-                                    if let Err(e) = self.clipboard.set_text(tun_device) {
-                                        warn!(
-                                            "Failed to copy network TUN device to clipboard: {}",
-                                            e
-                                        );
-                                    } else {
-                                        trace!("Copied network TUN device to clipboard: {}", url);
-                                    }
-                                } else {
-                                    trace!("Network has no TUN device");
                                 }
                             } else {
                                 trace!("Network not found in status");
