@@ -16,6 +16,8 @@ use std::io::{Error, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::Ordering::SeqCst;
+use ipnet::Ipv4Net;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
@@ -41,9 +43,18 @@ impl AgentDns {
         self.embedded_catalog
             .store(Arc::new(Self::build_catalog(networks)));
 
-        for (_, network) in networks.iter() {
-            if let Some(state) = network.state.as_ref() {
-                if let Some(dns_server) = AgentDns::server_ip_for(state.ip, state.subnet.prefix_len()) {
+        for (i, (_, network)) in networks.iter().enumerate() {
+            if !network.disabled && let Some(state) = network.state.as_ref() {
+                if i == 0 {
+                    // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
+                    let network = Ipv4Net::new(state.ip, state.subnet.prefix_len()).expect("Invalid IP/netmask combination");
+                    let broadcast = network.broadcast();
+                    // Decrement the broadcast address by 1 to get the DNS server IP
+                    let dns_server = Ipv4Addr::from(u32::from(broadcast).saturating_sub(1));
+                    trace!("DNS server IP calculated: {}", dns_server);
+
+                    self.server_ip.store(dns_server.to_bits(), SeqCst);
+
                     // Add DNS configuration with scutil
                     let domains = vec!["drasyl.network", "stis25.uhh-net.de"];
                     if let Err(e) = scutil_add(&dns_server, &domains).await {

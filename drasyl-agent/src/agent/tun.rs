@@ -1,9 +1,10 @@
 use crate::agent::{AgentConfig, AgentInner, Error, is_drasyl_control_packet};
-use etherparse::Ipv4HeaderSlice;
+use etherparse::{Ipv4HeaderSlice, UdpHeaderSlice};
 use ipnet::IpNet;
 use p2p::util;
 use std::net::IpAddr;
 use std::sync::Arc;
+use etherparse::ip_number::UDP;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, trace, warn};
@@ -130,6 +131,26 @@ impl AgentInner {
                                                     );
                                                 }
                                             } else {
+                                                #[cfg(feature = "dns")]
+                                                {
+                                                    // filter DNS messages
+                                                    if ip_hdr.protocol() == UDP && inner_clone.dns.is_server_ip(ip_hdr.destination_addr()) {
+                                                        // get IP payload
+                                                        let payload = &buf[ip_hdr.slice().len()..];
+                                                        if let Ok(udp_hdr) = UdpHeaderSlice::from_slice(payload)
+                                                            && udp_hdr.destination_port() == 53 {
+                                                            trace!("Got potential DNS request: {} -> {}", ip_hdr.source_addr(), ip_hdr.destination_addr());
+                                                            // get UDP payload
+                                                            let payload = &payload[udp_hdr.slice().len()..];
+                                                            if inner_clone.dns.on_packet(payload, ip_hdr.source_addr(), udp_hdr.source_port(), ip_hdr.destination_addr(), udp_hdr.destination_port(), dev_clone.clone()).await {
+                                                                // packet has been processed as a DNS request. Skip further processing.
+                                                                continue;
+                                                            }
+
+                                                        }
+                                                    }
+                                                }
+
                                                 warn!(
                                                     src=?ip_hdr.source_addr(),
                                                     dst=?ip_hdr.destination_addr(),
