@@ -20,7 +20,7 @@ pub struct PrometheusConfig {
     pub pass: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct AgentConfig {
     #[serde(rename = "identity")]
     pub id: Identity,
