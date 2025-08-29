@@ -11,7 +11,11 @@ use tun_rs::AsyncDevice;
 use url::Url;
 
 impl AgentRouting {
-    pub(crate) async fn shutdown_net_route(&self, networks: Arc<Mutex<HashMap<Url, Network>>>) {
+    pub(crate) async fn shutdown_net_route(
+        &self,
+        networks: Arc<Mutex<HashMap<Url, Network>>>,
+        tun_device: Arc<AsyncDevice>,
+    ) {
         // remove physical routes
         trace!("remove physical routes");
         let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
@@ -21,13 +25,7 @@ impl AgentRouting {
 
             for network in networks.values() {
                 if let Some(state) = network.state.as_ref() {
-                    all_physical_routes.push((
-                        network
-                            .tun_state
-                            .as_ref()
-                            .and_then(|tun| tun.device.if_index().ok()),
-                        state.routes.clone(),
-                    ));
+                    all_physical_routes.push((tun_device.if_index().ok(), state.routes.clone()));
                 }
             }
             trace!("Got networks for shutdown");
@@ -52,14 +50,14 @@ impl AgentRouting {
         &self,
         current_routes: Option<EffectiveRoutingList>,
         desired_routes: Option<EffectiveRoutingList>,
-        tun_device: Option<Arc<AsyncDevice>>,
+        tun_device: Arc<AsyncDevice>,
         applied_routes: &mut EffectiveRoutingList,
     ) {
         Self::update_or_remove_routes_net_link(
             self.net_route_handle.clone(),
             current_routes,
             desired_routes,
-            tun_device.as_ref().and_then(|tun| tun.if_index().ok()),
+            tun_device.if_index().ok(),
             applied_routes,
         )
         .await
@@ -122,12 +120,12 @@ impl AgentRouting {
     pub(crate) async fn remove_routes_net_route(
         &self,
         routes: EffectiveRoutingList,
-        tun_device: Option<Arc<AsyncDevice>>,
+        tun_device: Arc<AsyncDevice>,
     ) {
         Self::remove_routes_net_route_inner(
             self.net_route_handle.clone(),
             routes,
-            tun_device.as_ref().and_then(|tun| tun.if_index().ok()),
+            tun_device.if_index().ok(),
         )
         .await;
     }

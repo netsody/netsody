@@ -4,8 +4,12 @@ mod dns;
 mod error;
 mod housekeeping;
 mod inner;
+mod network_listener;
+mod node;
 mod routing;
+mod tun;
 
+pub(crate) use crate::agent::network_listener::NetworkListener;
 use crate::network::Network;
 pub use config::*;
 pub use error::*;
@@ -19,6 +23,7 @@ use tokio::sync::MutexGuard;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{error, info, trace, warn};
+use tun_rs::AsyncDevice as TunDevice;
 use url::Url;
 
 pub struct Agent {
@@ -26,14 +31,37 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub async fn start(config: AgentConfig, config_path: String, token_path: String) -> Self {
+    pub async fn start(
+        config: AgentConfig, // Agent configuration (identity, networks, etc.)
+        config_path: String, // Path to configuration file
+        token_path: String,  // Path to store authentication tokens
+        tun_device: Option<Arc<TunDevice>>, // Optional TUN device for network tunneling
+        network_listener: Option<NetworkListener>, // Optional callback for network changes
+    ) -> Result<Self, Error> {
         info!("Start agent.");
 
-        // start node
         let cancellation_token = CancellationToken::new();
-        let (node, recv_buf_rx) = AgentInner::bind_node(&config)
-            .await
-            .expect("Failed to bind node");
+
+        // bind node
+        let (node, recv_buf_rx) = AgentInner::bind_node(&config).await?;
+
+        // create tun device
+        let tun_device = match tun_device {
+            Some(tun_device) => tun_device,
+            None => {
+                trace!("No tun device supplied, creating one");
+                #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+                {
+                    AgentInner::create_tun_device(&config)?
+                }
+                #[cfg(not(any(
+                    target_os = "windows",
+                    target_os = "linux",
+                    target_os = "macos"
+                )))]
+                return Err(Error::UnsupportedTunCreationPlatform);
+            }
+        };
 
         // options
         let channel_cap = util::get_env("CHANNEL_CAP", 512);
@@ -49,17 +77,25 @@ impl Agent {
             cancellation_token,
             node,
             recv_buf_rx,
+            tun_device,
             tun_tx.clone(),
             drasyl_rx.clone(),
             config_path,
             token_path,
             config.mtu.unwrap_or(AgentConfig::default_mtu()),
+            network_listener,
         ));
 
         let mut join_set = JoinSet::new();
 
         // node runner task
         join_set.spawn(AgentInner::node_runner(
+            inner.clone(),
+            inner.cancellation_token.clone(),
+        ));
+
+        // tun runner task
+        join_set.spawn(AgentInner::tun_runner(
             inner.clone(),
             inner.cancellation_token.clone(),
         ));
@@ -83,7 +119,7 @@ impl Agent {
 
         info!("Agent started.");
 
-        Self { inner }
+        Ok(Self { inner })
     }
 
     pub fn cancelled(&self) -> WaitForCancellationFuture<'_> {
@@ -122,7 +158,6 @@ impl Agent {
             disabled: false,
             name: None,
             state: None,
-            inner: std::sync::Arc::new(crate::network::NetworkInner::default()),
             tun_state: None,
         };
         networks.insert(url, network);
@@ -234,6 +269,12 @@ impl Agent {
 
         // save configuration
         config.save(&self.inner.config_path)
+    }
+}
+
+impl Drop for Agent {
+    fn drop(&mut self) {
+        trace!("Drop agent.");
     }
 }
 

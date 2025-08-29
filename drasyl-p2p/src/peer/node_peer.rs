@@ -18,7 +18,7 @@ use tracing::trace;
 
 // Crate-internal imports
 use crate::crypto::{
-    AgreementPubKey, AgreementSecKey, compute_kx_session_keys, convert_ed25519_pk_to_curve22519_pk,
+    AgreementPubKey, AgreementSecKey, compute_kx_session_keys, convert_ed25519_pk_to_curve25519_pk,
     random_bytes,
 };
 // Crate-internal imports
@@ -108,7 +108,7 @@ impl NodePeer {
                 // invalid PoW, do not generate keys
                 None
             } else {
-                let agreement_pk = convert_ed25519_pk_to_curve22519_pk(&(*pk).into())?;
+                let agreement_pk = convert_ed25519_pk_to_curve25519_pk(&(*pk).into())?;
                 Some(SessionKeys::new(compute_kx_session_keys(
                     &my_agreement_pk.ok_or(Error::AgreementPkNotPresent)?,
                     &my_agreement_sk.ok_or(Error::AgreementPkNotPresent)?,
