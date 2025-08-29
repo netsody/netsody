@@ -25,7 +25,6 @@ hyper-rustls = { version = "0.27.7", features = ["webpki-roots"] }
 etherparse = "0.19.0"
 flume = { version = "0.11.1", default-features = false, features = ["async"] }
 ipnet = { version = "2.11.0", features = ["serde"] }
-net-route = "0.4.6"
 ipnet-trie = "0.3.0"
 toml = "0.9.5"
 clap = { version = "4.5.46", features = ["derive"] }
@@ -41,11 +40,22 @@ chrono = { version = "0.4" }
 humantime = "2.2.0"
 
 [target."cfg(target_os = \"windows\")".dependencies]
+net-route = "0.4.6"
 windows-service = "0.8.0"
 
+[target."cfg(target_os = \"macos\")".dependencies]
+net-route = "0.4.6"
+
+[target."cfg(target_os = \"linux\")".dependencies]
+net-route = "0.4.6"
+
 [features]
+ffi = []
 dns = []
 prometheus = ["p2p/prometheus"]
+
+[lib]
+crate-type = ["rlib", "staticlib"]
 
 [[bin]]
 name = "drasyl"
