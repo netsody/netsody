@@ -17,7 +17,7 @@ use p2p::identity::{Identity, PubKey};
 use p2p::message::LONG_HEADER_MAGIC_NUMBER;
 use p2p::node::{Node, SendHandle};
 
-use crate::agent::network_listener::{NetworkChange, NetworkListener};
+pub(crate) use crate::agent::network_listener::{NetworkChange, NetworkListener};
 use crate::agent::routing::AgentRouting;
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;

@@ -9,7 +9,7 @@ mod node;
 mod routing;
 mod tun;
 
-use crate::agent::network_listener::NetworkListener;
+pub(crate) use crate::agent::network_listener::NetworkListener;
 use crate::network::Network;
 pub use config::*;
 pub use error::*;
