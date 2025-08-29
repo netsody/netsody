@@ -50,4 +50,7 @@ pub enum Error {
 
     #[error("Network not found: {config_url}")]
     NetworkNotFound { config_url: String },
+
+    #[error("Unsupported TUN creation platform")]
+    UnsupportedTunCreationPlatform,
 }
