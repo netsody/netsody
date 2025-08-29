@@ -457,7 +457,6 @@ pub struct NetworkStatus {
     access_rules: Option<EffectiveAccessRuleList>,
     routes: Option<EffectiveRoutingList>,
     hostnames: Option<HashMap<Ipv4Addr, String>>,
-    pub tun_device: Option<String>,
 }
 
 impl NetworkStatus {
@@ -473,10 +472,6 @@ impl NetworkStatus {
                 .map(|state| state.access_rules.clone()),
             routes: network.state.as_ref().map(|state| state.routes.clone()),
             hostnames: network.state.as_ref().map(|state| state.hostnames.clone()),
-            tun_device: network
-                .tun_state
-                .as_ref()
-                .and_then(|tun| tun.device.name().ok()),
         }
     }
 }
@@ -504,13 +499,6 @@ impl fmt::Display for NetworkStatus {
             self.ip
                 .as_ref()
                 .map_or("None".to_string(), |ip| ip.to_string())
-        )?;
-        writeln!(
-            f,
-            "TUN Device: {}",
-            self.tun_device
-                .as_ref()
-                .map_or("None".to_string(), |tun_device| tun_device.to_string())
         )?;
         match &self.access_rules {
             Some(virtual_routes) if !virtual_routes.is_empty() => {

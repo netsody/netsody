@@ -4,7 +4,9 @@ mod dns;
 mod error;
 mod housekeeping;
 mod inner;
+mod node;
 mod routing;
+mod tun;
 
 use crate::network::Network;
 pub use config::*;
@@ -29,11 +31,16 @@ impl Agent {
     pub async fn start(config: AgentConfig, config_path: String, token_path: String) -> Self {
         info!("Start agent.");
 
-        // start node
         let cancellation_token = CancellationToken::new();
+
+        // bind node
         let (node, recv_buf_rx) = AgentInner::bind_node(&config)
             .await
             .expect("Failed to bind node");
+
+        // create tun device
+        let tun_device =
+            AgentInner::create_tun_device(&config).expect("Failed to create TUN device");
 
         // options
         let channel_cap = util::get_env("CHANNEL_CAP", 512);
@@ -49,6 +56,7 @@ impl Agent {
             cancellation_token,
             node,
             recv_buf_rx,
+            tun_device,
             tun_tx.clone(),
             drasyl_rx.clone(),
             config_path,
@@ -60,6 +68,12 @@ impl Agent {
 
         // node runner task
         join_set.spawn(AgentInner::node_runner(
+            inner.clone(),
+            inner.cancellation_token.clone(),
+        ));
+
+        // tun runner task
+        join_set.spawn(AgentInner::tun_runner(
             inner.clone(),
             inner.cancellation_token.clone(),
         ));
@@ -122,7 +136,6 @@ impl Agent {
             disabled: false,
             name: None,
             state: None,
-            inner: std::sync::Arc::new(crate::network::NetworkInner::default()),
             tun_state: None,
         };
         networks.insert(url, network);
