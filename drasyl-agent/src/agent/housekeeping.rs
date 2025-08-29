@@ -1,31 +1,18 @@
 use crate::agent::Error;
 use crate::agent::inner::AgentInner;
-use crate::agent::inner::is_drasyl_control_packet;
-use crate::network::config::EffectiveRoutingList;
-use crate::network::{LocalNodeState, Network, NetworkInner, TunState};
-use etherparse::Ipv4HeaderSlice;
-use ipnet::{IpNet, Ipv4Net};
+use crate::network::{LocalNodeState, Network, TunState};
 use ipnet_trie::IpnetTrie;
-use net_route::Handle;
-use p2p::identity::PubKey;
-use p2p::node::SendHandle;
-use p2p::util;
 use std::collections::HashMap;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::MutexGuard;
-use tokio::task;
-use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{Level, enabled, error, instrument, trace, warn};
-use tun_rs::{AsyncDevice as TunDevice, AsyncDevice, DeviceBuilder as TunDeviceBuilder};
+use tracing::{error, instrument, trace, warn};
 use url::Url;
-#[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-use {std::fs, std::io::Write};
 
 /// Timeout in milliseconds for fetching network config.
 /// If a config cannot be received within this time, the fetch is considered failed.
@@ -201,16 +188,13 @@ impl AgentInner {
             let applied_routes = match current.as_ref().map(|state| state.routes.clone()) {
                 Some(current_routes) if current_routes == desired.routes => current_routes,
                 current_routes => {
-                    Self::update_routes(
-                        self.routes_handle.clone(),
-                        current_routes,
-                        Some(desired.routes.clone()),
-                        network
-                            .tun_state
-                            .as_ref()
-                            .and_then(|tun| tun.device.if_index().ok()),
-                    )
-                    .await
+                    self.routing
+                        .update_routes(
+                            current_routes,
+                            Some(desired.routes.clone()),
+                            inner.tun_device.clone(),
+                        )
+                        .await
                 }
             };
 
@@ -231,20 +215,17 @@ impl AgentInner {
                         current_access_rules.map_or("None".to_string(), |v| v.to_string()),
                         desired.access_rules
                     );
-                    self.update_tx_trie(network).await;
+                    self.update_tx_tries(inner.clone(), networks).await;
                     self.update_rx_tries(inner.clone(), networks).await;
                 }
             }
 
-            // hostnames
-            #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-            match current.as_ref().map(|state| state.hostnames.clone()) {
-                Some(current_hostnames) if current_hostnames == desired.hostnames => {}
-                _ => {
-                    if let Err(e) = update_hosts_file(networks).await {
-                        error!("failed to update /etc/hosts: {}", e);
-                    }
-                }
+            #[cfg(feature = "dns")]
+            {
+                trace!("Update DNS");
+                self.dns
+                    .update_network_hostnames(current, desired, networks)
+                    .await;
             }
         }
     }
@@ -259,30 +240,30 @@ impl AgentInner {
             // routes
             let routes = { network.state.as_ref().map(|state| state.routes.clone()) };
             if let Some(routes) = routes {
-                Self::remove_routes(
-                    self.routes_handle.clone(),
-                    routes,
-                    network
-                        .tun_state
-                        .as_ref()
-                        .and_then(|tun| tun.device.if_index().ok()),
-                )
-                .await;
+                self.routing
+                    .remove_routes(routes, inner.tun_device.clone())
+                    .await;
             }
 
             network.state = None;
 
             // tun device
-            self.remove_tun_device(network).await;
+            if let Some(tun_state) = network.tun_state.as_ref() {
+                trace!("Remove existing TUN device by cancelling token");
+                self.tun_device
+                    .remove_address(IpAddr::V4(tun_state.ip))
+                    .expect("Failed to add address");
+            }
+            network.tun_state = None;
 
             // access rules
-            self.update_tx_trie(network).await;
+            self.update_tx_tries(inner.clone(), networks).await;
             self.update_rx_tries(inner.clone(), networks).await;
 
-            // hostnames
-            #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-            if let Err(e) = update_hosts_file(networks).await {
-                error!("failed to update /etc/hosts: {}", e);
+            #[cfg(feature = "dns")]
+            {
+                trace!("Update DNS");
+                self.dns.update_all_hostnames(networks).await;
             }
         }
     }
@@ -297,17 +278,12 @@ impl AgentInner {
     ) {
         if let Some(network) = networks.get_mut(&config_url) {
             // tun device
-            let (tun_cancellation_token, tun_device) = self.create_tun_device(
-                inner.clone(),
-                desired.ip,
-                desired.subnet.prefix_len(),
-                Self::tun_dev_name(desired.subnet),
-                network.inner.clone(),
-            );
-            network.tun_state = Some(TunState {
-                cancellation_token: tun_cancellation_token,
-                device: tun_device.clone(),
-            });
+            inner
+                .tun_device
+                .add_address_v4(desired.ip, desired.subnet.prefix_len())
+                .expect("Failed to add address");
+
+            network.tun_state = Some(TunState { ip: desired.ip });
 
             self.update_routes_and_hostnames(inner.clone(), config_url, networks, current, desired)
                 .await;
@@ -315,55 +291,62 @@ impl AgentInner {
     }
 
     #[instrument(skip_all)]
-    async fn update_tx_trie(&self, network: &Network) {
-        trace!("Update trie tx");
-        let mut trie_tx: IpnetTrie<IpnetTrie<Arc<SendHandle>>> = IpnetTrie::new();
+    pub(crate) async fn update_tx_tries(
+        &self,
+        inner: Arc<AgentInner>,
+        networks: &MutexGuard<'_, HashMap<Url, Network>>,
+    ) {
+        trace!("Rebuild TX tries");
+        let mut trie_tx: crate::agent::inner::TrieTx = IpnetTrie::new();
 
-        if let Some(access_rules) = network
-            .state
-            .as_ref()
-            .map(|state| state.access_rules.clone())
-        {
-            let (network_trie_tx, _) = access_rules.routing_tries();
+        for (config_url, network) in networks.iter() {
+            if let Some(access_rules) = network
+                .state
+                .as_ref()
+                .map(|state| state.access_rules.clone())
+            {
+                let (network_trie_tx, _) = access_rules.routing_tries();
 
-            trace!(
-                network=?network.config_url,
-                "Processing access rules for network"
-            );
+                trace!(
+                    network=?config_url,
+                    "Processing access rules for network"
+                );
 
-            // tx
-            for (source, trie) in network_trie_tx.iter() {
-                let mut source_trie = IpnetTrie::new();
-                trace!(source_net=?source, "Building TX trie for source network");
+                // tx
+                for (source, trie) in network_trie_tx.iter() {
+                    let mut source_trie = IpnetTrie::new();
+                    trace!(source_net=?source, "Building TX trie for source network");
 
-                for (dest, pk) in trie.iter() {
-                    let send_handle = self
-                        .node
-                        .send_handle(pk)
-                        .expect("Failed to create send handle");
-                    source_trie.insert(dest, send_handle);
+                    for (dest, pk) in trie.iter() {
+                        let send_handle = self
+                            .node
+                            .send_handle(pk)
+                            .expect("Failed to create send handle");
+                        source_trie.insert(dest, send_handle);
 
-                    trace!(
-                        source_net=?source,
-                        dest_net=?dest,
-                        peer=?pk,
-                        "Added TX route: {} -> {} via peer {}",
-                        source,
-                        dest,
-                        pk
-                    );
+                        trace!(
+                            source_net=?source,
+                            dest_net=?dest,
+                            peer=?pk,
+                            "Added TX route: {} -> {} via peer {}",
+                            source,
+                            dest,
+                            pk
+                        );
+                    }
+                    trie_tx.insert(source, source_trie);
                 }
-                trie_tx.insert(source, source_trie);
+            } else {
+                trace!(
+                    network=?network.config_url,
+                    "No access rules available for network"
+                );
             }
-        } else {
-            trace!(
-                network=?network.config_url,
-                "No access rules available for network"
-            );
         }
 
-        trace!("Trie tx rebuilt successfully.",);
-        network.inner.trie_tx.store(Arc::new(trie_tx));
+        trace!("TX tries rebuilt successfully.",);
+
+        inner.trie_tx.store(Arc::new(trie_tx));
     }
 
     #[instrument(skip_all)]
@@ -372,8 +355,8 @@ impl AgentInner {
         inner: Arc<AgentInner>,
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) {
-        trace!("Rebuild tries");
-        let mut trie_rx: IpnetTrie<IpnetTrie<(PubKey, Arc<TunDevice>)>> = IpnetTrie::new();
+        trace!("Rebuild RX tries");
+        let mut trie_rx: crate::agent::inner::TrieRx = IpnetTrie::new();
 
         for (config_url, network) in networks.iter() {
             if let Some(access_rules) = network
@@ -381,42 +364,33 @@ impl AgentInner {
                 .as_ref()
                 .map(|state| state.access_rules.clone())
             {
-                if let Some(tun_device) =
-                    network.tun_state.as_ref().map(|state| state.device.clone())
-                {
-                    let (_, network_trie_rx) = access_rules.routing_tries();
+                let (_, network_trie_rx) = access_rules.routing_tries();
 
-                    trace!(
-                        network=?config_url,
-                        "Processing access rules for network"
-                    );
+                trace!(
+                    network=?config_url,
+                    "Processing access rules for network"
+                );
 
-                    // rx
-                    for (src, trie) in network_trie_rx.iter() {
-                        let mut source_trie = IpnetTrie::new();
-                        trace!(source_net=?src, "Building RX trie for source network");
+                // rx
+                for (src, trie) in network_trie_rx.iter() {
+                    let mut source_trie = IpnetTrie::new();
+                    trace!(source_net=?src, "Building RX trie for source network");
 
-                        for (source, pk) in trie.iter() {
-                            source_trie.insert(source, (*pk, tun_device.clone()));
+                    for (source, pk) in trie.iter() {
+                        source_trie.insert(source, *pk);
 
-                            trace!(
-                                source_net=?src,
-                                dest_net=?source,
-                                peer=?pk,
-                                tun_device=?tun_device.name().unwrap_or("unknown".to_string()),
-                                "Added RX route: {} -> {} from peer {} to TUN device",
-                                src,
-                                source,
-                                pk
-                            );
-                        }
-                        trie_rx.insert(src, source_trie);
+                        trace!(
+                            source_net=?src,
+                            dest_net=?source,
+                            peer=?pk,
+                            tun_device=?inner.tun_device.name().unwrap_or("unknown".to_string()),
+                            "Added RX route: {} -> {} from peer {} to TUN device",
+                            src,
+                            source,
+                            pk
+                        );
                     }
-                } else {
-                    trace!(
-                        network=?config_url,
-                        "No TUN device available for network, skipping access rules"
-                    );
+                    trie_rx.insert(src, source_trie);
                 }
             } else {
                 trace!(
@@ -426,435 +400,8 @@ impl AgentInner {
             }
         }
 
-        trace!("Tries rebuilt successfully.",);
+        trace!("RX tries rebuilt successfully.",);
 
         inner.trie_rx.store(Arc::new(trie_rx));
     }
-
-    fn create_tun_device(
-        &self,
-        inner: Arc<AgentInner>,
-        ip: Ipv4Addr,
-        netmask: u8,
-        name: Option<String>,
-        network_inner: Arc<NetworkInner>,
-    ) -> (CancellationToken, Arc<AsyncDevice>) {
-        // create tun device
-        let agent_token = inner.cancellation_token.clone();
-        let tun_token = agent_token.child_token();
-        // options
-        let mtu = inner.mtu;
-
-        // create tun device
-        trace!("Create TUN device");
-        let destination = if !cfg!(target_os = "windows") {
-            Some(ip)
-        } else {
-            None
-        };
-        let mut dev_builder = TunDeviceBuilder::new()
-            .ipv4(ip, netmask, destination)
-            .mtu(mtu);
-        if let Some(name) = &name {
-            dev_builder = dev_builder.name(name);
-        }
-        #[cfg(target_os = "linux")]
-        let tun_device = Arc::new(
-            dev_builder
-                .multi_queue(true)
-                .build_async()
-                .expect("Failed to build device"),
-        );
-        #[cfg(not(target_os = "linux"))]
-        let tun_device = Arc::new(dev_builder.build_async().expect("Failed to build device"));
-        trace!("TUN device created: {:?}", tun_device.name());
-
-        // crate tun task
-        // TODO: guard einführen der aufräumt wenn der task hier stirbt
-        let inner_clone = inner.clone();
-        let tun_device_clone = tun_device.clone();
-        let network_inner_clone = network_inner.clone();
-        let tun_token_clone = tun_token.clone();
-        let tun_token_clone2 = tun_token.clone();
-        task::spawn(async move {
-            tokio::select! {
-                biased;
-                _ = agent_token.cancelled() => {
-                    trace!("Agent token cancelled. Cancel TUN runner.");
-                }
-                _ = tun_token_clone.cancelled() => {
-                    trace!("TUN runner token cancelled.");
-                }
-                result = Self::tun_runner(inner_clone, tun_device_clone, tun_token_clone2, ip, network_inner_clone) => {
-                    if let Err(e) = result {
-                        error!("TUN runner crashed. Cancel agent token: {}", e);
-                    }
-                    agent_token.cancel();
-                }
-            }
-            trace!("TUN task done.");
-        });
-        trace!("TUN task spawned");
-
-        (tun_token, tun_device)
-    }
-
-    async fn remove_tun_device(&self, network: &mut Network) {
-        if let Some(tun_state) = network.tun_state.as_ref() {
-            trace!("Remove existing TUN device by cancelling token");
-            tun_state.cancellation_token.cancel();
-        }
-        network.tun_state = None;
-    }
-
-    #[cfg(target_os = "linux")]
-    fn tun_dev_name(network: Ipv4Net) -> Option<String> {
-        const PREFIX: &str = "drasyl";
-        const MAX_TOTAL_LEN: usize = 15;
-        const MAX_ID_LEN: usize = MAX_TOTAL_LEN - PREFIX.len();
-
-        const BASE36: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-        let mut hash = {
-            let mut hasher = DefaultHasher::new();
-            network.hash(&mut hasher);
-            hasher.finish()
-        };
-        let mut buf = ['0'; 15]; // Max IFNAMSIZ-1 sicherstellen
-        let mut i = MAX_ID_LEN;
-
-        while hash != 0 && i > 0 {
-            i -= 1;
-            buf[i] = BASE36[(hash % 36) as usize] as char;
-            hash /= 36;
-        }
-        let clean_id: String = buf[i..MAX_ID_LEN].iter().collect();
-        Some(format!("{}{}", PREFIX, clean_id))
-    }
-
-    #[cfg(target_os = "windows")]
-    fn tun_dev_name(network: Ipv4Net) -> Option<String> {
-        const PREFIX: &str = "drasyl";
-        const MAX_TOTAL_LEN: usize = 15;
-        const MAX_ID_LEN: usize = MAX_TOTAL_LEN - PREFIX.len();
-
-        const BASE36: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-        let mut hash = {
-            let mut hasher = DefaultHasher::new();
-            network.hash(&mut hasher);
-            hasher.finish()
-        };
-        let mut buf = ['0'; 15]; // Max IFNAMSIZ-1 sicherstellen
-        let mut i = MAX_ID_LEN;
-
-        while hash != 0 && i > 0 {
-            i -= 1;
-            buf[i] = BASE36[(hash % 36) as usize] as char;
-            hash /= 36;
-        }
-        let clean_id: String = buf[i..MAX_ID_LEN].iter().collect();
-        Some(format!("{} ({})", PREFIX, clean_id))
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    #[allow(unused_variables)]
-    fn tun_dev_name(network: Ipv4Net) -> Option<String> {
-        None
-    }
-
-    async fn tun_runner(
-        inner: Arc<AgentInner>,
-        device: Arc<TunDevice>,
-        cancellation_token: CancellationToken,
-        ip: Ipv4Addr,
-        network_inner: Arc<NetworkInner>,
-    ) -> Result<(), String> {
-        trace!("TUN runner started");
-
-        let tun_tx = inner.tun_tx.clone();
-
-        // options
-        let tun_threads = util::get_env("TUN_THREADS", 3);
-        let mtu = inner.mtu;
-
-        let mut join_set = JoinSet::new();
-
-        // tun <-> drasyl packet processing
-        #[allow(unused_variables)]
-        for i in 0..tun_threads {
-            // tun -> channel
-            #[cfg(target_os = "linux")]
-            let dev = if i == 0 {
-                device.clone()
-            } else {
-                Arc::new(device.try_clone().unwrap())
-            };
-            let dev_clone = device.clone();
-            let tun_tx = tun_tx.clone();
-            let cancellation_token_clone = cancellation_token.clone();
-            let inner_clone = inner.clone();
-            let network_inner_clone = network_inner.clone();
-            join_set.spawn(async move {
-                tokio::select! {
-                    _ = cancellation_token_clone.cancelled() => {
-                        trace!("Token cancelled. Exiting tun <-> drasyl packet processing task ({}/{}).", i + 1, tun_threads);
-                        Ok(())
-                    }
-                    result = async move {
-                        trace!("tun <-> drasyl packet processing task started ({}/{}).", i + 1, tun_threads);
-                        let mut buf = vec![0u8; mtu as usize];
-                        loop {
-                            match dev_clone.recv(&mut buf).await {
-                                Ok(size) => {
-                                    let buf = &buf[..size];
-                                    if let Ok(ip_hdr) = Ipv4HeaderSlice::from_slice(buf) {
-                                        if enabled!(Level::TRACE) {
-                                            trace!(
-                                                src=?ip_hdr.source_addr(),
-                                                dst=?ip_hdr.destination_addr(),
-                                                payload_len=?buf.len(),
-                                                "Forwarding packet from TUN device to drasyl: {} -> {} ({} bytes)",
-                                                ip_hdr.source_addr(),
-                                                ip_hdr.destination_addr(),
-                                                buf.len()
-                                            );
-                                        }
-
-                                        // filter drasyl control plane messages
-                                        if is_drasyl_control_packet(buf) {
-                                            trace!(
-                                                src=?ip_hdr.source_addr(),
-                                                dst=?ip_hdr.destination_addr(),
-                                                "Dropping drasyl control plane packet: {} -> {} (control traffic filtered)",
-                                                ip_hdr.source_addr(),
-                                                ip_hdr.destination_addr()
-                                            );
-                                            continue;
-                                        }
-
-                                        let source = IpNet::from(IpAddr::V4(ip_hdr.source_addr()));
-                                        if let Some((source_trie_entry_source, source_trie)) = network_inner_clone.trie_tx.load().longest_match(&source) {
-                                            trace!(
-                                                src=?ip_hdr.source_addr(),
-                                                dst=?ip_hdr.destination_addr(),
-                                                "Found source trie entry with net {}",
-                                                source_trie_entry_source
-                                            );
-                                            let dest_addr = ip_hdr.destination_addr();
-
-                                            #[cfg(target_os = "macos")]
-                                            if ip == dest_addr {
-                                                // loopback
-                                                if let Err(e) = dev_clone.send(buf).await {
-                                                    warn!(
-                                                        src=?ip_hdr.source_addr(),
-                                                        dst=?ip_hdr.destination_addr(),
-                                                        tun_device=?dev_clone.name().unwrap_or("unknown".to_string()),
-                                                        error=?e,
-                                                        "Failed to send loopback packet to TUN device: {}", e
-                                                    );
-                                                }
-                                                continue;
-                                            }
-                                            let dest = IpNet::from(IpAddr::V4(dest_addr));
-                                            if let Some((_, send_handle)) = source_trie.longest_match(&dest)
-                                            {
-                                                if let Err(e) = tun_tx.try_send((buf.to_vec(), send_handle.clone())) {
-                                                    warn!(
-                                                        src=?ip_hdr.source_addr(),
-                                                        dst=?ip_hdr.destination_addr(),
-                                                        error=?e,
-                                                        "Failed to forward packet to drasyl: {}", e
-                                                    );
-                                                }
-                                                else {
-                                                    trace!(
-                                                        src=?ip_hdr.source_addr(),
-                                                        dst=?ip_hdr.destination_addr(),
-                                                        "Successfully forwarded packet to drasyl: {} -> {}",
-                                                        ip_hdr.source_addr(),
-                                                        ip_hdr.destination_addr()
-                                                    );
-                                                }
-                                            } else {
-                                                warn!(
-                                                    src=?ip_hdr.source_addr(),
-                                                    dst=?ip_hdr.destination_addr(),
-                                                    "No outbound route found for destination: {} -> {} (missing destination route in routing table)",
-                                                    ip_hdr.source_addr(),
-                                                    ip_hdr.destination_addr()
-                                                );
-                                            }
-                                        }
-                                        else {
-                                            warn!(
-                                                src=?ip_hdr.source_addr(),
-                                                dst=?ip_hdr.destination_addr(),
-                                                "No outbound route found for source: {} -> {} (source IP not in routing table)",
-                                                ip_hdr.source_addr(),
-                                                ip_hdr.destination_addr()
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("Failed to receive packet from TUN device: {}", e);
-                                    return Err(format!("Failed to receive packet from TUN device: {}", e));
-                                }
-                            }
-                        }
-                    } => {
-                        result
-                    }
-                }
-            });
-        }
-
-        while let Some(result) = join_set.join_next().await {
-            if let Err(e) = result {
-                return Err(format!("TUN task failed: {}", e));
-            }
-        }
-
-        trace!("TUN runner done.");
-        Ok(())
-    }
-
-    pub(crate) async fn remove_routes(
-        routes_handle: Arc<Handle>,
-        routes: EffectiveRoutingList,
-        if_index: Option<u32>,
-    ) {
-        Self::update_routes(routes_handle, Some(routes), None, if_index).await;
-    }
-
-    async fn update_routes(
-        routes_handle: Arc<Handle>,
-        current_routes: Option<EffectiveRoutingList>,
-        desired_routes: Option<EffectiveRoutingList>,
-        if_index: Option<u32>,
-    ) -> EffectiveRoutingList {
-        let mut applied_routes = EffectiveRoutingList::default();
-        trace!(
-            "Routes change: current={:?}; desired={:?}",
-            current_routes, desired_routes
-        );
-
-        // clean up old routes
-        if let Some(current_routes) = current_routes.as_ref() {
-            for (dest, route) in current_routes.iter() {
-                match desired_routes.as_ref() {
-                    Some(desired_routes) if desired_routes.contains(dest) => {
-                        applied_routes.add(route.as_applied_route());
-                    }
-                    _ => {
-                        trace!("delete route: {:?}", route);
-                        let net_route = route.net_route(if_index);
-                        if let Err(e) = routes_handle.delete(&net_route).await {
-                            warn!("Failed to delete route {:?}: {}", route, e);
-                            applied_routes.add(route.as_removing_route());
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(desired_routes) = desired_routes.as_ref() {
-            if let Ok(existing_routes) = routes_handle.list().await {
-                for (_, route) in desired_routes.iter() {
-                    let net_route = route.net_route(if_index);
-                    let existing = existing_routes.iter().any(|route| {
-                        net_route.destination == route.destination
-                            && net_route.prefix == route.prefix
-                            && net_route.gateway == route.gateway
-                    });
-                    if existing {
-                        trace!("route does already exist: {:?}", route);
-                        applied_routes.add(route.as_applied_route());
-                    } else {
-                        trace!("add route: {:?}", route);
-                        if let Err(e) = routes_handle.add(&net_route).await {
-                            warn!("Failed to add route {:?}: {}", route, e);
-                            applied_routes.add(route.as_pending_route());
-                        } else {
-                            applied_routes.add(route.as_applied_route());
-                        }
-                    }
-                }
-            } else {
-                warn!("Failed to list existing routes");
-            }
-        }
-
-        applied_routes
-    }
-}
-
-#[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-async fn update_hosts_file(networks: &MutexGuard<'_, HashMap<Url, Network>>) -> Result<(), Error> {
-    // read existing /etc/hosts
-    let hosts_content = fs::read_to_string("/etc/hosts")?;
-    trace!("read /etc/hosts");
-
-    // filter out existing drasyl entries
-    let lines: Vec<&str> = hosts_content
-        .lines()
-        .filter(|line| !line.contains("# managed by drasyl"))
-        .collect();
-
-    // create temporary file next to /etc/hosts
-    let temp_path = "/etc/.hosts.drasyl";
-    let mut temp_file = fs::File::create(temp_path)?;
-    trace!("created temporary file at {}", temp_path);
-
-    // write existing entries
-    for line in lines {
-        writeln!(temp_file, "{line}")?;
-    }
-
-    for (_, network) in networks.iter() {
-        if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
-            for (ip, hostname) in hostnames {
-                writeln!(
-                    temp_file,
-                    "{ip:<15} {hostname} {hostname}.drasyl.network   # managed by drasyl"
-                )?;
-            }
-        }
-    }
-    trace!("added new drasyl entries");
-
-    // write file directly
-    fs::rename(temp_path, "/etc/hosts")?;
-    trace!("updated /etc/hosts");
-
-    Ok(())
-}
-
-#[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-pub(crate) fn cleanup_hosts_file() -> Result<(), Error> {
-    // read existing /etc/hosts
-    let hosts_content = fs::read_to_string("/etc/hosts")?;
-    trace!("read /etc/hosts");
-
-    // filter out drasyl entries
-    let lines: Vec<&str> = hosts_content
-        .lines()
-        .filter(|line| !line.contains("# managed by drasyl"))
-        .collect();
-
-    // create temporary file next to /etc/hosts
-    let temp_path = "/etc/.hosts.drasyl";
-    let mut temp_file = fs::File::create(temp_path)?;
-    trace!("created temporary file at {}", temp_path);
-
-    // write remaining entries
-    for line in lines {
-        writeln!(temp_file, "{line}")?;
-    }
-
-    // write file directly
-    fs::rename(temp_path, "/etc/hosts")?;
-    trace!("cleaned up /etc/hosts");
-
-    Ok(())
 }
