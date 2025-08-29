@@ -8,7 +8,7 @@ use tracing::trace;
 use url::Url;
 
 impl AgentInner {
-    pub(crate) fn notify_on_network_change(
+    pub(crate) async fn notify_on_network_change(
         &self,
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
         inner: Arc<AgentInner>,
@@ -56,15 +56,13 @@ impl AgentInner {
                 ips: Some(all_ips),
             };
 
-            if inner.last_network_change.as_ref() != Some(&networks_change) {
+            let mut last_change_guard = inner.last_network_change.lock().await;
+            if last_change_guard.as_ref() != Some(&networks_change) {
                 trace!(
-                    "Network change detected, notifying listener: {:?}",
-                    networks_change
+                    "Network change detected, notifying listener: old={:?} new={:?}",
+                    *last_change_guard, networks_change
                 );
-                // store the new networks_change state into last_networks_change
-                if let Some(inner_mut) = Arc::get_mut(&mut inner.clone()) {
-                    inner_mut.last_network_change = Some(networks_change.clone());
-                }
+                *last_change_guard = Some(networks_change.clone());
                 listener(networks_change.clone());
             } else {
                 trace!("Network change is identical to last one, skipping notification");
