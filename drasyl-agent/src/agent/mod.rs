@@ -272,6 +272,12 @@ impl Agent {
     }
 }
 
+impl Drop for Agent {
+    fn drop(&mut self) {
+        trace!("Drop agent.");
+    }
+}
+
 pub struct ChannelSink(pub flume::Sender<(PubKey, Vec<u8>)>);
 
 impl MessageSink for ChannelSink {
