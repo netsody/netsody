@@ -28,19 +28,20 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub async fn start(config: AgentConfig, config_path: String, token_path: String) -> Self {
+    pub async fn start(
+        config: AgentConfig,
+        config_path: String,
+        token_path: String,
+    ) -> Result<Self, Error> {
         info!("Start agent.");
 
         let cancellation_token = CancellationToken::new();
 
         // bind node
-        let (node, recv_buf_rx) = AgentInner::bind_node(&config)
-            .await
-            .expect("Failed to bind node");
+        let (node, recv_buf_rx) = AgentInner::bind_node(&config).await?;
 
         // create tun device
-        let tun_device =
-            AgentInner::create_tun_device(&config).expect("Failed to create TUN device");
+        let tun_device = AgentInner::create_tun_device(&config)?;
 
         // options
         let channel_cap = util::get_env("CHANNEL_CAP", 512);
@@ -97,7 +98,7 @@ impl Agent {
 
         info!("Agent started.");
 
-        Self { inner }
+        Ok(Self { inner })
     }
 
     pub fn cancelled(&self) -> WaitForCancellationFuture<'_> {
