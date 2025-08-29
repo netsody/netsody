@@ -21,6 +21,7 @@ use tokio::sync::MutexGuard;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{error, info, trace, warn};
+use tun_rs::AsyncDevice as TunDevice;
 use url::Url;
 
 pub struct Agent {
@@ -29,9 +30,10 @@ pub struct Agent {
 
 impl Agent {
     pub async fn start(
-        config: AgentConfig,
-        config_path: String,
-        token_path: String,
+        config: AgentConfig, // Agent configuration (identity, networks, etc.)
+        config_path: String, // Path to configuration file
+        token_path: String,  // Path to store authentication tokens
+        tun_device: Option<Arc<TunDevice>>, // Optional TUN device for network tunneling
     ) -> Result<Self, Error> {
         info!("Start agent.");
 
@@ -41,7 +43,22 @@ impl Agent {
         let (node, recv_buf_rx) = AgentInner::bind_node(&config).await?;
 
         // create tun device
-        let tun_device = AgentInner::create_tun_device(&config)?;
+        let tun_device = match tun_device {
+            Some(tun_device) => tun_device,
+            None => {
+                trace!("No tun device supplied, creating one");
+                #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+                {
+                    AgentInner::create_tun_device(&config)?
+                }
+                #[cfg(not(any(
+                    target_os = "windows",
+                    target_os = "linux",
+                    target_os = "macos"
+                )))]
+                return Err(Error::UnsupportedTunCreationPlatform);
+            }
+        };
 
         // options
         let channel_cap = util::get_env("CHANNEL_CAP", 512);
