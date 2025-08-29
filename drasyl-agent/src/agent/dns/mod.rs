@@ -9,8 +9,6 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::SeqCst;
-use arc_swap::Guard;
-use ipnet::Ipv4Net;
 use tokio::sync::MutexGuard;
 use tracing::trace;
 use tun_rs::AsyncDevice;
@@ -60,7 +58,6 @@ impl AgentDns {
         &self,
         current: Option<LocalNodeState>,
         desired: LocalNodeState,
-        config_url: Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         match current.as_ref().map(|state| state.hostnames.clone()) {

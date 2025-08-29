@@ -32,7 +32,7 @@ impl AgentDns {
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub(crate) async fn update_hosts_file(
+    async fn update_hosts_file(
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) -> Result<(), Error> {
         // read existing /etc/hosts

@@ -1,9 +1,6 @@
 use crate::agent::Error;
 use crate::agent::inner::AgentInner;
 use crate::network::{LocalNodeState, Network, TunState};
-use etherparse::ip_number::UDP;
-use etherparse::{Ipv4HeaderSlice, UdpHeaderSlice};
-use ipnet::{IpNet, Ipv4Net};
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -230,7 +227,7 @@ impl AgentInner {
             {
                 trace!("Update DNS");
                 self.dns
-                    .update_network_hostnames(current, desired, config_url, networks)
+                    .update_network_hostnames(current, desired, networks)
                     .await;
             }
         }
