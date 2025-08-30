@@ -19,6 +19,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
+use hickory_proto::rr::rdata::NS;
+use hickory_proto::rr::rdata::SOA;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
@@ -188,7 +190,49 @@ impl AgentDns {
         let mut catalog = Catalog::new();
 
         let origin: Name = Name::parse("drasyl.network.", None).unwrap();
-        let mut authority = InMemoryAuthority::empty(origin.clone(), ZoneType::Primary, false);
+        let mut authority = InMemoryAuthority::empty(origin.clone(), ZoneType::External, false);
+
+        // // example.com.		3600	IN	SOA	sns.dns.icann.org. noc.dns.icann.org. 2015082403 7200 3600 1209600 3600
+        // authority.upsert_mut(
+        //     Record::from_rdata(
+        //         origin.clone(),
+        //         3600,
+        //         RData::SOA(SOA::new(
+        //             Name::parse("sns.dns.icann.org.", None).unwrap(),
+        //             Name::parse("noc.dns.icann.org.", None).unwrap(),
+        //             2025083003,
+        //             7200,
+        //             3600,
+        //             1209600,
+        //             3600,
+        //         )),
+        //     )
+        //         .set_dns_class(DNSClass::IN)
+        //         .clone(),
+        //     0,
+        // );
+        //
+        // authority.upsert_mut(
+        //     Record::from_rdata(
+        //         origin.clone(),
+        //         86400,
+        //         RData::NS(NS(Name::parse("a.iana-servers.net.", None).unwrap())),
+        //     )
+        //         .set_dns_class(DNSClass::IN)
+        //         .clone(),
+        //     0,
+        // );
+        // authority.upsert_mut(
+        //     Record::from_rdata(
+        //         origin.clone(),
+        //         86400,
+        //         RData::NS(NS(Name::parse("b.iana-servers.net.", None).unwrap())),
+        //     )
+        //         .set_dns_class(DNSClass::IN)
+        //         .clone(),
+        //     0,
+        // );
+
         for network in networks.values() {
             if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
                 for (ip, hostname) in hostnames {
@@ -197,7 +241,7 @@ impl AgentDns {
                         Record::from_rdata(
                             Name::parse(format!("{hostname}.drasyl.network.").as_str(), None)
                                 .unwrap(),
-                            300,
+                            60,
                             RData::A(A(ip)),
                         )
                         .set_dns_class(DNSClass::IN)
