@@ -11,6 +11,7 @@ mod tun;
 
 pub(crate) use crate::agent::network_listener::NetworkListener;
 use crate::network::Network;
+use cfg_if::cfg_if;
 pub use config::*;
 pub use error::*;
 pub use inner::*;
@@ -50,16 +51,13 @@ impl Agent {
             Some(tun_device) => tun_device,
             None => {
                 trace!("No tun device supplied, creating one");
-                #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-                {
-                    AgentInner::create_tun_device(&config)?
+                cfg_if! {
+                    if #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))] {
+                        AgentInner::create_tun_device(&config)?
+                    } else {
+                        return Err(Error::UnsupportedTunCreationPlatform);
+                    }
                 }
-                #[cfg(not(any(
-                    target_os = "windows",
-                    target_os = "linux",
-                    target_os = "macos"
-                )))]
-                return Err(Error::UnsupportedTunCreationPlatform);
             }
         };
 

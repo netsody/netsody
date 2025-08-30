@@ -1,6 +1,7 @@
 use crate::agent::Error;
 use crate::agent::inner::AgentInner;
 use crate::network::{LocalNodeState, Network, TunState};
+use cfg_if::cfg_if;
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -254,12 +255,19 @@ impl AgentInner {
             // tun device
             if let Some(tun_state) = network.tun_state.as_ref() {
                 trace!("Remove network from TUN device by removing address");
-                #[cfg(not(target_os = "ios"))]
-                self.tun_device
-                    .remove_address(IpAddr::V4(tun_state.ip))
-                    .expect("Failed to add address");
+                cfg_if! {
+                    if #[cfg(target_os = "ios")] {
+                        trace!(
+                            "No supported platform detected for manages TUN device addresses. Assuming we're running on a mobile platform where the network listener handles TUN address updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
+                        );
+                    } else {
+                        self.tun_device
+                            .remove_address(IpAddr::V4(tun_state.ip))
+                            .expect("Failed to add address");
+                    }
+                }
+                network.tun_state = None;
             }
-            network.tun_state = None;
 
             // access rules
             self.update_tx_tries(inner.clone(), networks).await;
@@ -284,12 +292,18 @@ impl AgentInner {
         if let Some(network) = networks.get_mut(&config_url) {
             // tun device
             trace!("Setup network by adding address to TUN device");
-            #[cfg(not(target_os = "ios"))]
-            inner
-                .tun_device
-                .add_address_v4(desired.ip, desired.subnet.prefix_len())
-                .expect("Failed to add address");
-
+            cfg_if! {
+                if #[cfg(target_os = "ios")] {
+                    trace!(
+                        "No supported platform detected for manages TUN device addresses. Assuming we're running on a mobile platform where the network listener handles TUN address updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
+                    );
+                } else {
+                    inner
+                        .tun_device
+                        .add_address_v4(desired.ip, desired.subnet.prefix_len())
+                        .expect("Failed to add address");
+                }
+            }
             network.tun_state = Some(TunState { ip: desired.ip });
 
             self.update_routes_and_hostnames(inner.clone(), config_url, networks, current, desired)
