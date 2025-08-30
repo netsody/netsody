@@ -4,8 +4,6 @@ use crate::network::{LocalNodeState, Network, TunState};
 use cfg_if::cfg_if;
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -227,10 +225,15 @@ impl AgentInner {
 
             #[cfg(feature = "dns")]
             {
+                use crate::agent::dns::AgentDnsInterface;
+
                 trace!("Update DNS");
-                self.dns
-                    .update_network_hostnames(current, desired, networks)
-                    .await;
+                match current.as_ref().map(|state| state.hostnames.clone()) {
+                    Some(current_hostnames) if current_hostnames == desired.hostnames => {}
+                    _ => {
+                        self.dns.update_network_hostnames(networks).await;
+                    }
+                }
             }
         }
     }
@@ -275,6 +278,8 @@ impl AgentInner {
 
             #[cfg(feature = "dns")]
             {
+                use crate::agent::dns::AgentDnsInterface;
+
                 trace!("Update DNS");
                 self.dns.update_all_hostnames(networks).await;
             }

@@ -222,6 +222,8 @@ impl AgentInner {
 
         #[cfg(feature = "dns")]
         {
+            use crate::agent::dns::AgentDnsInterface;
+
             trace!("Shutdown DNS");
             self.dns.shutdown().await;
         }

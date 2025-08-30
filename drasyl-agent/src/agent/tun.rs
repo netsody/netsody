@@ -1,6 +1,5 @@
 use crate::agent::{AgentConfig, AgentInner, Error, is_drasyl_control_packet};
-use etherparse::ip_number::UDP;
-use etherparse::{Ipv4HeaderSlice, UdpHeaderSlice};
+use etherparse::Ipv4HeaderSlice;
 use ipnet::IpNet;
 use p2p::util;
 use std::net::IpAddr;
@@ -133,6 +132,10 @@ impl AgentInner {
                                             } else {
                                                 #[cfg(feature = "dns")]
                                                 {
+                                                    use crate::agent::dns::AgentDnsInterface;
+                                                    use etherparse::ip_number::UDP;
+                                                    use etherparse::UdpHeaderSlice;
+
                                                     // filter DNS messages
                                                     trace!("Filter DNS messages");
                                                     if ip_hdr.protocol() == UDP && inner_clone.dns.is_server_ip(ip_hdr.destination_addr()) {

@@ -1,37 +1,19 @@
 use crate::agent::Error;
-use crate::agent::dns::AgentDns;
-use crate::network::{LocalNodeState, Network};
+use crate::agent::dns::AgentDnsInterface;
+use crate::network::Network;
 use std::collections::HashMap;
 use tokio::sync::MutexGuard;
 use tracing::{error, trace};
 use url::Url;
 use {std::fs, std::io::Write};
 
+pub struct AgentDns {}
+
 impl AgentDns {
-    pub(crate) fn shutdown_hosts_file(&self) {
-        if let Err(e) = Self::cleanup_hosts_file() {
-            error!("Failed to cleanup /etc/hosts: {}", e);
-        }
+    pub(crate) fn new() -> Self {
+        Self {}
     }
 
-    pub(crate) async fn update_network_hostnames_hosts_file(
-        &self,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
-        // we do not support updating hostnames for a single network
-        self.update_all_hostnames_host_file(networks).await;
-    }
-
-    pub(crate) async fn update_all_hostnames_host_file(
-        &self,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
-        if let Err(e) = Self::update_hosts_file(networks).await {
-            error!("failed to update /etc/hosts: {}", e);
-        }
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     async fn update_hosts_file(
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) -> Result<(), Error> {
@@ -74,7 +56,6 @@ impl AgentDns {
         Ok(())
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn cleanup_hosts_file() -> Result<(), Error> {
         // read existing /etc/hosts
         let hosts_content = fs::read_to_string("/etc/hosts")?;
@@ -101,5 +82,26 @@ impl AgentDns {
         trace!("cleaned up /etc/hosts");
 
         Ok(())
+    }
+}
+
+impl AgentDnsInterface for AgentDns {
+    async fn shutdown(&self) {
+        trace!("Hosts File DNS: Shutting down DNS");
+        if let Err(e) = Self::cleanup_hosts_file() {
+            error!("Failed to cleanup /etc/hosts: {}", e);
+        }
+    }
+
+    async fn update_network_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
+        // we do not support updating hostnames for a single network
+        self.update_all_hostnames(networks).await;
+    }
+
+    async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
+        trace!("Hosts File DNS: Update all hostnames");
+        if let Err(e) = Self::update_hosts_file(networks).await {
+            error!("failed to update /etc/hosts: {}", e);
+        }
     }
 }
