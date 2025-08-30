@@ -226,7 +226,7 @@ dependencies = [
  "objc2-foundation 0.3.1",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -881,9 +881,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-if"
-version = "1.0.0"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
+checksum = "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9"
 
 [[package]]
 name = "cfg_aliases"
@@ -1527,7 +1527,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1608,6 +1608,7 @@ dependencies = [
  "axum-extra",
  "base64",
  "bytes",
+ "cfg-if",
  "chrono",
  "clap",
  "drasyl-p2p",
@@ -3023,7 +3024,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.59.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@
 mod net_route;
 
 use crate::network::{EffectiveRoutingList, Network};
+use cfg_if::cfg_if;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -29,14 +30,13 @@ impl AgentRouting {
         networks: Arc<Mutex<HashMap<Url, Network>>>,
         tun_device: Arc<AsyncDevice>,
     ) {
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        {
-            trace!("Shutting down routing using net_route");
-            self.shutdown_net_route(networks, tun_device).await;
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        {
-            trace!("No supported platform detected for shutting down routes, skipping");
+        cfg_if! {
+            if #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))] {
+                trace!("Shutting down routing using net_route");
+                self.shutdown_net_route(networks, tun_device).await;
+            } else {
+                trace!("No supported platform detected for shutting down routes, skipping");
+            }
         }
     }
 
@@ -53,25 +53,24 @@ impl AgentRouting {
             current_routes, desired_routes
         );
 
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        {
-            trace!("Updating routes using net_route");
-            self.update_routes_net_route(
-                current_routes,
-                desired_routes,
-                tun_device,
-                &mut applied_routes,
-            )
-            .await;
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        {
-            trace!(
-                "No supported platform detected for updating routes. Assuming we're running on a mobile platform where the network listener handles route updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
-            );
-            if let Some(desired_routes) = desired_routes.as_ref() {
-                for (_, route) in desired_routes.iter() {
-                    applied_routes.add(route.as_applied_route());
+        cfg_if! {
+            if #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))] {
+                trace!("Updating routes using net_route");
+                self.update_routes_net_route(
+                    current_routes,
+                    desired_routes,
+                    tun_device,
+                    &mut applied_routes,
+                )
+                .await;
+            } else {
+                trace!(
+                    "No supported platform detected for updating routes. Assuming we're running on a mobile platform where the network listener handles route updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
+                );
+                if let Some(desired_routes) = desired_routes.as_ref() {
+                    for (_, route) in desired_routes.iter() {
+                        applied_routes.add(route.as_applied_route());
+                    }
                 }
             }
         }
@@ -84,14 +83,13 @@ impl AgentRouting {
         routes: EffectiveRoutingList,
         tun_device: Arc<AsyncDevice>,
     ) {
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        {
-            trace!("Removing routes using net_route");
-            self.remove_routes_net_route(routes, tun_device).await;
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        {
-            trace!("No supported platform detected for removing routes, skipping");
+        cfg_if! {
+            if #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))] {
+                trace!("Removing routes using net_route");
+                self.remove_routes_net_route(routes, tun_device).await;
+            } else {
+                trace!("No supported platform detected for removing routes, skipping");
+            }
         }
     }
 }
