@@ -19,8 +19,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
-use hickory_proto::rr::rdata::NS;
-use hickory_proto::rr::rdata::SOA;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
