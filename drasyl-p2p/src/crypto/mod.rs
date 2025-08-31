@@ -17,6 +17,7 @@ use zeroize::Zeroize;
 pub(crate) const SHA256_BYTES: usize = 32;
 pub(crate) const ED25519_SECRETKEYBYTES: usize = 64;
 pub(crate) const ED25519_PUBLICKEYBYTES: usize = 32;
+pub(crate) const ED25519_SEEDBYTES: usize = 32;
 pub(crate) const CURVE25519_SECRETKEYBYTES: usize = 32;
 pub(crate) const CURVE25519_PUBLICKEYBYTES: usize = 32;
 pub(crate) const AEGIS_KEYBYTES: usize = 32;
@@ -40,21 +41,21 @@ pub fn random_bytes(buf: &mut [u8]) {
 }
 
 pub fn generate_sign_keypair() -> Result<(SigningPubKey, SigningSecKey), Error> {
-    let seed: [u8; 32] = RNG.with(|rng| {
+    let seed: [u8; ED25519_SEEDBYTES] = RNG.with(|rng| {
         let mut rng = rng.borrow_mut();
-        let mut s = [0u8; 32];
+        let mut s = [0u8; ED25519_SEEDBYTES];
         rng.fill_bytes(&mut s);
         s
     });
 
     let signing = SigningKey::from_bytes(&seed);
     let verifying: VerifyingKey = signing.verifying_key();
-    let pk_bytes: [u8; 32] = verifying.to_bytes();
+    let pk_bytes: SigningPubKey = verifying.to_bytes();
 
     // Backwards compatibility with libsodium: seed || pk
-    let mut sk_bytes = [0u8; 64];
-    sk_bytes[..32].copy_from_slice(&seed);
-    sk_bytes[32..].copy_from_slice(&pk_bytes);
+    let mut sk_bytes: SigningSecKey = [0u8; ED25519_SECRETKEYBYTES];
+    sk_bytes[..ED25519_SEEDBYTES].copy_from_slice(&seed);
+    sk_bytes[ED25519_SEEDBYTES..].copy_from_slice(&pk_bytes);
 
     Ok((pk_bytes, sk_bytes))
 }
@@ -99,8 +100,8 @@ pub fn compute_kx_session_keys(
 
     let mut rx = [0u8; AEGIS_KEYBYTES];
     let mut tx = [0u8; AEGIS_KEYBYTES];
-    rx.copy_from_slice(&digest[..32]);
-    tx.copy_from_slice(&digest[32..64]);
+    rx.copy_from_slice(&digest[..AEGIS_KEYBYTES]); // 32 bytes
+    tx.copy_from_slice(&digest[AEGIS_KEYBYTES..]); // 32 bytes
 
     // libsodium format: returned keys are relative to the "my_*" keys
     let (rx_key, tx_key) = if i_am_client {
@@ -135,8 +136,8 @@ pub fn convert_ed25519_sk_to_curve25519_sk(sk: &SigningSecKey) -> Result<Agreeme
     h[31] |= 64;
 
     // 3) return first 32 Bytes
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&h[..32]);
+    let mut out: AgreementSecKey = [0u8; CURVE25519_SECRETKEYBYTES];
+    out.copy_from_slice(&h[..CURVE25519_SECRETKEYBYTES]);
 
     h.zeroize();
 
