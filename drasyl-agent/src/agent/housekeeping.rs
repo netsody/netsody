@@ -260,7 +260,7 @@ impl AgentInner {
             if let Some(tun_state) = network.tun_state.as_ref() {
                 trace!("Remove network from TUN device by removing address");
                 cfg_if! {
-                    if #[cfg(any(target_os = "ios", target_os = "tvos"))] {
+                    if #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))] {
                         trace!(
                             "No supported platform detected for manages TUN device addresses. Assuming we're running on a mobile platform where the network listener handles TUN address updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
                         );
@@ -299,7 +299,7 @@ impl AgentInner {
             // tun device
             trace!("Setup network by adding address to TUN device");
             cfg_if! {
-                if #[cfg(any(target_os = "ios", target_os = "tvos"))] {
+                if #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))] {
                     trace!(
                         "No supported platform detected for manages TUN device addresses. Assuming we're running on a mobile platform where the network listener handles TUN address updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
                     );
