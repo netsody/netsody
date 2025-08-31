@@ -119,7 +119,7 @@ mod old_ref {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: neue Implementierung muss exakt mit der alten übereinstimmen
+// Tests: new implementation must match the old one exactly
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -151,7 +151,7 @@ fn kx_session_keys_match_old_ref_both_roles_many() {
     sodium_init_once();
 
     for _ in 0..32 {
-        // X25519 Keypairs über die alte Referenz erzeugen (libsodium), damit beide Welten identische Inputs sehen
+        // Generate X25519 keypairs using the old reference (libsodium) so that both worlds see identical inputs
         let (my_pk_0, my_sk_0): (SigningPubKey, SigningSecKey) =
             old_ref::generate_sign_keypair().unwrap();
         let (peer_pk_0, peer_sk_0): (SigningPubKey, SigningSecKey) =
@@ -165,9 +165,9 @@ fn kx_session_keys_match_old_ref_both_roles_many() {
         assert_eq!(rc1, 0);
         assert_eq!(rc2, 0);
 
-        // alte Referenz (aus Sicht "my_*")
+        // old reference (from the perspective of "my_*")
         let (rx_old, tx_old) = old_ref::compute_kx_session_keys(&my_pk, &my_sk, &peer_pk).unwrap();
-        // neue Impl (aus Sicht "my_*")
+        // new implementation (from the perspective of "my_*")
         let (rx_new, tx_new): (SessionKey, SessionKey) =
             new::compute_kx_session_keys(&my_pk, &my_sk, &peer_pk).unwrap();
 
@@ -182,7 +182,7 @@ fn kx_session_keys_match_old_ref_both_roles_many() {
             "tx mismatch (my view)"
         );
 
-        // Peer-Perspektive
+        // peer perspective
         let (rx_old_p, tx_old_p) =
             old_ref::compute_kx_session_keys(&peer_pk, &peer_sk, &my_pk).unwrap();
         let (rx_new_p, tx_new_p): (SessionKey, SessionKey) =
