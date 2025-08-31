@@ -1,5 +1,6 @@
 use crate::agent::Error;
 use crate::agent::inner::AgentInner;
+use crate::agent::routing::AgentRoutingInterface;
 use crate::network::{LocalNodeState, Network, TunState};
 use cfg_if::cfg_if;
 use ipnet_trie::IpnetTrie;
@@ -192,7 +193,7 @@ impl AgentInner {
                 Some(current_routes) if current_routes == desired.routes => current_routes,
                 current_routes => {
                     self.routing
-                        .update_routes(
+                        .update_network(
                             current_routes,
                             Some(desired.routes.clone()),
                             inner.tun_device.clone(),
@@ -249,7 +250,7 @@ impl AgentInner {
             let routes = { network.state.as_ref().map(|state| state.routes.clone()) };
             if let Some(routes) = routes {
                 self.routing
-                    .remove_routes(routes, inner.tun_device.clone())
+                    .remove_network(routes, inner.tun_device.clone())
                     .await;
             }
 

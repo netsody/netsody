@@ -1,7 +1,7 @@
-use crate::agent::routing::AgentRouting;
+use crate::agent::routing::AgentRoutingInterface;
 use crate::network::{EffectiveRoute, EffectiveRoutingList, Network};
 use ::net_route::Handle as NetRouteHandle;
-use net_route::Route;
+use net_route::{Handle, Route};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -10,57 +10,31 @@ use tracing::{trace, warn};
 use tun_rs::AsyncDevice;
 use url::Url;
 
+pub struct AgentRouting {
+    pub(crate) handle: Arc<Handle>,
+}
+
 impl AgentRouting {
-    pub(crate) async fn shutdown_net_route(
-        &self,
-        networks: Arc<Mutex<HashMap<Url, Network>>>,
-        tun_device: Arc<AsyncDevice>,
-    ) {
-        // remove physical routes
-        trace!("remove physical routes");
-        let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
-        {
-            trace!("Locking networks for shutdown");
-            let networks = networks.lock().await;
-
-            for network in networks.values() {
-                if let Some(state) = network.state.as_ref() {
-                    all_physical_routes.push((tun_device.if_index().ok(), state.routes.clone()));
-                }
-            }
-            trace!("Got networks for shutdown");
+    pub(crate) fn new() -> Self {
+        Self {
+            handle: Arc::new(Handle::new().expect("Failed to create route handle")),
         }
-
-        let routes_handle = self.net_route_handle.clone();
-        let task = tokio::spawn(async move {
-            for (if_index, physical_routes) in all_physical_routes {
-                trace!("Remove physical routes: {}", physical_routes);
-                Self::remove_routes_net_route_inner(
-                    routes_handle.clone(),
-                    physical_routes,
-                    if_index,
-                )
-                .await;
-            }
-        });
-        futures::executor::block_on(task).unwrap();
     }
 
-    pub(crate) async fn update_routes_net_route(
-        &self,
-        current_routes: Option<EffectiveRoutingList>,
-        desired_routes: Option<EffectiveRoutingList>,
-        tun_device: Arc<AsyncDevice>,
-        applied_routes: &mut EffectiveRoutingList,
+    async fn remove_routes_net_route_inner(
+        routes_handle: Arc<NetRouteHandle>,
+        routes: EffectiveRoutingList,
+        if_index: Option<u32>,
     ) {
+        let mut applied_routes = EffectiveRoutingList::default();
         Self::update_or_remove_routes_net_link(
-            self.net_route_handle.clone(),
-            current_routes,
-            desired_routes,
-            tun_device.if_index().ok(),
-            applied_routes,
+            routes_handle,
+            Some(routes),
+            None,
+            if_index,
+            &mut applied_routes,
         )
-        .await
+        .await;
     }
 
     async fn update_or_remove_routes_net_link(
@@ -117,35 +91,6 @@ impl AgentRouting {
         }
     }
 
-    pub(crate) async fn remove_routes_net_route(
-        &self,
-        routes: EffectiveRoutingList,
-        tun_device: Arc<AsyncDevice>,
-    ) {
-        Self::remove_routes_net_route_inner(
-            self.net_route_handle.clone(),
-            routes,
-            tun_device.if_index().ok(),
-        )
-        .await;
-    }
-
-    async fn remove_routes_net_route_inner(
-        routes_handle: Arc<NetRouteHandle>,
-        routes: EffectiveRoutingList,
-        if_index: Option<u32>,
-    ) {
-        let mut applied_routes = EffectiveRoutingList::default();
-        Self::update_or_remove_routes_net_link(
-            routes_handle,
-            Some(routes),
-            None,
-            if_index,
-            &mut applied_routes,
-        )
-        .await;
-    }
-
     #[allow(unused_variables)]
     fn net_route(effective_route: &EffectiveRoute, if_index: Option<u32>) -> Route {
         let route = Route::new(
@@ -158,5 +103,79 @@ impl AgentRouting {
         #[cfg(target_os = "windows")]
         let route = route.with_ifindex(if_index.expect("Interface index is required"));
         route
+    }
+}
+
+impl AgentRoutingInterface for AgentRouting {
+    async fn update_network(
+        &self,
+        current_routes: Option<EffectiveRoutingList>,
+        desired_routes: Option<EffectiveRoutingList>,
+        tun_device: Arc<AsyncDevice>,
+    ) -> EffectiveRoutingList {
+        #[allow(unused_mut)]
+        let mut applied_routes = EffectiveRoutingList::default();
+        trace!(
+            "Routes change: current={:?}; desired={:?}",
+            current_routes, desired_routes
+        );
+
+        trace!("Updating routes using net_route");
+        Self::update_or_remove_routes_net_link(
+            self.handle.clone(),
+            current_routes,
+            desired_routes,
+            tun_device.if_index().ok(),
+            &mut applied_routes,
+        )
+        .await;
+
+        applied_routes
+    }
+
+    async fn remove_network(&self, routes: EffectiveRoutingList, tun_device: Arc<AsyncDevice>) {
+        trace!("Removing routes using net_route");
+        Self::remove_routes_net_route_inner(
+            self.handle.clone(),
+            routes,
+            tun_device.if_index().ok(),
+        )
+        .await;
+    }
+
+    async fn shutdown(
+        &self,
+        networks: Arc<Mutex<HashMap<Url, Network>>>,
+        tun_device: Arc<AsyncDevice>,
+    ) {
+        trace!("Shutting down routing using net_route");
+        // remove physical routes
+        trace!("remove physical routes");
+        let mut all_physical_routes: Vec<(Option<u32>, EffectiveRoutingList)> = Vec::new();
+        {
+            trace!("Locking networks for shutdown");
+            let networks = networks.lock().await;
+
+            for network in networks.values() {
+                if let Some(state) = network.state.as_ref() {
+                    all_physical_routes.push((tun_device.if_index().ok(), state.routes.clone()));
+                }
+            }
+            trace!("Got networks for shutdown");
+        }
+
+        let routes_handle = self.handle.clone();
+        let task = tokio::spawn(async move {
+            for (if_index, physical_routes) in all_physical_routes {
+                trace!("Remove physical routes: {}", physical_routes);
+                Self::remove_routes_net_route_inner(
+                    routes_handle.clone(),
+                    physical_routes,
+                    if_index,
+                )
+                .await;
+            }
+        });
+        futures::executor::block_on(task).unwrap();
     }
 }
