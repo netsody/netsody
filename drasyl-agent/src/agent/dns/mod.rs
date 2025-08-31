@@ -55,6 +55,6 @@ cfg_if! {
         // unsupported platform
         pub struct AgentDns {}
 
-        impl AgentDnsTrait for AgentDns {}
+        impl AgentDnsInterface for AgentDns {}
     }
 }
