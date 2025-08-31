@@ -1,5 +1,4 @@
 use crate::agent::Error;
-use crate::agent::dns::AgentDnsInterface;
 use crate::agent::inner::AgentInner;
 use crate::network::{LocalNodeState, Network, TunState};
 use cfg_if::cfg_if;
@@ -226,6 +225,8 @@ impl AgentInner {
 
             #[cfg(feature = "dns")]
             {
+                use crate::agent::dns::AgentDnsInterface;
+
                 trace!("Update DNS");
                 match current.as_ref().map(|state| state.hostnames.clone()) {
                     Some(current_hostnames) if current_hostnames == desired.hostnames => {}
@@ -277,6 +278,8 @@ impl AgentInner {
 
             #[cfg(feature = "dns")]
             {
+                use crate::agent::dns::AgentDnsInterface;
+
                 trace!("Update DNS");
                 self.dns.update_all_hostnames(networks).await;
             }
