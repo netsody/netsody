@@ -1,95 +1,57 @@
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-mod net_route;
-
 use crate::network::{EffectiveRoutingList, Network};
 use cfg_if::cfg_if;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::trace;
 use tun_rs::AsyncDevice;
 use url::Url;
 
-pub struct AgentRouting {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    pub(crate) net_route_handle: Arc<::net_route::Handle>,
-}
-
-impl AgentRouting {
-    pub(crate) fn new() -> Self {
-        Self {
-            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-            net_route_handle: Arc::new(
-                ::net_route::Handle::new().expect("Failed to create route handle"),
-            ),
-        }
-    }
-
-    pub(crate) async fn shutdown(
-        &self,
-        networks: Arc<Mutex<HashMap<Url, Network>>>,
-        tun_device: Arc<AsyncDevice>,
-    ) {
-        cfg_if! {
-            if #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))] {
-                trace!("Shutting down routing using net_route");
-                self.shutdown_net_route(networks, tun_device).await;
-            } else {
-                trace!("No supported platform detected for shutting down routes, skipping");
-            }
-        }
-    }
-
-    pub(crate) async fn update_routes(
+pub trait AgentRoutingInterface {
+    #[allow(unused_variables)]
+    async fn update_network(
         &self,
         current_routes: Option<EffectiveRoutingList>,
         desired_routes: Option<EffectiveRoutingList>,
         tun_device: Arc<AsyncDevice>,
     ) -> EffectiveRoutingList {
-        #[allow(unused_mut)]
-        let mut applied_routes = EffectiveRoutingList::default();
-        trace!(
-            "Routes change: current={:?}; desired={:?}",
-            current_routes, desired_routes
-        );
-
-        cfg_if! {
-            if #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))] {
-                trace!("Updating routes using net_route");
-                self.update_routes_net_route(
-                    current_routes,
-                    desired_routes,
-                    tun_device,
-                    &mut applied_routes,
-                )
-                .await;
-            } else {
-                trace!(
-                    "No supported platform detected for updating routes. Assuming we're running on a mobile platform where the network listener handles route updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
-                );
-                if let Some(desired_routes) = desired_routes.as_ref() {
-                    for (_, route) in desired_routes.iter() {
-                        applied_routes.add(route.as_applied_route());
-                    }
-                }
-            }
-        }
-
-        applied_routes
+        // do nothing
+        EffectiveRoutingList::default()
     }
 
-    pub(crate) async fn remove_routes(
+    #[allow(unused_variables)]
+    async fn remove_network(&self, routes: EffectiveRoutingList, tun_device: Arc<AsyncDevice>) {
+        // do nothing
+    }
+
+    #[allow(unused_variables)]
+    async fn shutdown(
         &self,
-        routes: EffectiveRoutingList,
+        networks: Arc<Mutex<HashMap<Url, Network>>>,
         tun_device: Arc<AsyncDevice>,
     ) {
-        cfg_if! {
-            if #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))] {
-                trace!("Removing routes using net_route");
-                self.remove_routes_net_route(routes, tun_device).await;
-            } else {
-                trace!("No supported platform detected for removing routes, skipping");
+        // do nothing
+    }
+}
+
+cfg_if! {
+    if #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))] {
+        mod net_route;
+        pub use net_route::AgentRouting;
+    }
+    else if #[cfg(any(target_os = "ios"))] {
+        mod network_listener;
+        pub use network_listener::AgentRouting;
+    }
+    else {
+        // unsupported platform
+        pub struct AgentRouting {}
+
+        impl AgentRouting {
+            pub(crate) fn new() -> Self {
+                Self {}
             }
         }
+
+        impl AgentRoutingInterface for AgentRouting {}
     }
 }
