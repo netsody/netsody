@@ -1,5 +1,6 @@
-use crate::agent::dns::AgentDns;
+use crate::agent::dns::AgentDnsInterface;
 use crate::network::Network;
+use arc_swap::ArcSwap;
 use etherparse::PacketBuilder;
 use hickory_proto::ProtoError;
 use hickory_proto::op::{Header, MessageType, ResponseCode};
@@ -11,13 +12,13 @@ use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageRespo
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use hickory_server::store::in_memory::InMemoryAuthority;
 use ipnet::Ipv4Net;
-use p2p::util::bytes_to_hex;
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::SeqCst;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
@@ -27,19 +28,76 @@ use tracing::{debug, error, instrument, trace};
 use tun_rs::AsyncDevice;
 use url::Url;
 
+const SCUTIL_DNS_KEY: &str = "/Network/Service/drasyl/DNS";
+
+pub struct AgentDns {
+    embedded_catalog: ArcSwap<Catalog>,
+    server_ip: AtomicU32,
+}
+
 impl AgentDns {
-    pub(crate) async fn update_network_hostnames_embedded(
-        &self,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
-        // we do not support updating hostnames for a single network
-        self.update_all_hostnames_embedded(networks).await;
+    pub(crate) fn new() -> Self {
+        Self {
+            embedded_catalog: ArcSwap::from_pointee(Catalog::new()),
+            server_ip: AtomicU32::default(),
+        }
     }
 
-    pub(crate) async fn update_all_hostnames_embedded(
-        &self,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
+    #[allow(unused)]
+    #[allow(clippy::unreadable_literal)]
+    fn build_catalog(networks: &mut MutexGuard<HashMap<Url, Network>>) -> Catalog {
+        trace!("Embedded DNS: Building DNS catalog");
+        let mut catalog = Catalog::new();
+
+        let origin: Name = Name::parse("drasyl.network.", None).unwrap();
+        let mut authority = InMemoryAuthority::empty(origin.clone(), ZoneType::External, false);
+
+        for network in networks.values() {
+            if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
+                for (ip, hostname) in hostnames {
+                    trace!("Adding DNS A record: {}.drasyl.network -> {}", hostname, ip);
+                    authority.upsert_mut(
+                        Record::from_rdata(
+                            Name::parse(format!("{hostname}.drasyl.network.").as_str(), None)
+                                .unwrap(),
+                            60,
+                            RData::A(A(ip)),
+                        )
+                        .set_dns_class(DNSClass::IN)
+                        .clone(),
+                        0,
+                    );
+                }
+            }
+        }
+        catalog.upsert(authority.origin().clone(), vec![Arc::new(authority)]);
+
+        catalog
+    }
+}
+
+impl AgentDnsInterface for AgentDns {
+    fn is_server_ip(&self, ip: Ipv4Addr) -> bool {
+        self.server_ip.load(SeqCst) == ip.to_bits()
+    }
+
+    async fn shutdown(&self) {
+        trace!("Embedded DNS: Shutting down DNS");
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(e) = scutil_remove().await {
+                error!("Failed to remove DNS configuration: {}", e);
+            }
+        }
+    }
+
+    async fn update_network_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
+        // we do not support updating hostnames for a single network
+        self.update_all_hostnames(networks).await;
+    }
+
+    async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
+        trace!("Embedded DNS: Update all hostnames");
         // update DNS entries
         self.embedded_catalog
             .store(Arc::new(Self::build_catalog(networks)));
@@ -74,7 +132,7 @@ impl AgentDns {
         }
     }
 
-    pub(crate) async fn on_packet_embedded(
+    async fn on_packet(
         &self,
         message_bytes: &[u8],
         src: Ipv4Addr,
@@ -83,12 +141,23 @@ impl AgentDns {
         dst_port: u16,
         dev: Arc<AsyncDevice>,
     ) -> bool {
+        trace!(
+            src=?src,
+            src_port=?src_port,
+            dst=?dst,
+            dst_port=?dst_port,
+            len=?message_bytes.len(),
+            "Received DNS packet from {}:{} ({} bytes)",
+            src,
+            src_port,
+            message_bytes.len()
+        );
+
+        trace!("Processing DNS packet using embedded DNS");
         let mut decoder = BinDecoder::new(message_bytes);
-        trace!("Created binary decoder for DNS message");
 
         let src: SocketAddr = (IpAddr::V4(src), src_port).into();
         let dst: SocketAddr = (IpAddr::V4(dst), dst_port).into();
-        trace!("Created source socket address: {}", src);
 
         // method to handle the request
         let catalog = self.embedded_catalog.load();
@@ -115,10 +184,8 @@ impl AgentDns {
             );
 
             let protocol = Protocol::Udp;
-            trace!("Using UDP protocol for DNS message");
 
             let request = Request::new(message, src, protocol);
-            trace!("Created DNS request object");
 
             debug!(
                 "request:{id} src:{proto}://{addr}#{port} type:{message_type} dnssec:{is_dnssec} {op} qflags:{qflags}",
@@ -157,7 +224,6 @@ impl AgentDns {
             dst: src,
             dev,
         };
-        trace!("Created response handler for source {}", src);
 
         match MessageRequest::read(&mut decoder) {
             Ok(message) => {
@@ -170,88 +236,6 @@ impl AgentDns {
         }
         trace!("DNS packet processing completed");
         true
-    }
-
-    pub(crate) async fn shutdown_embedded(&self) {
-        #[cfg(target_os = "macos")]
-        {
-            if let Err(e) = scutil_remove().await {
-                error!("Failed to remove DNS configuration: {}", e);
-            }
-        }
-    }
-
-    #[allow(unused)]
-    #[allow(clippy::unreadable_literal)]
-    pub fn build_catalog(networks: &mut MutexGuard<HashMap<Url, Network>>) -> Catalog {
-        trace!("Building DNS catalog");
-        let mut catalog = Catalog::new();
-
-        let origin: Name = Name::parse("drasyl.network.", None).unwrap();
-        let mut authority = InMemoryAuthority::empty(origin.clone(), ZoneType::External, false);
-
-        // // example.com.		3600	IN	SOA	sns.dns.icann.org. noc.dns.icann.org. 2015082403 7200 3600 1209600 3600
-        // authority.upsert_mut(
-        //     Record::from_rdata(
-        //         origin.clone(),
-        //         3600,
-        //         RData::SOA(SOA::new(
-        //             Name::parse("sns.dns.icann.org.", None).unwrap(),
-        //             Name::parse("noc.dns.icann.org.", None).unwrap(),
-        //             2025083003,
-        //             7200,
-        //             3600,
-        //             1209600,
-        //             3600,
-        //         )),
-        //     )
-        //         .set_dns_class(DNSClass::IN)
-        //         .clone(),
-        //     0,
-        // );
-        //
-        // authority.upsert_mut(
-        //     Record::from_rdata(
-        //         origin.clone(),
-        //         86400,
-        //         RData::NS(NS(Name::parse("a.iana-servers.net.", None).unwrap())),
-        //     )
-        //         .set_dns_class(DNSClass::IN)
-        //         .clone(),
-        //     0,
-        // );
-        // authority.upsert_mut(
-        //     Record::from_rdata(
-        //         origin.clone(),
-        //         86400,
-        //         RData::NS(NS(Name::parse("b.iana-servers.net.", None).unwrap())),
-        //     )
-        //         .set_dns_class(DNSClass::IN)
-        //         .clone(),
-        //     0,
-        // );
-
-        for network in networks.values() {
-            if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
-                for (ip, hostname) in hostnames {
-                    trace!("Adding DNS A record: {}.drasyl.network -> {}", hostname, ip);
-                    authority.upsert_mut(
-                        Record::from_rdata(
-                            Name::parse(format!("{hostname}.drasyl.network.").as_str(), None)
-                                .unwrap(),
-                            60,
-                            RData::A(A(ip)),
-                        )
-                        .set_dns_class(DNSClass::IN)
-                        .clone(),
-                        0,
-                    );
-                }
-            }
-        }
-        catalog.upsert(authority.origin().clone(), vec![Arc::new(authority)]);
-
-        catalog
     }
 }
 
@@ -327,11 +311,9 @@ impl ResponseHandler for ResponseHandle {
         );
 
         let mut buffer = Vec::with_capacity(512);
-        trace!("Created buffer with capacity 512 bytes");
 
         let encode_result = {
             let mut encoder = BinEncoder::new(&mut buffer);
-            trace!("Created binary encoder");
 
             // Set an appropriate maximum on the encoder.
             let max_size = self.max_size_for_response(&response);
@@ -341,7 +323,6 @@ impl ResponseHandler for ResponseHandle {
             );
             encoder.set_max_size(max_size);
 
-            trace!("Starting destructive emit of response");
             response.destructive_emit(&mut encoder)
         };
 
@@ -350,36 +331,28 @@ impl ResponseHandler for ResponseHandle {
             trace!("Falling back to SERVFAIL response due to encoding error");
             Self::encode_fallback_servfail_response(id, &mut buffer)
         })?;
-        trace!("Response encoding completed successfully");
 
         // Create a UDP packet with the DNS response
-        trace!("Extracting source IP address");
         let src_ip = match self.src.ip() {
             IpAddr::V4(ip) => ip,
             _ => {
-                trace!("Source IP is not IPv4, returning error");
                 return Err(Error::new(
                     ErrorKind::InvalidInput,
                     "src: Only IPv4 supported",
                 ));
             }
         };
-        trace!("Source IP extracted: {}", src_ip);
 
-        trace!("Extracting destination IP address");
         let dst_ip = match self.dst.ip() {
             IpAddr::V4(ip) => ip,
             _ => {
-                trace!("Destination IP is not IPv4, returning error");
                 return Err(Error::new(
                     ErrorKind::InvalidInput,
                     "dst: Only IPv4 supported",
                 ));
             }
         };
-        trace!("Destination IP extracted: {}", dst_ip);
 
-        trace!("Creating IPv4 packet builder with TTL 64");
         let builder = PacketBuilder::ipv4(
             src_ip.octets(), // Source IP (DNS server)
             dst_ip.octets(), // Destination IP
@@ -389,28 +362,13 @@ impl ResponseHandler for ResponseHandle {
             self.src.port(), // Source Port (DNS Server)
             self.dst.port(), // Destination Port
         );
-        trace!(
-            "Packet builder created for ports {} -> {}",
-            self.src.port(),
-            self.dst.port()
-        );
 
         // Serialize the packet
-        trace!("Calculating packet size and creating packet vector");
         let packet_size = builder.size(buffer.len());
-        trace!("Packet size calculated: {} bytes", packet_size);
         let mut packet = Vec::with_capacity(packet_size);
-        trace!("Starting packet serialization");
         builder
             .write(&mut packet, &buffer)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-        trace!(
-            "Packet serialization completed, packet size: {} bytes",
-            packet.len()
-        );
-
-        // Trace the whole packet payload as hex for debugging
-        trace!("Packet payload (hex): {}", bytes_to_hex(&packet));
 
         // Send the packet to the TUN device
         self.dev.send(&packet).await?;
@@ -428,7 +386,7 @@ impl ResponseHandler for ResponseHandle {
 /// # Returns
 /// * `Ok(())` on success
 /// * `Err(String)` with error message on failure
-pub async fn scutil_add(dns_ip: &Ipv4Addr, domains: &[&str]) -> Result<(), String> {
+async fn scutil_add(dns_ip: &Ipv4Addr, domains: &[&str]) -> Result<(), String> {
     trace!(
         "Adding DNS configuration with scutil: IP={}, domains={:?}",
         dns_ip, domains
@@ -457,7 +415,7 @@ pub async fn scutil_add(dns_ip: &Ipv4Addr, domains: &[&str]) -> Result<(), Strin
         domains.join(" ")
     ));
     script.push_str("d.add SupplementalMatchDomainsNoSearch 0\n");
-    script.push_str("set State:/Network/Service/drasyl/DNS\n");
+    script.push_str(&format!("set State:{}\n", SCUTIL_DNS_KEY));
     script.push_str("quit\n");
 
     writer
@@ -492,7 +450,7 @@ pub async fn scutil_add(dns_ip: &Ipv4Addr, domains: &[&str]) -> Result<(), Strin
 /// # Returns
 /// * `Ok(())` on success
 /// * `Err(String)` with error message on failure
-pub async fn scutil_remove() -> Result<(), String> {
+async fn scutil_remove() -> Result<(), String> {
     trace!("Removing DNS configuration with scutil");
 
     let mut child = Command::new("scutil")
@@ -509,7 +467,7 @@ pub async fn scutil_remove() -> Result<(), String> {
 
     let mut writer = BufWriter::new(&mut stdin);
 
-    let script = "remove State:/Network/Service/drasyl/DNS\nquit\n";
+    let script = format!("remove State:{}\nquit\n", SCUTIL_DNS_KEY);
 
     writer
         .write_all(script.as_bytes())

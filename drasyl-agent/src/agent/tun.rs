@@ -1,3 +1,4 @@
+use crate::agent::dns::AgentDnsInterface;
 use crate::agent::{AgentConfig, AgentInner, Error, is_drasyl_control_packet};
 use etherparse::ip_number::UDP;
 use etherparse::{Ipv4HeaderSlice, UdpHeaderSlice};

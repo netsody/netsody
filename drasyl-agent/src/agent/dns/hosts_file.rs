@@ -7,31 +7,33 @@ use tracing::{error, trace};
 use url::Url;
 use {std::fs, std::io::Write};
 
-impl AgentDns {
-    pub(crate) fn shutdown_hosts_file(&self) {
+pub struct AgentDns {}
+
+impl AgentDnsTrait for AgentDns {
+    async fn shutdown(&self) {
+        trace!("Hosts File DNS: Shutting down DNS");
         if let Err(e) = Self::cleanup_hosts_file() {
             error!("Failed to cleanup /etc/hosts: {}", e);
         }
     }
 
-    pub(crate) async fn update_network_hostnames_hosts_file(
+    async fn update_network_hostnames(
         &self,
+        current: Option<LocalNodeState>,
+        desired: LocalNodeState,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         // we do not support updating hostnames for a single network
-        self.update_all_hostnames_host_file(networks).await;
+        self.update_all_hostnames(networks).await;
     }
 
-    pub(crate) async fn update_all_hostnames_host_file(
-        &self,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
+    async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
+        trace!("Hosts File DNS: Update all hostnames");
         if let Err(e) = Self::update_hosts_file(networks).await {
             error!("failed to update /etc/hosts: {}", e);
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     async fn update_hosts_file(
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) -> Result<(), Error> {
