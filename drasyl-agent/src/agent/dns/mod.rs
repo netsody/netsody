@@ -55,6 +55,12 @@ cfg_if! {
         // unsupported platform
         pub struct AgentDns {}
 
+        impl AgentDns {
+            pub(crate) fn new() -> Self {
+                Self {}
+            }
+        }
+
         impl AgentDnsInterface for AgentDns {}
     }
 }
