@@ -15,6 +15,7 @@ use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSec
 use zeroize::Zeroize;
 
 pub(crate) const SHA256_BYTES: usize = 32;
+pub(crate) const SHA512_BYTES: usize = 64;
 pub(crate) const ED25519_SECRETKEYBYTES: usize = 64;
 pub(crate) const ED25519_PUBLICKEYBYTES: usize = 32;
 pub(crate) const ED25519_SEEDBYTES: usize = 32;
@@ -23,6 +24,7 @@ pub(crate) const CURVE25519_PUBLICKEYBYTES: usize = 32;
 pub(crate) const AEGIS_KEYBYTES: usize = 32;
 pub(crate) const AEGIS_NBYTES: usize = 32;
 pub(crate) const AEGIS_ABYTES: usize = 16;
+pub(crate) const BLAKE2B512_LENGTH: usize = 64;
 
 pub(crate) type Nonce = [u8; AEGIS_NBYTES];
 pub(crate) type AuthTag = [u8; AEGIS_ABYTES];
@@ -90,7 +92,7 @@ pub fn compute_kx_session_keys(
 
     // BLAKE2b-512 like libsodium (p.n || client_pk || server_pk)
     let hash = Params::new()
-        .hash_length(64)
+        .hash_length(BLAKE2B512_LENGTH)
         .to_state()
         .update(shared.as_bytes())
         .update(&client_pk)
@@ -128,7 +130,7 @@ pub fn convert_ed25519_sk_to_curve25519_sk(sk: &SigningSecKey) -> Result<Agreeme
         .map_err(|_| Error::DalekError)?;
 
     // 1) SHA-512(seed)
-    let mut h: [u8; 64] = Sha512::digest(&seed).into();
+    let mut h: [u8; SHA512_BYTES] = Sha512::digest(&seed).into();
 
     // 2) X25519 clamping
     h[0] &= 248;
@@ -205,8 +207,10 @@ mod tests {
         let hash = sha256(input).unwrap();
         assert_eq!(
             hash,
-            hex_to_bytes::<32>("dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f")
-                .unwrap()
+            hex_to_bytes::<SHA256_BYTES>(
+                "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
+            )
+            .unwrap()
         );
     }
 }
