@@ -1,3 +1,4 @@
+use crate::agent::dns::AgentDnsInterface;
 use crate::agent::Error;
 use crate::network::{LocalNodeState, Network};
 use std::collections::HashMap;
