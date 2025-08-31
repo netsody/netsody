@@ -5,8 +5,6 @@ use crate::network::{LocalNodeState, Network, TunState};
 use cfg_if::cfg_if;
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,5 +1,4 @@
 use crate::agent::Error;
-use crate::agent::dns::AgentDns;
 use crate::network::{LocalNodeState, Network};
 use std::collections::HashMap;
 use tokio::sync::MutexGuard;
@@ -9,7 +8,7 @@ use {std::fs, std::io::Write};
 
 pub struct AgentDns {}
 
-impl AgentDnsTrait for AgentDns {
+impl AgentDnsInterface for AgentDns {
     async fn shutdown(&self) {
         trace!("Hosts File DNS: Shutting down DNS");
         if let Err(e) = Self::cleanup_hosts_file() {
