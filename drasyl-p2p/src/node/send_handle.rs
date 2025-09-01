@@ -152,6 +152,11 @@ impl SendHandle {
     #[instrument(fields(peer = %recipient), skip_all)]
     pub fn new(inner: Arc<NodeInner>, recipient: PubKey) -> Result<Self, Error> {
         trace!("Create SendHandle");
+
+        // Check if trying to send to self
+        if recipient == inner.opts.id.pk {
+            return Err(Error::SendToSelf);
+        }
         let peers = inner.peers_list.peers.pin();
         let peer = if let Some(peer) = peers.get(&recipient) {
             peer
