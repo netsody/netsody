@@ -1,5 +1,9 @@
 name: P2P
 
+permissions:
+  contents: read
+  actions: write
+
 on:
   push:
     branches:
