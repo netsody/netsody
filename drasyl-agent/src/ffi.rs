@@ -158,8 +158,8 @@ pub extern "C" fn drasyl_agent_runtime_free(runtime: *mut RuntimePtr) {
 //
 #[repr(C)]
 pub struct NetworkInfo {
-    pub url: *const c_char, // URL as C-String
-    pub disabled: c_int,    // Disabled Status
+    pub url: *const c_char, // Owned C-String pointer (freed on drop)
+    pub disabled: c_int,    // Disabled status (0 = enabled, 1 = disabled)
 }
 
 impl Drop for NetworkInfo {
@@ -390,21 +390,20 @@ pub extern "C" fn drasyl_agent_config_networks(
             Err(_) => return ERR_IO,
         };
 
-        // Vector füllen
+        // Build vector of NetworkInfo structs
         let mut vec: Vec<NetworkInfo> = Vec::with_capacity(agent_config.networks.len());
-        let mut cstrings: Vec<std::ffi::CString> = Vec::new(); // Hält die Strings am Leben
 
         for (url, net) in &agent_config.networks {
             let url_str = url.as_str();
 
-            // CString erstellen
+            // Create CString
             let cs = match std::ffi::CString::new(url_str) {
                 Ok(s) => s,
-                Err(_) => continue, // Bei Fehler überspringen
+                Err(_) => continue, // Skip on error
             };
 
-            let url_ptr = cs.as_ptr();
-            cstrings.push(cs); // CString am Leben halten
+            // Transfer ownership to NetworkInfo
+            let url_ptr = cs.into_raw();
 
             let disabled_val = if net.disabled { 1 } else { 0 };
             vec.push(NetworkInfo {
@@ -413,23 +412,20 @@ pub extern "C" fn drasyl_agent_config_networks(
             });
         }
 
-        // Leerer Fall: NULL + 0 zurückgeben
+        // Empty case: return NULL + 0
         if vec.is_empty() {
             *networks = std::ptr::null_mut();
             *count = 0;
             return 0;
         }
 
-        // In zusammenhängenden Block konvertieren und übergeben
+        // Convert to contiguous block and return
         let boxed: Box<[NetworkInfo]> = vec.into_boxed_slice();
         let len = boxed.len();
         let ptr = Box::into_raw(boxed) as *mut NetworkInfo;
 
         *networks = ptr;
         *count = len as c_int;
-
-        // CStrings am Leben halten (verhindert Memory-Leak, aber Pointer bleiben gültig)
-        std::mem::forget(cstrings);
 
         0
     }
