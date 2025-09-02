@@ -2,7 +2,8 @@ use crate::crypto::{ED25519_PUBLICKEYBYTES, ED25519_SECRETKEYBYTES};
 use crate::identity::{Identity, PubKey};
 use crate::node;
 use crate::node::{
-    HELLO_TIMEOUT_DEFAULT, MessageSink, Node, NodeOpts, NodeOptsBuilder, NodeOptsBuilderError,
+    Error, HELLO_TIMEOUT_DEFAULT, MessageSink, Node, NodeOpts, NodeOptsBuilder,
+    NodeOptsBuilderError,
 };
 use crate::peer;
 use crate::peer::PeersList;
@@ -74,6 +75,7 @@ impl From<node::Error> for c_int {
             node::Error::RecipientIsSuperPeer { .. } => -134,
             node::Error::SuperPeerNetworkIdMismatch(_, _) => -135,
             node::Error::NoUdpBindings => -136,
+            Error::SendToSelf => -137,
         }
     }
 }

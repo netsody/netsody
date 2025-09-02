@@ -177,4 +177,7 @@ pub enum Error {
 
     #[error("Cannot create send handle for super peer {0}")]
     RecipientIsSuperPeer(PubKey),
+
+    #[error("Cannot send message to yourself")]
+    SendToSelf,
 }
