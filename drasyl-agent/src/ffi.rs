@@ -65,6 +65,12 @@ pub extern "C" fn drasyl_agent_init_logging() -> c_int {
         .with_max_level(Level::TRACE) // or Level::DEBUG, etc.
         .finish();
 
+    #[cfg(target_os = "android")]
+    let subscriber = {
+        use tracing_subscriber::layer::SubscriberExt;
+        subscriber.with(tracing_android::layer(env!("CARGO_PKG_NAME")).unwrap())
+    };
+
     match tracing::subscriber::set_global_default(subscriber) {
         Ok(_) => 0,
         Err(_) => ERR_IO,

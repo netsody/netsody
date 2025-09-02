@@ -1,0 +1,47 @@
+name: Agent Android
+
+permissions:
+  contents: read
+  actions: write
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build drasyl-agent for Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27d
+
+      - name: Setup Rust targets and tools
+        run: |
+          rustup target add aarch64-linux-android
+          rustup target add armv7-linux-androideabi
+          rustup target add i686-linux-android
+          rustup target add x86_64-linux-android
+          cargo install cargo-ndk
+
+      - name: Build Android libraries
+        run: |
+          ./drasyl-agent/build-android.sh --release
+            
+      - name: Upload drasyl-agent Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: drasyl-android
+          path: target/drasyl-agent-android/

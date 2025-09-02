@@ -58,13 +58,19 @@ hickory-proto = "0.25.2"
 hickory-server = "0.25.2"
 async-trait = "0.1.88"
 
+[target."cfg(target_os = \"android\")".dependencies]
+tracing-android = "0.2.0"
+hickory-proto = "0.25.2"
+hickory-server = "0.25.2"
+async-trait = "0.1.88"
+
 [features]
 ffi = []
 dns = []
 prometheus = ["p2p/prometheus"]
 
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [[bin]]
 name = "drasyl"
