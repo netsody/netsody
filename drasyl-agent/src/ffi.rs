@@ -444,7 +444,6 @@ pub extern "C" fn drasyl_agent_config_networks_free(networks: *mut NetworkInfo, 
     }
 
     unsafe {
-        trace!("Freeing NetworkInfo vector");
         let networks_vec = Box::from_raw(std::slice::from_raw_parts_mut(networks, count as usize));
         drop(networks_vec);
     }
@@ -686,7 +685,6 @@ pub extern "C" fn drasyl_agent_shutdown(runtime: &mut RuntimePtr, agent: &mut Ag
 pub extern "C" fn drasyl_agent_free(agent: *mut AgentPtr) {
     if !agent.is_null() {
         unsafe {
-            trace!("Freeing AgentPtr");
             let agent_ptr = Box::from_raw(agent);
             drop(agent_ptr);
         }
@@ -717,7 +715,6 @@ pub extern "C" fn drasyl_agent_tun_device_create(
 pub extern "C" fn drasyl_agent_tun_device_free(tun_device: *mut TunDevicePtr) {
     if !tun_device.is_null() {
         unsafe {
-            trace!("Freeing TunDevicePtr");
             let tun_device_ptr = Box::from_raw(tun_device);
             drop(tun_device_ptr);
         }
