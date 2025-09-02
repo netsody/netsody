@@ -74,6 +74,7 @@ impl AgentInner {
         config_url: Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
+        let mut save_config = false;
         if let Some(network) = networks.get_mut(&config_url) {
             match timeout(
                 Duration::from_millis(CONFIG_FETCH_TIMEOUT),
@@ -85,11 +86,17 @@ impl AgentInner {
                     trace!("Network config fetched successfully");
 
                     // Update network name from config
-                    if network.name != config.name {
+                    if let (Some(new_name), Some(old_name)) = (
+                        config.name.as_ref().filter(|s| !s.trim().is_empty()),
+                        network.name.as_ref(),
+                    ) && new_name != old_name
+                    {
                         trace!(
                             "Network name changed from '{:?}' to '{:?}'",
                             network.name, config.name
                         );
+
+                        save_config = true;
                     }
                     network.name = config.name.clone();
 
@@ -176,6 +183,13 @@ impl AgentInner {
                     );
                 }
             }
+        }
+
+        if save_config {
+            // persist configuration
+            self.save_config(networks)
+                .await
+                .expect("Failed to save config");
         }
     }
 

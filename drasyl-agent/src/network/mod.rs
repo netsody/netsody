@@ -31,7 +31,7 @@ pub struct Network {
     pub(crate) config_url: String,
     #[serde(default)]
     pub(crate) disabled: bool,
-    #[serde(skip_deserializing, skip_serializing, default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub(crate) state: Option<LocalNodeState>,
