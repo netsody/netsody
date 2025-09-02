@@ -433,6 +433,38 @@ pub extern "C" fn drasyl_agent_config_networks(
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
+pub extern "C" fn drasyl_agent_network_url(
+    networks: *const NetworkInfo,
+    index: c_int,
+) -> *const c_char {
+    if networks.is_null() || index < 0 {
+        return std::ptr::null();
+    }
+
+    unsafe {
+        let network_info = networks.offset(index as isize);
+        (*network_info).url
+    }
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn drasyl_agent_network_disabled(
+    networks: *const NetworkInfo,
+    index: c_int,
+) -> c_int {
+    if networks.is_null() || index < 0 {
+        return -1; // Error indicator for null pointer or invalid index
+    }
+
+    unsafe {
+        let network_info = networks.offset(index as isize);
+        (*network_info).disabled
+    }
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
 pub extern "C" fn drasyl_agent_config_networks_free(networks: *mut NetworkInfo, count: c_int) {
     if networks.is_null() || count <= 0 {
         return;
