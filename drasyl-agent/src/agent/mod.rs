@@ -18,9 +18,7 @@ pub use inner::*;
 use p2p::identity::PubKey;
 use p2p::node::{MessageSink, Node, SendHandle};
 use p2p::util;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::MutexGuard;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{error, info, trace, warn};
@@ -161,7 +159,7 @@ impl Agent {
         networks.insert(url, network);
 
         // persist configuration
-        self.save_config(&networks).await?;
+        self.inner.save_config(&networks).await?;
 
         info!("Network '{}' added successfully", config_url);
         Ok(())
@@ -190,7 +188,7 @@ impl Agent {
         let _ = networks.remove(&url);
 
         // persist configuration
-        self.save_config(&networks).await?;
+        self.inner.save_config(&networks).await?;
 
         info!("Network '{}' removed successfully", config_url);
         Ok(())
@@ -218,7 +216,7 @@ impl Agent {
         }
 
         // persist configuration
-        self.save_config(&networks).await?;
+        self.inner.save_config(&networks).await?;
 
         info!("Network '{}' disabled successfully", config_url);
         Ok(())
@@ -246,27 +244,10 @@ impl Agent {
         }
 
         // persist configuration
-        self.save_config(&networks).await?;
+        self.inner.save_config(&networks).await?;
 
         info!("Network '{}' enabled successfully", config_url);
         Ok(())
-    }
-
-    /// saves the current configuration to file
-    async fn save_config(
-        &self,
-        networks: &MutexGuard<'_, HashMap<Url, Network>>,
-    ) -> Result<(), Error> {
-        trace!("Saving configuration");
-
-        // load current configuration
-        let mut config = AgentConfig::load(&self.inner.config_path)?;
-
-        // update networks from inner state
-        config.networks = (*networks).clone();
-
-        // save configuration
-        config.save(&self.inner.config_path)
     }
 }
 

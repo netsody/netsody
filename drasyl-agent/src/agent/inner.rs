@@ -17,13 +17,14 @@ use p2p::identity::{Identity, PubKey};
 use p2p::message::LONG_HEADER_MAGIC_NUMBER;
 use p2p::node::{Node, SendHandle};
 
+use crate::agent::AgentConfig;
 pub(crate) use crate::agent::network_listener::{NetworkChange, NetworkListener};
 use crate::agent::routing::{AgentRouting, AgentRoutingInterface};
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use tun_rs::AsyncDevice as TunDevice;
@@ -227,6 +228,23 @@ impl AgentInner {
             trace!("Shutdown DNS");
             self.dns.shutdown().await;
         }
+    }
+
+    /// saves the current configuration to file
+    pub(crate) async fn save_config(
+        &self,
+        networks: &MutexGuard<'_, HashMap<Url, Network>>,
+    ) -> Result<(), Error> {
+        trace!("Saving configuration");
+
+        // load current configuration
+        let mut config = AgentConfig::load(&self.config_path)?;
+
+        // update networks from inner state
+        config.networks = (*networks).clone();
+
+        // save configuration
+        config.save(&self.config_path)
     }
 }
 
