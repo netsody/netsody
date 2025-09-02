@@ -4,8 +4,12 @@ use tracing::debug;
 
 pub fn create_display(
     event_loop: &winit::event_loop::ActiveEventLoop,
+    title: &str,
+    width: f64,
+    height: f64,
 ) -> (GlutinWindowContext, glow::Context) {
-    let glutin_window_context = unsafe { GlutinWindowContext::new(event_loop) };
+    let glutin_window_context =
+        unsafe { GlutinWindowContext::new(event_loop, title, width, height) };
     let gl = unsafe {
         glow::Context::from_loader_function(|s| {
             let s = std::ffi::CString::new(s)
@@ -30,7 +34,12 @@ impl GlutinWindowContext {
     // refactor this function to use `glutin-winit` crate eventually.
     // preferably add android support at the same time.
     #[expect(unsafe_code)]
-    unsafe fn new(event_loop: &winit::event_loop::ActiveEventLoop) -> Self {
+    unsafe fn new(
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        title: &str,
+        width: f64,
+        height: f64,
+    ) -> Self {
         use glutin::context::NotCurrentGlContext as _;
         use glutin::display::GetGlDisplay as _;
         use glutin::display::GlDisplay as _;
@@ -39,11 +48,8 @@ impl GlutinWindowContext {
         use winit::raw_window_handle::HasWindowHandle;
         let winit_window_builder = winit::window::WindowAttributes::default()
             .with_resizable(true)
-            .with_inner_size(winit::dpi::LogicalSize {
-                width: 500.0,
-                height: 100.0,
-            })
-            .with_title("Add Network") // Keep hidden until we've painted something. See https://github.com/emilk/egui/pull/2279
+            .with_inner_size(winit::dpi::LogicalSize { width, height })
+            .with_title(title) // Keep hidden until we've painted something. See https://github.com/emilk/egui/pull/2279
             .with_visible(false);
 
         let config_template_builder = glutin::config::ConfigTemplateBuilder::new()

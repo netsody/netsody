@@ -32,6 +32,8 @@ pub struct App {
     config_url: String,
     repaint_delay: std::time::Duration,
     token_path: String,
+    // confirmation dialog state
+    network_to_remove: Option<String>,
 }
 
 impl App {
@@ -56,6 +58,7 @@ impl App {
             config_url: String::new(),
             repaint_delay: std::time::Duration::MAX,
             token_path,
+            network_to_remove: None,
         }
     }
 
@@ -270,7 +273,7 @@ impl App {
                 // remove action
                 let item = MenuItem::with_id(
                     format!("remove_network {config_url_str}"),
-                    "Remove",
+                    "Remove…",
                     true,
                     None,
                 );
@@ -529,6 +532,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CloseRequested => {
                 trace!("Window close requested");
                 self.config_url.clear();
+                self.network_to_remove = None;
                 self.gl_window.take();
                 self.gl.take();
                 self.egui_glow.take();
@@ -540,71 +544,155 @@ impl ApplicationHandler<UserEvent> for App {
                     self.gl_window.as_mut().unwrap().window(),
                     |egui_ctx| {
                         egui::CentralPanel::default().show(egui_ctx, |ui| {
-                            // Helper function to add network
-                            let add_network = |url: String| {
-                                if Url::parse(url.trim()).is_ok() {
-                                    // send event for processing
-                                    self.proxy
-                                        .send_event(UserEvent::AddNetwork(url))
-                                        .expect("Failed to send event");
-                                    true // return true to indicate success
+                            if let Some(network_url) = &self.network_to_remove {
+                                // Confirmation dialog for removing network
+                                // Get network name/URL for display
+                                let display_text = if let Some(Ok(status)) =
+                                    self.status.lock().expect("Mutex poisoned").as_ref()
+                                {
+                                    if let Ok(url) = Url::parse(network_url) {
+                                        if let Some(network) = status.networks.get(&url) {
+                                            match network.name.as_ref() {
+                                                Some(name) => Self::sanitize_menu_text(name),
+                                                None => mask_url(&url),
+                                            }
+                                        } else {
+                                            network_url.clone()
+                                        }
+                                    } else {
+                                        network_url.clone()
+                                    }
                                 } else {
-                                    false
-                                }
-                            };
+                                    network_url.clone()
+                                };
 
-                            // URL input field
-                            ui.label("Network configuration URL (https:// or file://):");
-                            let response = ui.add_sized(
-                                [ui.available_width() * 1.0, 0.0],
-                                egui::TextEdit::singleline(&mut self.config_url)
-                                    .hint_text("https://example.com/network-config.toml"),
-                            );
-                            // automatically set focus on the text field
-                            response.request_focus();
+                                ui.vertical_centered(|ui| {
+                                    ui.label(format!(
+                                        "Are you sure you want to remove the network »{}«?",
+                                        display_text
+                                    ));
+                                });
+                                ui.add_space(10.0);
 
-                            // Check for Enter key press
-                            let input = ui.input(|i| i.clone());
-                            if input.key_pressed(egui::Key::Enter) {
-                                let url = self.config_url.clone();
-                                if add_network(url) {
+                                // Check for Escape key press
+                                let input = ui.input(|i| i.clone());
+                                if input.key_pressed(egui::Key::Escape) {
+                                    trace!("Cancel remove action triggered");
                                     cancel = true;
                                 }
-                            }
 
-                            // Check for Escape key press
-                            if input.key_pressed(egui::Key::Escape) {
-                                trace!("Cancel action triggered");
-                                cancel = true;
-                            }
+                                // buttons - centered
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            // Add flexible space to center the buttons
+                                            ui.allocate_space(egui::Vec2::new(
+                                                ui.available_width() * 0.5 - 60.0,
+                                                0.0,
+                                            ));
 
-                            ui.add_space(5.0);
+                                            if ui.button("Remove").clicked() {
+                                                let url = network_url.clone();
+                                                trace!(
+                                                    "Confirmed removing network with URL: {}",
+                                                    url
+                                                );
 
-                            // buttons
-                            ui.horizontal(|ui| {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui.button("Add").clicked() {
-                                            let url = self.config_url.clone();
-                                            if add_network(url) {
+                                                self.rt.block_on(async {
+                                                    let client =
+                                                        RestApiClient::new(self.token_path.clone());
+                                                    match client.remove_network(&url).await {
+                                                        Ok(_) => {
+                                                            trace!("Removed network: {url}");
+                                                        }
+                                                        Err(e) => {
+                                                            trace!(
+                                                                "Failed to remove network: {}",
+                                                                e
+                                                            );
+                                                        }
+                                                    }
+                                                });
                                                 cancel = true;
                                             }
-                                        }
 
-                                        if ui.button("Cancel").clicked() {
-                                            trace!("Cancel action triggered");
-                                            cancel = true;
-                                        }
-                                    },
+                                            if ui.button("Cancel").clicked() {
+                                                trace!("Cancel remove action triggered");
+                                                cancel = true;
+                                            }
+                                        },
+                                    );
+                                });
+                            } else {
+                                // Add network dialog
+                                // Helper function to add network
+                                let add_network = |url: String| {
+                                    if Url::parse(url.trim()).is_ok() {
+                                        // send event for processing
+                                        self.proxy
+                                            .send_event(UserEvent::AddNetwork(url))
+                                            .expect("Failed to send event");
+                                        true // return true to indicate success
+                                    } else {
+                                        false
+                                    }
+                                };
+
+                                // URL input field
+                                ui.label("Network configuration URL (https:// or file://):");
+                                let response = ui.add_sized(
+                                    [ui.available_width() * 1.0, 0.0],
+                                    egui::TextEdit::singleline(&mut self.config_url)
+                                        .hint_text("https://example.com/network-config.toml"),
                                 );
-                            });
+                                // automatically set focus on the text field
+                                response.request_focus();
+
+                                // Check for Enter key press
+                                let input = ui.input(|i| i.clone());
+                                if input.key_pressed(egui::Key::Enter) {
+                                    let url = self.config_url.clone();
+                                    if add_network(url) {
+                                        cancel = true;
+                                    }
+                                }
+
+                                // Check for Escape key press
+                                if input.key_pressed(egui::Key::Escape) {
+                                    trace!("Cancel action triggered");
+                                    cancel = true;
+                                }
+
+                                ui.add_space(10.0);
+
+                                // buttons
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.button("Add").clicked() {
+                                                let url = self.config_url.clone();
+                                                if add_network(url) {
+                                                    cancel = true;
+                                                }
+                                            }
+
+                                            if ui.button("Cancel").clicked() {
+                                                trace!("Cancel action triggered");
+                                                cancel = true;
+                                            }
+                                        },
+                                    );
+                                });
+                            }
                         });
                     },
                 );
 
                 if cancel {
                     self.config_url.clear();
+                    self.network_to_remove = None;
                     self.gl_window.take();
                     self.gl.take();
                     self.egui_glow.take();
@@ -713,11 +801,23 @@ impl ApplicationHandler<UserEvent> for App {
                     id if id == MenuId::new("add_network") => {
                         trace!("Add network item clicked");
 
+                        // Close all existing windows/dialogs first
+                        self.config_url.clear();
+                        self.network_to_remove = None;
+                        self.gl_window.take();
+                        self.gl.take();
+                        self.egui_glow.take();
+
                         // create window if it doesn't exist yet
                         if let Some(gl_window) = self.gl_window.as_mut() {
                             gl_window.window().focus_window();
                         } else {
-                            let (gl_window, gl) = crate::glow_tools::create_display(event_loop);
+                            let (gl_window, gl) = crate::glow_tools::create_display(
+                                event_loop,
+                                "Add Network",
+                                500.0,
+                                100.0,
+                            );
                             let gl = Arc::new(gl);
                             gl_window.window().set_visible(true);
                             gl_window.window().focus_window();
@@ -750,19 +850,48 @@ impl ApplicationHandler<UserEvent> for App {
                     id if id.0.starts_with("remove_network ") => {
                         let url = id.0.split_once(' ').unwrap().1;
 
-                        trace!("Removing network with URL: {}", url);
+                        trace!("Remove network confirmation dialog for URL: {}", url);
 
-                        self.rt.block_on(async {
-                            let client = RestApiClient::new(self.token_path.clone());
-                            match client.remove_network(url).await {
-                                Ok(_) => {
-                                    trace!("Removed network: {url}");
-                                }
-                                Err(e) => {
-                                    trace!("Failed to remove network: {}", e);
-                                }
-                            }
-                        });
+                        // Close all existing windows/dialogs first
+                        self.config_url.clear();
+                        self.network_to_remove = None;
+                        self.gl_window.take();
+                        self.gl.take();
+                        self.egui_glow.take();
+
+                        // Store the network URL to be removed and show confirmation dialog
+                        self.network_to_remove = Some(url.to_string());
+
+                        // Create window if it doesn't exist yet
+                        if let Some(gl_window) = self.gl_window.as_mut() {
+                            gl_window.window().focus_window();
+                        } else {
+                            let (gl_window, gl) = crate::glow_tools::create_display(
+                                event_loop,
+                                "Remove Network",
+                                400.0,
+                                80.0,
+                            );
+                            let gl = Arc::new(gl);
+                            gl_window.window().set_visible(true);
+                            gl_window.window().focus_window();
+
+                            let egui_glow =
+                                egui_glow::EguiGlow::new(event_loop, gl.clone(), None, None, true);
+
+                            let event_loop_proxy = egui::mutex::Mutex::new(self.proxy.clone());
+                            egui_glow
+                                .egui_ctx
+                                .set_request_repaint_callback(move |info| {
+                                    event_loop_proxy
+                                        .lock()
+                                        .send_event(UserEvent::Redraw(info.delay))
+                                        .expect("Cannot send event");
+                                });
+                            self.gl_window = Some(gl_window);
+                            self.gl = Some(gl);
+                            self.egui_glow = Some(egui_glow);
+                        }
                     }
                     id if id.0.starts_with("network_enabled ") => {
                         let url = id.0.split_once(' ').unwrap().1;
