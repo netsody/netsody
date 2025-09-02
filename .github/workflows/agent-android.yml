@@ -35,8 +35,6 @@ jobs:
       - name: Build Android libraries
         run: |
           ./drasyl-agent/build-android.sh --release
-        env:
-            ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
             
       - name: Upload drasyl-agent Android artifact
         uses: actions/upload-artifact@v4
