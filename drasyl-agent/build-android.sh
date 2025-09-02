@@ -117,8 +117,8 @@ for ndk_target in "${TARGETS[@]}"; do
         lib_dir="${OUTPUT_DIR}/${ndk_target}"
         mkdir -p "${lib_dir}"
         
-        src_lib="${TARGET_DIR}/${rust_target}/${BUILD_TYPE}/libdrasyl_agent.a"
-        dst_lib="${lib_dir}/libdrasyl_agent.a"
+        src_lib="${TARGET_DIR}/${rust_target}/${BUILD_TYPE}/libdrasyl_agent.so"
+        dst_lib="${lib_dir}/libdrasyl_agent.so"
         
         if [[ -f "$src_lib" ]]; then
             cp "$src_lib" "$dst_lib"
@@ -135,7 +135,7 @@ echo "🎯 Built targets:"
 for ndk_target in "${TARGETS[@]}"; do
     rust_target=$(get_rust_target "$ndk_target")
     if [[ -n "$rust_target" ]]; then
-        lib_path="${TARGET_DIR}/${rust_target}/${BUILD_TYPE}/libdrasyl_agent.a"
+        lib_path="${TARGET_DIR}/${rust_target}/${BUILD_TYPE}/libdrasyl_agent.so"
         if [[ -f "$lib_path" ]]; then
             echo "  ✅ ${ndk_target} (${rust_target}): ${lib_path}"
         else
