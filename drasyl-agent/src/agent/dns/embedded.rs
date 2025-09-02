@@ -77,6 +77,10 @@ impl AgentDns {
 }
 
 impl AgentDnsInterface for AgentDns {
+    fn server_ip(&self) -> Option<Ipv4Addr> {
+        Some(Ipv4Addr::from(self.server_ip.load(SeqCst)))
+    }
+
     fn is_server_ip(&self, ip: Ipv4Addr) -> bool {
         self.server_ip.load(SeqCst) == ip.to_bits()
     }

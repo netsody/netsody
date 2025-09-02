@@ -131,14 +131,22 @@ impl Drop for RuntimePtr {
     }
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn drasyl_agent_runtime() -> *mut RuntimePtr {
-    match Runtime::new() {
-        Ok(runtime) => {
-            let runtime_ptr = RuntimePtr::from(runtime);
-            Box::into_raw(Box::new(runtime_ptr))
+pub extern "C" fn drasyl_agent_runtime(runtime: *mut *mut RuntimePtr) -> c_int {
+    if runtime.is_null() {
+        return ERR_IO;
+    }
+
+    unsafe {
+        match Runtime::new() {
+            Ok(rt) => {
+                let runtime_ptr = RuntimePtr::from(rt);
+                *runtime = Box::into_raw(Box::new(runtime_ptr));
+                0
+            }
+            Err(_) => ERR_IO,
         }
-        Err(_) => std::ptr::null_mut(),
     }
 }
 
@@ -202,9 +210,9 @@ impl Drop for AgentConfigPtr {
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_agent_config_load_or_generate(
     path: *const c_char,
-    run: *mut *mut AgentConfigPtr,
+    config: *mut *mut AgentConfigPtr,
 ) -> c_int {
-    if path.is_null() || run.is_null() {
+    if path.is_null() || config.is_null() {
         return ERR_IO;
     }
 
@@ -216,7 +224,7 @@ pub extern "C" fn drasyl_agent_config_load_or_generate(
 
         match AgentConfig::load_or_generate(path_str) {
             Ok(my_config) => {
-                *run = Box::into_raw(Box::new(my_config.into()));
+                *config = Box::into_raw(Box::new(my_config.into()));
                 0
             }
             Err(e) => {
@@ -397,7 +405,7 @@ pub extern "C" fn drasyl_agent_config_networks(
             let url_str = url.as_str();
 
             // Create CString
-            let cs = match std::ffi::CString::new(url_str) {
+            let cs = match CString::new(url_str) {
                 Ok(s) => s,
                 Err(_) => continue, // Skip on error
             };
@@ -608,8 +616,9 @@ impl Drop for AgentPtr {
 
 #[repr(C)]
 pub struct NetworkChange {
-    pub ips: *const c_char,    // Comma-separated IPs, NULL if not available
-    pub routes: *const c_char, // Comma-separated routes, NULL if not available
+    pub ips: *const c_char,        // Comma-separated IPs, NULL if not available
+    pub routes: *const c_char,     // Comma-separated routes, NULL if not available
+    pub dns_server: *const c_char, // DNS server, NULL if not available
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -619,9 +628,9 @@ pub extern "C" fn drasyl_agent_start(
     config: &mut AgentConfigPtr,
     tun_device: &mut TunDevicePtr,
     networks_change_callback: Option<extern "C" fn(change: *const NetworkChange)>,
-    run: *mut *mut AgentPtr,
+    agent: *mut *mut AgentPtr,
 ) -> c_int {
-    if run.is_null() {
+    if agent.is_null() {
         return ERR_IO;
     }
 
@@ -648,7 +657,7 @@ pub extern "C" fn drasyl_agent_start(
                             .collect::<Vec<String>>()
                             .join(",");
 
-                        std::ffi::CString::new(ips_string).unwrap_or_default()
+                        CString::new(ips_string).unwrap_or_default()
                     })
                     .unwrap_or_default();
 
@@ -662,13 +671,21 @@ pub extern "C" fn drasyl_agent_start(
                             .collect::<Vec<String>>()
                             .join(",");
 
-                        std::ffi::CString::new(routes_string).unwrap_or_default()
+                        CString::new(routes_string).unwrap_or_default()
                     })
                     .unwrap_or_default();
+
+                // Convert DNS server to string
+                let dns_server_str = if let Some(dns_server) = change.dns_server {
+                    CString::new(dns_server.to_string()).unwrap_or_default()
+                } else {
+                    CString::default()
+                };
 
                 let c_change = NetworkChange {
                     ips: ips_str.as_ptr(),
                     routes: routes_str.as_ptr(),
+                    dns_server: dns_server_str.as_ptr(),
                 };
 
                 trace!(
@@ -689,8 +706,8 @@ pub extern "C" fn drasyl_agent_start(
             Some(tun_device.clone()),
             network_listener,
         )) {
-            Ok(agent) => {
-                *run = Box::into_raw(Box::new(agent.into()));
+            Ok(my_agent) => {
+                *agent = Box::into_raw(Box::new(my_agent.into()));
                 0
             }
             Err(e) => e.into(),
@@ -718,21 +735,30 @@ pub extern "C" fn drasyl_agent_free(agent: *mut AgentPtr) {
     }
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn drasyl_agent_tun_device_create(
     runtime: &mut RuntimePtr,
     fd: c_int,
-) -> *mut TunDevicePtr {
-    let runtime: &Runtime = runtime.into();
+    tun_device: *mut *mut TunDevicePtr,
+) -> c_int {
+    if tun_device.is_null() {
+        return ERR_IO;
+    }
 
-    match runtime.block_on(async { unsafe { TunDevice::from_fd(fd) } }) {
-        Ok(tun_device) => {
-            let tun_device_ptr = TunDevicePtr::from(Arc::new(tun_device));
-            Box::into_raw(Box::new(tun_device_ptr))
-        }
-        Err(_) => {
-            trace!("Failed to create TUN device from file descriptor {}", fd);
-            std::ptr::null_mut()
+    unsafe {
+        let runtime: &Runtime = runtime.into();
+
+        match runtime.block_on(async { unsafe { TunDevice::from_fd(fd) } }) {
+            Ok(device) => {
+                let tun_device_ptr = TunDevicePtr::from(Arc::new(device));
+                *tun_device = Box::into_raw(Box::new(tun_device_ptr));
+                0
+            }
+            Err(_) => {
+                trace!("Failed to create TUN device from file descriptor {}", fd);
+                ERR_IO
+            }
         }
     }
 }

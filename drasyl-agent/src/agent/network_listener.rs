@@ -1,7 +1,9 @@
 use crate::agent::AgentInner;
+use crate::agent::dns::AgentDnsInterface;
 use crate::network::Network;
 use ipnet::Ipv4Net;
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::MutexGuard;
 use tracing::trace;
@@ -54,6 +56,8 @@ impl AgentInner {
             let networks_change = NetworkChange {
                 routes: Some(all_routes),
                 ips: Some(all_ips),
+                #[cfg(feature = "dns")]
+                dns_server: self.dns.server_ip(),
             };
 
             let mut last_change_guard = inner.last_network_change.lock().await;
@@ -78,6 +82,8 @@ impl AgentInner {
 pub struct NetworkChange {
     pub ips: Option<Vec<Ipv4Net>>,
     pub routes: Option<Vec<Ipv4Net>>,
+    #[cfg(feature = "dns")]
+    pub dns_server: Option<Ipv4Addr>,
 }
 
 /// Callback function type for network change notifications
