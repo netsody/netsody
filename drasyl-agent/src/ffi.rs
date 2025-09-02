@@ -147,7 +147,6 @@ pub extern "C" fn drasyl_agent_runtime() -> *mut RuntimePtr {
 pub extern "C" fn drasyl_agent_runtime_free(runtime: *mut RuntimePtr) {
     if !runtime.is_null() {
         unsafe {
-            trace!("Freeing RuntimePtr");
             let runtime_ptr = Box::from_raw(runtime);
             drop(runtime_ptr);
         }
