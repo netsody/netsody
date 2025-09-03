@@ -624,6 +624,41 @@ pub struct NetworkChange {
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
+pub extern "C" fn drasyl_agent_network_change_ips(change: *const NetworkChange) -> *const c_char {
+    if change.is_null() {
+        return std::ptr::null();
+    }
+
+    unsafe { (*change).ips }
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn drasyl_agent_network_change_routes(
+    change: *const NetworkChange,
+) -> *const c_char {
+    if change.is_null() {
+        return std::ptr::null();
+    }
+
+    unsafe { (*change).routes }
+}
+
+#[cfg(feature = "dns")]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn drasyl_agent_network_change_dns_server(
+    change: *const NetworkChange,
+) -> *const c_char {
+    if change.is_null() {
+        return std::ptr::null();
+    }
+
+    unsafe { (*change).dns_server }
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
 pub extern "C" fn drasyl_agent_start(
     runtime: &mut RuntimePtr,
     config: &mut AgentConfigPtr,
