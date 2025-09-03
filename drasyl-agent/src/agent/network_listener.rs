@@ -83,7 +83,7 @@ pub struct NetworkChange {
     pub ips: Option<Vec<Ipv4Net>>,
     pub routes: Option<Vec<Ipv4Net>>,
     #[cfg(feature = "dns")]
-    pub dns_server: Option<Ipv4Addr>,
+    pub dns_server: Option<std::net::Ipv4Addr>,
 }
 
 /// Callback function type for network change notifications
