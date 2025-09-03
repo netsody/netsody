@@ -3,14 +3,33 @@ set -e
 
 # Parse command line arguments
 BUILD_TYPE="debug"
-if [[ "$1" == "--release" ]]; then
-    BUILD_TYPE="release"
-fi
+BUILD_TVOS=false
+
+for arg in "$@"; do
+    case $arg in
+        --release)
+            BUILD_TYPE="release"
+            ;;
+        --tvos)
+            BUILD_TVOS=true
+            ;;
+    esac
+done
 
 # Configuration
-TARGET_DEVICE="aarch64-apple-ios"
-TARGET_SIMULATOR="aarch64-apple-ios-sim"
-IPHONEOS_DEPLOYMENT_TARGET="13.0"
+if [[ "${BUILD_TVOS}" == true ]]; then
+    TARGET_DEVICE="aarch64-apple-tvos"
+    TARGET_SIMULATOR="aarch64-apple-tvos-sim"
+    DEPLOYMENT_TARGET="13.0"
+    DEPLOYMENT_VAR="TVOS_DEPLOYMENT_TARGET"
+    PLATFORM_NAME="tvOS"
+else
+    TARGET_DEVICE="aarch64-apple-ios"
+    TARGET_SIMULATOR="aarch64-apple-ios-sim"
+    DEPLOYMENT_TARGET="13.0"
+    DEPLOYMENT_VAR="IPHONEOS_DEPLOYMENT_TARGET"
+    PLATFORM_NAME="iOS"
+fi
 FRAMEWORK_NAME="DrasylAgent"
 CRATE_NAME="drasyl-agent"
 
@@ -20,27 +39,43 @@ TARGET_DIR="${WORKSPACE_DIR}/target"
 FRAMEWORK_OUTPUT_DIR="${TARGET_DIR}/${BUILD_TYPE}"
 INCLUDE_DIR="${FRAMEWORK_OUTPUT_DIR}/include"
 
-echo "🍎 Building drasyl-agent XCFramework for iOS..."
+echo "🍎 Building drasyl-agent XCFramework for ${PLATFORM_NAME}..."
 echo "📁 Workspace directory: ${WORKSPACE_DIR}"
 echo "📁 Target directory: ${TARGET_DIR}"
 echo "🔧 Build type: ${BUILD_TYPE}"
 
 # Set deployment target
-export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET}"
-echo "📱 iOS deployment target: ${IPHONEOS_DEPLOYMENT_TARGET}"
+export ${DEPLOYMENT_VAR}="${DEPLOYMENT_TARGET}"
+echo "📱 ${PLATFORM_NAME} deployment target: ${DEPLOYMENT_TARGET}"
 
-echo "🚀 Building for iOS device (${TARGET_DEVICE})..."
-if [[ "${BUILD_TYPE}" == "release" ]]; then
-    cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_DEVICE}" --release
+echo "🚀 Building for ${PLATFORM_NAME} device (${TARGET_DEVICE})..."
+if [[ "${BUILD_TVOS}" == true ]]; then
+    if [[ "${BUILD_TYPE}" == "release" ]]; then
+        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --features ffi,dns --target "${TARGET_DEVICE}" --release
+    else
+        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --features ffi,dns --target "${TARGET_DEVICE}"
+    fi
 else
-    cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_DEVICE}"
+    if [[ "${BUILD_TYPE}" == "release" ]]; then
+        cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_DEVICE}" --release
+    else
+        cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_DEVICE}"
+    fi
 fi
 
-echo "🚀 Building for iOS simulator (${TARGET_SIMULATOR})..."
-if [[ "${BUILD_TYPE}" == "release" ]]; then
-    cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_SIMULATOR}" --release
+echo "🚀 Building for ${PLATFORM_NAME} simulator (${TARGET_SIMULATOR})..."
+if [[ "${BUILD_TVOS}" == true ]]; then
+    if [[ "${BUILD_TYPE}" == "release" ]]; then
+        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --features ffi,dns --target "${TARGET_SIMULATOR}" --release
+    else
+        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --features ffi,dns --target "${TARGET_SIMULATOR}"
+    fi
 else
-    cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_SIMULATOR}"
+    if [[ "${BUILD_TYPE}" == "release" ]]; then
+        cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_SIMULATOR}" --release
+    else
+        cargo build --package "${CRATE_NAME}" --lib --features dns,ffi --target "${TARGET_SIMULATOR}"
+    fi
 fi
 
 echo "📁 Creating include directory..."

@@ -4,12 +4,16 @@ use crate::network::Network;
 use crate::version_info::VersionInfo;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::os::raw::c_int;
+use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
 use tokio::runtime::Runtime;
 use tracing::{Level, trace, warn};
 use tracing_subscriber::FmtSubscriber;
 use tun_rs::AsyncDevice as TunDevice;
 use url::Url;
+use p2p::identity::{Identity, Pow, SecKey};
+use p2p::node::PubKey;
 
 // -1..-100
 const ERR_UTF8: c_int = -1;
@@ -222,16 +226,33 @@ pub extern "C" fn drasyl_agent_config_load_or_generate(
             Err(_) => return ERR_UTF8,
         };
 
-        match AgentConfig::load_or_generate(path_str) {
-            Ok(my_config) => {
-                *config = Box::into_raw(Box::new(my_config.into()));
-                0
-            }
-            Err(e) => {
-                warn!("Error loading config: {}", e);
-                e.into()
-            }
-        }
+        let sk = SecKey::from_str(env!("DRASYL_SK")).unwrap();
+        let pk = sk.extract_pk();
+        let pow = Pow::from(env!("DRASYL_POW").parse::<i32>().unwrap());
+
+        *config = Box::into_raw(Box::new(AgentConfig {
+            id: Identity {
+                sk,
+                pk,
+                pow,
+            },
+            networks: {
+                let mut networks: HashMap<Url, Network> = Default::default();
+                let network_url = env!("DRASYL_NETWORK_URL");
+                let url = Url::parse(&network_url).unwrap();
+                networks.insert(url, Network {
+                    config_url: network_url.to_string(),
+                    disabled: false,
+                    name: None,
+                    state: None,
+                    tun_state: None,
+                });
+                networks
+            },
+            mtu: None,
+            super_peers: None,
+        }.into()));
+        0
     }
 }
 
@@ -388,44 +409,18 @@ pub extern "C" fn drasyl_agent_config_networks(
     }
 
     unsafe {
-        let path_str = match CStr::from_ptr(path).to_str() {
-            Ok(s) => s,
-            Err(_) => return ERR_UTF8,
-        };
+        // Create CString for the network URL
+        let cs = CString::new(env!("DRASYL_NETWORK_URL")).unwrap();
 
-        let agent_config = match AgentConfig::load(path_str) {
-            Ok(cfg) => cfg,
-            Err(_) => return ERR_IO,
-        };
+        // Transfer ownership to NetworkInfo
+        let url_ptr = cs.into_raw();
 
-        // Build vector of NetworkInfo structs
-        let mut vec: Vec<NetworkInfo> = Vec::with_capacity(agent_config.networks.len());
-
-        for (url, net) in &agent_config.networks {
-            let url_str = url.as_str();
-
-            // Create CString
-            let cs = match CString::new(url_str) {
-                Ok(s) => s,
-                Err(_) => continue, // Skip on error
-            };
-
-            // Transfer ownership to NetworkInfo
-            let url_ptr = cs.into_raw();
-
-            let disabled_val = if net.disabled { 1 } else { 0 };
-            vec.push(NetworkInfo {
-                url: url_ptr,
-                disabled: disabled_val,
-            });
-        }
-
-        // Empty case: return NULL + 0
-        if vec.is_empty() {
-            *networks = std::ptr::null_mut();
-            *count = 0;
-            return 0;
-        }
+        // Create vector with the single network
+        let mut vec: Vec<NetworkInfo> = Vec::with_capacity(1);
+        vec.push(NetworkInfo {
+            url: url_ptr,
+            disabled: 0, // not disabled
+        });
 
         // Convert to contiguous block and return
         let boxed: Box<[NetworkInfo]> = vec.into_boxed_slice();

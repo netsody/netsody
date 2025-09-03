@@ -45,7 +45,7 @@ pub trait AgentDnsInterface {
 }
 
 cfg_if! {
-    if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))] {
+    if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "android"))] {
         mod embedded;
         pub use embedded::AgentDns;
     }
