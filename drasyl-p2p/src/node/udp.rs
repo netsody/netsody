@@ -33,7 +33,7 @@ impl NodeInner {
         udp_sock.set_cloexec(true)?;
         udp_sock.set_nonblocking(true)?;
         udp_sock.bind(&socket2::SockAddr::from(local_addr))?;
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "fuchsia"))]
+        #[cfg(any(target_os = "linux", target_os = "fuchsia"))]
         if !iface.is_empty() {
             trace!("Bind socket for {} to device {}", local_addr, iface);
             udp_sock.bind_device(Some(iface.as_bytes()))?;
