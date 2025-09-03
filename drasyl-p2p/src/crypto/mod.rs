@@ -2,8 +2,8 @@ mod error;
 mod session_key;
 
 pub use error::*;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rand_chacha::rand_core::{RngCore, SeedableRng};
 pub use session_key::SessionKey;
 use std::cell::RefCell;
 
@@ -130,7 +130,7 @@ pub fn convert_ed25519_sk_to_curve25519_sk(sk: &SigningSecKey) -> Result<Agreeme
         .map_err(|_| Error::DalekError)?;
 
     // 1) SHA-512(seed)
-    let mut h: [u8; SHA512_BYTES] = Sha512::digest(&seed).into();
+    let mut h: [u8; SHA512_BYTES] = Sha512::digest(seed).into();
 
     // 2) X25519 clamping
     h[0] &= 248;

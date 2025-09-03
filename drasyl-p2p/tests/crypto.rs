@@ -13,7 +13,7 @@ fn sodium_init_once() {
 // ---------------------------------------------------------------------------
 mod old_ref {
     use super::*;
-    
+
     pub(crate) const ED25519_SECRETKEYBYTES: usize = 64;
     pub(crate) const ED25519_PUBLICKEYBYTES: usize = 32;
     pub(crate) const CURVE25519_SECRETKEYBYTES: usize = 32;

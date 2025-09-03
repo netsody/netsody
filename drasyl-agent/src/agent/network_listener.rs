@@ -1,9 +1,7 @@
 use crate::agent::AgentInner;
-use crate::agent::dns::AgentDnsInterface;
 use crate::network::Network;
 use ipnet::Ipv4Net;
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::MutexGuard;
 use tracing::trace;
@@ -53,6 +51,8 @@ impl AgentInner {
                 .collect();
             trace!("Collected {} IPs: {:?}", all_ips.len(), all_ips);
 
+            #[cfg(feature = "dns")]
+            use crate::agent::dns::AgentDnsInterface;
             let networks_change = NetworkChange {
                 routes: Some(all_routes),
                 ips: Some(all_ips),

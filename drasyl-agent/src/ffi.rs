@@ -616,8 +616,9 @@ impl Drop for AgentPtr {
 
 #[repr(C)]
 pub struct NetworkChange {
-    pub ips: *const c_char,        // Comma-separated IPs, NULL if not available
-    pub routes: *const c_char,     // Comma-separated routes, NULL if not available
+    pub ips: *const c_char,    // Comma-separated IPs, NULL if not available
+    pub routes: *const c_char, // Comma-separated routes, NULL if not available
+    #[cfg(feature = "dns")]
     pub dns_server: *const c_char, // DNS server, NULL if not available
 }
 
@@ -676,6 +677,7 @@ pub extern "C" fn drasyl_agent_start(
                     .unwrap_or_default();
 
                 // Convert DNS server to string
+                #[cfg(feature = "dns")]
                 let dns_server_str = if let Some(dns_server) = change.dns_server {
                     CString::new(dns_server.to_string()).unwrap_or_default()
                 } else {
@@ -685,6 +687,7 @@ pub extern "C" fn drasyl_agent_start(
                 let c_change = NetworkChange {
                     ips: ips_str.as_ptr(),
                     routes: routes_str.as_ptr(),
+                    #[cfg(feature = "dns")]
                     dns_server: dns_server_str.as_ptr(),
                 };
 

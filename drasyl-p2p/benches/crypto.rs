@@ -1,17 +1,17 @@
 // benches/curve25519.rs
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use drasyl_p2p::crypto::{
-    compute_kx_session_keys,
-    convert_ed25519_pk_to_curve25519_pk,
-    convert_ed25519_sk_to_curve25519_sk,
-    generate_sign_keypair,
-    AgreementPubKey, AgreementSecKey, SigningPubKey, SigningSecKey, SessionKey,
+    AgreementPubKey, AgreementSecKey, SessionKey, SigningPubKey, SigningSecKey,
+    compute_kx_session_keys, convert_ed25519_pk_to_curve25519_pk,
+    convert_ed25519_sk_to_curve25519_sk, generate_sign_keypair,
 };
 use libsodium_sys as sodium;
 
 fn sodium_init_once() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| unsafe { let _ = sodium::sodium_init(); });
+    ONCE.call_once(|| unsafe {
+        let _ = sodium::sodium_init();
+    });
 }
 
 // --- Helpers: neue Impl ausschließlich über crypto/mod.rs -------------------
@@ -67,11 +67,9 @@ fn bench_kx_session_keys(c: &mut Criterion) {
     // neue Impl: compute_kx_session_keys aus crypto/mod.rs
     group.bench_function("new-impl/kx", |b| {
         b.iter(|| {
-            let (rx, tx): (SessionKey, SessionKey) = compute_kx_session_keys(
-                black_box(&my_pk),
-                black_box(&my_sk),
-                black_box(&peer_pk),
-            ).unwrap();
+            let (rx, tx): (SessionKey, SessionKey) =
+                compute_kx_session_keys(black_box(&my_pk), black_box(&my_sk), black_box(&peer_pk))
+                    .unwrap();
             black_box((rx, tx));
         });
     });
