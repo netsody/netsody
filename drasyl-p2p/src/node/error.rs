@@ -139,9 +139,6 @@ pub enum Error {
     #[error("UDP local_addr error: {0}")]
     UdpLocalAddrError(io::Error),
 
-    #[error("No UDP bindings available - failed to bind to any network address")]
-    NoUdpBindings,
-
     #[error("Peer not present")]
     PeerNotPresent,
 
