@@ -13,7 +13,7 @@ tracing-subscriber  = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 tray-icon = "0.21.1"
-image = "0.25.6"
+image = "0.25.8"
 glow = "0.16.0"
 winit = "0.30.12"
 glutin = "0.32.3"
