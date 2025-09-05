@@ -85,8 +85,6 @@ jobs:
 
       - name: Build drasyl-agent on armv7
         run: cross build --target armv7-unknown-linux-gnueabihf -p drasyl-agent --features dns --release
-        env:
-          RUSTFLAGS: "-C target-cpu=cortex-a7 -C lto=yes"
         if: ${{ success() && matrix.job_name == 'linux-armv7' }}
 
       - name: Bundle drasyl-agent.deb
