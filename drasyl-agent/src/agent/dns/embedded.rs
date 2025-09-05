@@ -12,7 +12,7 @@ use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageRespo
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use hickory_server::store::in_memory::InMemoryAuthority;
 use hickory_server::store::forwarder::{ForwardAuthority, ForwardConfig};
-use hickory_resolver::{TokioResolver, config::*, name_server::TokioConnectionProvider};
+use hickory_resolver::config::*;
 use ipnet::Ipv4Net;
 use std::collections::HashMap;
 use std::io;
@@ -22,6 +22,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::SeqCst;
+use std::sync::Mutex;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
@@ -35,81 +36,69 @@ const SCUTIL_DNS_KEY: &str = "/Network/Service/drasyl/DNS";
 pub struct AgentDns {
     embedded_catalog: ArcSwap<Catalog>,
     server_ip: AtomicU32,
-    upstream_resolver: TokioResolver,
+    upstream_servers: Arc<Mutex<Vec<NameServerConfig>>>,
 }
 
 impl AgentDns {
-    pub(crate) fn new() -> Self {
-        // Configure upstream resolver with Google DNS (8.8.8.8)
-        let mut config = ResolverConfig::new();
-        config.add_name_server(NameServerConfig::new(
-            SocketAddr::from(([8, 8, 8, 8], 53)),
-            Protocol::Udp,
-        ));
-        config.add_name_server(NameServerConfig::new(
-            SocketAddr::from(([8, 8, 4, 4], 53)),
-            Protocol::Udp,
-        ));
-        config.add_name_server(NameServerConfig::new(
-            SocketAddr::from(([192, 168, 1, 145], 53)),
-            Protocol::Udp,
-        ));
-        
-        let resolver_opts = ResolverOpts::default();
-        let mut builder = TokioResolver::builder_with_config(config, TokioConnectionProvider::default());
-        *builder.options_mut() = resolver_opts;
-        let upstream_resolver = builder.build();
-
-        Self {
-            embedded_catalog: ArcSwap::from_pointee(Self::build_catalog_with_forwarder(&upstream_resolver)),
-            server_ip: AtomicU32::default(),
-            upstream_resolver,
-        }
+    /// Returns the default list of upstream DNS servers
+    /// Set to empty vector to disable upstream DNS by default
+    fn default_upstream_servers() -> Vec<NameServerConfig> {
+        vec![
+            NameServerConfig::new(SocketAddr::from(([8, 8, 8, 8], 53)), Protocol::Udp),
+            NameServerConfig::new(SocketAddr::from(([8, 8, 4, 4], 53)), Protocol::Udp),
+            NameServerConfig::new(SocketAddr::from(([192, 168, 1, 145], 53)), Protocol::Udp),
+        ]
     }
 
-    /// Builds initial catalog with forwarder for upstream DNS
-    fn build_catalog_with_forwarder(_upstream_resolver: &TokioResolver) -> Catalog {
-        trace!("Embedded DNS: Building initial DNS catalog with forwarder");
-        let mut catalog = Catalog::new();
+    /// Gets the current upstream DNS servers
+    fn get_upstream_servers(&self) -> Vec<NameServerConfig> {
+        self.upstream_servers.lock().unwrap().clone()
+    }
 
-        // Add ForwardAuthority for root zone to handle all non-local queries
-        let root_name = Name::parse(".", None).unwrap();
-        let forward_config = ForwardConfig {
-            name_servers: NameServerConfigGroup::from(vec![
-                NameServerConfig::new(SocketAddr::from(([8, 8, 8, 8], 53)), Protocol::Udp),
-                NameServerConfig::new(SocketAddr::from(([8, 8, 4, 4], 53)), Protocol::Udp),
-                NameServerConfig::new(SocketAddr::from(([192, 168, 1, 145], 53)), Protocol::Udp),
-            ]),
-            options: Some(ResolverOpts::default()),
-        };
-        let forward_authority = ForwardAuthority::builder_tokio(forward_config)
-            .build()
-            .expect("Failed to create ForwardAuthority");
-        catalog.upsert(root_name.into(), vec![Arc::new(forward_authority)]);
+    /// Updates the upstream DNS servers configuration
+    /// This allows dynamic reconfiguration of DNS servers
+    pub fn update_upstream_servers(&self, new_servers: Vec<NameServerConfig>) {
+        trace!("Updating upstream DNS servers: {:?}", new_servers);
+        *self.upstream_servers.lock().unwrap() = new_servers;
+    }
 
-        catalog
+    /// Clears all upstream DNS servers
+    /// This disables upstream DNS forwarding
+    pub fn clear_upstream_servers(&self) {
+        trace!("Clearing all upstream DNS servers");
+        *self.upstream_servers.lock().unwrap() = Vec::new();
+    }
+
+    pub(crate) fn new() -> Self {
+        Self {
+            embedded_catalog: ArcSwap::from_pointee(Catalog::new()),
+            server_ip: AtomicU32::default(),
+            upstream_servers: Arc::new(Mutex::new(Self::default_upstream_servers())),
+        }
     }
 
     #[allow(unused)]
     #[allow(clippy::unreadable_literal)]
-    fn build_catalog(networks: &mut MutexGuard<HashMap<Url, Network>>, upstream_resolver: &TokioResolver) -> Catalog {
+    fn build_catalog(&self, networks: &mut MutexGuard<HashMap<Url, Network>>, upstream_servers: &[NameServerConfig]) -> Catalog {
         trace!("Embedded DNS: Building DNS catalog");
         let mut catalog = Catalog::new();
 
         // Add ForwardAuthority for root zone first (catches all queries not handled by specific zones)
-        let root_name = Name::parse(".", None).unwrap();
-        let forward_config = ForwardConfig {
-            name_servers: NameServerConfigGroup::from(vec![
-                NameServerConfig::new(SocketAddr::from(([8, 8, 8, 8], 53)), Protocol::Udp),
-                NameServerConfig::new(SocketAddr::from(([8, 8, 4, 4], 53)), Protocol::Udp),
-                NameServerConfig::new(SocketAddr::from(([192, 168, 1, 145], 53)), Protocol::Udp),
-            ]),
-            options: Some(ResolverOpts::default()),
-        };
-        let forward_authority = ForwardAuthority::builder_tokio(forward_config)
-            .build()
-            .expect("Failed to create ForwardAuthority");
-        catalog.upsert(root_name.into(), vec![Arc::new(forward_authority)]);
+        // Only if upstream servers are configured
+        if !upstream_servers.is_empty() {
+            let root_name = Name::parse(".", None).unwrap();
+            let forward_config = ForwardConfig {
+                name_servers: NameServerConfigGroup::from(upstream_servers.to_vec()),
+                options: Some(ResolverOpts::default()),
+            };
+            let forward_authority = ForwardAuthority::builder_tokio(forward_config)
+                .build()
+                .expect("Failed to create ForwardAuthority");
+            catalog.upsert(root_name.into(), vec![Arc::new(forward_authority)]);
+            trace!("Added ForwardAuthority for root zone with upstream DNS forwarding: {:?}", upstream_servers);
+        } else {
+            trace!("No upstream servers configured, skipping ForwardAuthority for root zone");
+        }
 
         // Add local drasyl.network zone
         let origin: Name = Name::parse("drasyl.network.", None).unwrap();
@@ -165,9 +154,13 @@ impl AgentDnsInterface for AgentDns {
 
     async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
         trace!("Embedded DNS: Update all hostnames");
+        
+        // Get current upstream servers configuration
+        let upstream_servers = self.get_upstream_servers();
+        
         // update DNS entries
         self.embedded_catalog
-            .store(Arc::new(Self::build_catalog(networks, &self.upstream_resolver)));
+            .store(Arc::new(self.build_catalog(networks, &upstream_servers)));
 
         let mut i = 0;
         for (_, network) in networks.iter() {
