@@ -318,8 +318,11 @@ msg "Building Arch package for ${ARCH_PKG} inside ${DOCKER_IMAGE}…"
         export CARCH='"${ARCH_PKG}"' CHOST='"${CHOST}"'
         makepkg -f --nocheck --nodeps
       "
+      chown -R 1000:1000 /pkg
     '
 )
+
+sudo chown $(id -u):$(id -g) "${PKG_WORK}"/*.pkg.tar.*
 
 PKG_FILE="$(ls -1 "${PKG_WORK}"/${PKGNAME}-*.pkg.tar.* | tail -n1)"
 [[ -f "${PKG_FILE}" ]] || die "Package not produced."
