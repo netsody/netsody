@@ -84,7 +84,9 @@ jobs:
         if: ${{ success() && matrix.job_name == 'linux-armv7' }}
 
       - name: Build drasyl-agent on armv7
-        run: cross build --target armv7-unknown-linux-gnueabihf -p drasyl-agent --features dns --release
+        run: |
+          cross build --target armv7-unknown-linux-gnueabihf -p drasyl-agent --features dns --release
+          mv target/armv7-unknown-linux-gnueabihf/* target/
         if: ${{ success() && matrix.job_name == 'linux-armv7' }}
 
       - name: Bundle drasyl-agent.deb

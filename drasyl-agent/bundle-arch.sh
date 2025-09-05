@@ -23,7 +23,16 @@ OUT_DIR="${WORKSPACE_DIR}/target/${BUILD_TYPE}"
 
 # Container settings (Ubuntu runner + macOS/M2 friendly)
 DOCKER_IMAGE="${DOCKER_IMAGE:-archlinux:latest}"    # we'll install base-devel inside
-DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"   # required on arm64 hosts (e.g. M1/M2)
+HOST_OS="$(uname -s)"
+# default: no platform override
+DOCKER_PLATFORM_DEFAULT=""
+# on macOS we must force amd64 (Arch official image doesn't ship arm64)
+if [[ "$HOST_OS" == "Darwin" ]]; then
+  DOCKER_PLATFORM_DEFAULT="linux/amd64"
+fi
+# allow env override, otherwise use detected default
+DOCKER_PLATFORM="${DOCKER_PLATFORM:-$DOCKER_PLATFORM_DEFAULT}"
+
 
 # ---------------------- Helpers ----------------------
 msg()  { printf "\033[1;32m==>\033[0m %s\n" "$*"; }
