@@ -21,6 +21,7 @@ jobs:
         job_name:
           - linux-amd64
           - linux-arm64
+          - linux-armv7
           - macos-amd64
           - macos-arm64
           - windows-amd64
@@ -31,12 +32,21 @@ jobs:
             path: |
               target/release/drasyl
               target/release/*.deb
+              target/release/*.pkg.tar.*
 
           - job_name: linux-arm64
             os: [ self-hosted, linux, ARM64 ]
             path: |
               target/release/drasyl
               target/release/*.deb
+              target/release/*.pkg.tar.*
+
+          - job_name: linux-armv7
+            os: ubuntu-22.04
+            path: |
+              target/release/drasyl
+              target/release/*.deb
+              target/release/*.pkg.tar.*
 
           - job_name: macos-amd64
             os: macOS-13
@@ -67,9 +77,24 @@ jobs:
 
       - name: Build drasyl-agent
         run: cargo build --verbose --package drasyl-agent --features dns --release
+        if: ${{ success() && matrix.job_name != 'linux-armv7' }}
+
+      - name: Install cross (Docker-based cross-compile)
+        run: cargo install cross --git https://github.com/cross-rs/cross
+        if: ${{ success() && matrix.job_name == 'linux-armv7' }}
+
+      - name: Build drasyl-agent on armv7
+        run: cross build --target armv7-unknown-linux-gnueabihf -p drasyl-agent --features dns --release
+        env:
+          RUSTFLAGS: "-C target-cpu=cortex-a7 -C lto=yes"
+        if: ${{ success() && matrix.job_name == 'linux-armv7' }}
 
       - name: Bundle drasyl-agent.deb
         run: ./drasyl-agent/bundle-debian.sh --release
+        if: success() && startsWith(matrix.job_name, 'linux-')
+
+      - name: Bundle drasyl-agent.pkg.tar (Arch)
+        run: ./drasyl-agent/bundle-arch.sh --release
         if: success() && startsWith(matrix.job_name, 'linux-')
 
       - name: Upload drasyl-agent artifact
