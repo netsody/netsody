@@ -301,12 +301,16 @@ package() {
 }
 PKG
 
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+
 # ---------------------- Build with makepkg inside Arch container ----------------------
 msg "Building Arch package for ${ARCH_PKG} inside ${DOCKER_IMAGE}…"
 (
   cd "${PKG_WORK}"
   docker run --rm \
     --platform="${DOCKER_PLATFORM}" \
+    -e HOST_UID="${HOST_UID}" -e HOST_GID="${HOST_GID}" \
     -v "$PWD":/pkg -w /pkg \
     "${DOCKER_IMAGE}" \
     bash -lc '
@@ -318,11 +322,9 @@ msg "Building Arch package for ${ARCH_PKG} inside ${DOCKER_IMAGE}…"
         export CARCH='"${ARCH_PKG}"' CHOST='"${CHOST}"'
         makepkg -f --nocheck --nodeps
       "
-      chown -R 1000:1000 /pkg
+      chown -R ${HOST_UID}:${HOST_GID} /pkg
     '
 )
-
-sudo chown $(id -u):$(id -g) "${PKG_WORK}"/*.pkg.tar.*
 
 PKG_FILE="$(ls -1 "${PKG_WORK}"/${PKGNAME}-*.pkg.tar.* | tail -n1)"
 [[ -f "${PKG_FILE}" ]] || die "Package not produced."
@@ -330,7 +332,10 @@ PKG_FILE="$(ls -1 "${PKG_WORK}"/${PKGNAME}-*.pkg.tar.* | tail -n1)"
 # Rename to match your Debian naming convention
 EXT="${PKG_FILE##*.tar.}"    # e.g. zst
 FINAL_NAME="${OUT_DIR}/${PKGNAME}_${VERSION}-${PKGREL}_${ARCH_PKG}.pkg.tar.${EXT}"
-mv -f "${PKG_FILE}" "${FINAL_NAME}"
+if ! mv -f "${PKG_FILE}" "${FINAL_NAME}" 2>/dev/null; then
+  cp -f "${PKG_FILE}" "${FINAL_NAME}"
+  rm -f "${PKG_FILE}"
+fi
 
 msg "✅ Package created: ${FINAL_NAME}"
 echo
