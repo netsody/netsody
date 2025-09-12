@@ -75,6 +75,10 @@ impl NodeInner {
 
             loop {
                 tokio::select! {
+                    biased;
+                    _ = cancellation_token.cancelled() => {
+                        break;
+                    }
                     _ = interval.tick() => {
                         let inner = inner.clone();
                         let prometheus_url = prometheus_url.clone();
@@ -85,9 +89,6 @@ impl NodeInner {
                         }).await {
                             error!("push metrics error {:?}", e);
                         }
-                    }
-                    _ = cancellation_token.cancelled() => {
-                        break;
                     }
                 }
             }

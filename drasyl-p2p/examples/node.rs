@@ -77,6 +77,7 @@ async fn main() {
 
     tokio::spawn(async move {
         tokio::select! {
+            biased;
             _ = node.cancelled() => {},
             _ = recv_task(recv_buf_rx_clone) => {},
         }
