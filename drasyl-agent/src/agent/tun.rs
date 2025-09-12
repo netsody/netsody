@@ -63,6 +63,7 @@ impl AgentInner {
             let inner_clone = inner.clone();
             join_set.spawn(async move {
                 tokio::select! {
+                    biased;
                     _ = cancellation_token_clone.cancelled() => {
                         trace!("Token cancelled. Exiting tun <-> drasyl packet processing task ({}/{}).", i + 1, tun_threads);
                         Ok(())
