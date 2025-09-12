@@ -428,20 +428,17 @@ impl EffectiveAccessRuleList {
             .values()
             .filter(|e| e.direction == Direction::OUT && e.action == Action::Allow)
             .collect();
-        let mut entries_by_source: HashMap<Ipv4Net, Vec<&EffectiveAccessRule>, RandomState> =
+        let mut entries_by_dest: HashMap<Ipv4Net, Vec<&EffectiveAccessRule>, RandomState> =
             HashMap::with_hasher(RandomState::new());
         for entry in out_entries {
-            entries_by_source
-                .entry(entry.source)
-                .or_default()
-                .push(entry);
+            entries_by_dest.entry(entry.dest).or_default().push(entry);
         }
-        for (source, entries) in entries_by_source {
-            let mut source_trie = IpnetTrie::new();
+        for (dest, entries) in entries_by_dest {
+            let mut dest_trie = IpnetTrie::new();
             for entry in entries {
-                source_trie.insert(entry.dest, entry.pk);
+                dest_trie.insert(entry.source, entry.pk);
             }
-            trie_tx.insert(source, source_trie);
+            trie_tx.insert(dest, dest_trie);
         }
 
         // rx

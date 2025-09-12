@@ -103,46 +103,18 @@ impl AgentInner {
                                             continue;
                                         }
 
-                                        #[cfg(feature = "dns")]
-                                        {
-                                            use crate::agent::dns::AgentDnsInterface;
-                                            use etherparse::ip_number::UDP;
-                                            use etherparse::UdpHeaderSlice;
-                                            use p2p::util::bytes_to_hex;
-
-                                            // filter DNS messages
-                                            trace!("Check for DNS query to DNS server");
-                                            if ip_hdr.protocol() == UDP && inner_clone.dns.is_server_ip(ip_hdr.destination_addr()) {
-                                                // get IP payload
-                                                let payload = &buf[ip_hdr.slice().len()..];
-                                                if let Ok(udp_hdr) = UdpHeaderSlice::from_slice(payload)
-                                                    && udp_hdr.destination_port() == 53 {
-                                                    trace!("Got potential DNS request: {} -> {}", ip_hdr.source_addr(), ip_hdr.destination_addr());
-                                                    // get UDP payload
-                                                    let payload = &payload[udp_hdr.slice().len()..];
-                                                    if inner_clone.dns.on_packet(payload, ip_hdr.source_addr(), udp_hdr.source_port(), ip_hdr.destination_addr(), udp_hdr.destination_port(), dev_clone.clone()).await {
-                                                        trace!("Packet has been processed as a DNS request. Skip further processing.");
-                                                        continue;
-                                                    }
-                                                }
-                                            }
-                                            else {
-                                                trace!("No DNS query to DNS server. Payload: {}", bytes_to_hex(&buf));
-                                            }
-                                        }
-
-                                        let source = IpNet::from(IpAddr::V4(ip_hdr.source_addr()));
-                                        if let Some((source_trie_entry_source, source_trie)) = inner_clone.trie_tx.load().longest_match(&source) {
+                                        let dest = IpNet::from(IpAddr::V4(ip_hdr.destination_addr()));
+                                        if let Some((dest_trie_entry_source, dest_trie)) = inner_clone.trie_tx.load().longest_match(&dest) {
                                             trace!(
                                                 src=?ip_hdr.source_addr(),
                                                 dst=?ip_hdr.destination_addr(),
-                                                "Found source trie entry with net {}",
-                                                source_trie_entry_source
+                                                "Found dest trie entry with net {}",
+                                                dest_trie_entry_source
                                             );
-                                            let dest_addr = ip_hdr.destination_addr();
+                                            let source_addr = ip_hdr.source_addr();
 
-                                            let dest = IpNet::from(IpAddr::V4(dest_addr));
-                                            if let Some((_, send_handle)) = source_trie.longest_match(&dest)
+                                            let source = IpNet::from(IpAddr::V4(source_addr));
+                                            if let Some((_, send_handle)) = dest_trie.longest_match(&source)
                                             {
                                                 if let Err(e) = tun_tx.try_send((buf.to_vec(), send_handle.clone())) {
                                                     warn!(
@@ -165,17 +137,45 @@ impl AgentInner {
                                                 warn!(
                                                     src=?ip_hdr.source_addr(),
                                                     dst=?ip_hdr.destination_addr(),
-                                                    "No outbound route found for destination: {} -> {} (missing destination route in routing table)",
+                                                    "No outbound route found for source: {} -> {} (source IP not in routing table)",
                                                     ip_hdr.source_addr(),
                                                     ip_hdr.destination_addr()
                                                 );
                                             }
                                         }
                                         else {
+                                            #[cfg(feature = "dns")]
+                                            {
+                                                use crate::agent::dns::AgentDnsInterface;
+                                                use etherparse::ip_number::UDP;
+                                                use etherparse::UdpHeaderSlice;
+                                                use p2p::util::bytes_to_hex;
+
+                                                // filter DNS messages
+                                                trace!("Check for DNS query to DNS server");
+                                                if ip_hdr.protocol() == UDP && inner_clone.dns.is_server_ip(ip_hdr.destination_addr()) {
+                                                    // get IP payload
+                                                    let payload = &buf[ip_hdr.slice().len()..];
+                                                    if let Ok(udp_hdr) = UdpHeaderSlice::from_slice(payload)
+                                                        && udp_hdr.destination_port() == 53 {
+                                                        trace!("Got potential DNS request: {} -> {}", ip_hdr.source_addr(), ip_hdr.destination_addr());
+                                                        // get UDP payload
+                                                        let payload = &payload[udp_hdr.slice().len()..];
+                                                        if inner_clone.dns.on_packet(payload, ip_hdr.source_addr(), udp_hdr.source_port(), ip_hdr.destination_addr(), udp_hdr.destination_port(), dev_clone.clone()).await {
+                                                            trace!("Packet has been processed as a DNS request. Skip further processing.");
+                                                            continue;
+                                                        }
+                                                    }
+                                                }
+                                                else {
+                                                    trace!("No DNS query to DNS server. Payload: {}", bytes_to_hex(&buf));
+                                                }
+                                            }
+
                                             warn!(
                                                 src=?ip_hdr.source_addr(),
                                                 dst=?ip_hdr.destination_addr(),
-                                                "No outbound route found for source: {} -> {} (source IP not in routing table)",
+                                                "No outbound route found for destination: {} -> {} (missing destination route in routing table)",
                                                 ip_hdr.source_addr(),
                                                 ip_hdr.destination_addr()
                                             );
