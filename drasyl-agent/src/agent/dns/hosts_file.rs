@@ -7,6 +7,7 @@ use tokio::sync::MutexGuard;
 use tracing::{error, trace};
 use url::Url;
 use {std::fs, std::io::Write};
+use std::sync::Arc;
 
 pub struct AgentDns {}
 
