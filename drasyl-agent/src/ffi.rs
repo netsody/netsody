@@ -663,9 +663,8 @@ pub extern "C" fn drasyl_agent_start(
     runtime: &mut RuntimePtr,
     config: &mut AgentConfigPtr,
     tun_device: &mut TunDevicePtr,
-    #[cfg(any(target_os = "ios", target_os = "android"))]
     networks_change_callback: extern "C" fn(change: *const NetworkChange),
-    #[cfg(target_os = "android")] dns_servers: *const c_char,
+    dns_servers: *const c_char,
     agent: *mut *mut AgentPtr,
 ) -> c_int {
     if agent.is_null() {
