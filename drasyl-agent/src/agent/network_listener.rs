@@ -13,66 +13,62 @@ impl AgentInner {
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
         inner: Arc<AgentInner>,
     ) {
-        if let Some(listener) = &inner.network_listener {
-            trace!("Networks change listener set, check if we have a change");
+        trace!("Networks change listener set, check if we have a change");
 
-            trace!("Collecting routes from {} networks", networks.len());
-            let all_routes: Vec<Ipv4Net> = networks
-                .iter()
-                .filter_map(|(url, network)| {
-                    trace!(
-                        "Processing network {}: routes={:?}",
-                        url,
-                        network.state.as_ref().map(|s| &s.routes)
-                    );
-                    network
-                        .state
-                        .as_ref()
-                        .map(|state| state.routes.iter().map(|(dest, _)| *dest))
-                })
-                .flatten()
-                .collect();
-            trace!("Collected {} routes: {:?}", all_routes.len(), all_routes);
-
-            let all_ips: Vec<Ipv4Net> = networks
-                .iter()
-                .filter_map(|(url, network)| {
-                    trace!(
-                        "Processing network {}: ip={:?}, subnet={:?}",
-                        url,
-                        network.state.as_ref().map(|s| s.ip),
-                        network.state.as_ref().map(|s| s.subnet)
-                    );
-                    network
-                        .state
-                        .as_ref()
-                        .map(|state| Ipv4Net::new(state.ip, state.subnet.prefix_len()).unwrap())
-                })
-                .collect();
-            trace!("Collected {} IPs: {:?}", all_ips.len(), all_ips);
-
-            #[cfg(feature = "dns")]
-            use crate::agent::dns::AgentDnsInterface;
-            let networks_change = NetworkChange {
-                routes: Some(all_routes),
-                ips: Some(all_ips),
-                #[cfg(feature = "dns")]
-                dns_server: self.dns.server_ip(),
-            };
-
-            let mut last_change_guard = inner.last_network_change.lock().await;
-            if last_change_guard.as_ref() != Some(&networks_change) {
+        trace!("Collecting routes from {} networks", networks.len());
+        let all_routes: Vec<Ipv4Net> = networks
+            .iter()
+            .filter_map(|(url, network)| {
                 trace!(
-                    "Network change detected, notifying listener: old={:?} new={:?}",
-                    *last_change_guard, networks_change
+                    "Processing network {}: routes={:?}",
+                    url,
+                    network.state.as_ref().map(|s| &s.routes)
                 );
-                *last_change_guard = Some(networks_change.clone());
-                listener(networks_change.clone());
-            } else {
-                trace!("Network change is identical to last one, skipping notification");
-            }
+                network
+                    .state
+                    .as_ref()
+                    .map(|state| state.routes.iter().map(|(dest, _)| *dest))
+            })
+            .flatten()
+            .collect();
+        trace!("Collected {} routes: {:?}", all_routes.len(), all_routes);
+
+        let all_ips: Vec<Ipv4Net> = networks
+            .iter()
+            .filter_map(|(url, network)| {
+                trace!(
+                    "Processing network {}: ip={:?}, subnet={:?}",
+                    url,
+                    network.state.as_ref().map(|s| s.ip),
+                    network.state.as_ref().map(|s| s.subnet)
+                );
+                network
+                    .state
+                    .as_ref()
+                    .map(|state| Ipv4Net::new(state.ip, state.subnet.prefix_len()).unwrap())
+            })
+            .collect();
+        trace!("Collected {} IPs: {:?}", all_ips.len(), all_ips);
+
+        #[cfg(feature = "dns")]
+        use crate::agent::dns::AgentDnsInterface;
+        let networks_change = NetworkChange {
+            routes: Some(all_routes),
+            ips: Some(all_ips),
+            #[cfg(feature = "dns")]
+            dns_server: self.dns.server_ip(),
+        };
+
+        let mut last_change_guard = inner.last_network_change.lock().await;
+        if last_change_guard.as_ref() != Some(&networks_change) {
+            trace!(
+                "Network change detected, notifying listener: old={:?} new={:?}",
+                *last_change_guard, networks_change
+            );
+            *last_change_guard = Some(networks_change.clone());
+            let _ = &(inner.platform_dependent.network_listener)(networks_change.clone());
         } else {
-            trace!("No networks change listener set, skipping notification");
+            trace!("Network change is identical to last one, skipping notification");
         }
     }
 }

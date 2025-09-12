@@ -5,7 +5,6 @@ use crate::network::{LocalNodeState, Network, TunState};
 use cfg_if::cfg_if;
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::MutexGuard;
@@ -60,9 +59,12 @@ impl AgentInner {
         }
         trace!("Finished housekeeping");
 
-        // ensure network listener is fired on network changes
-        self.notify_on_network_change(&networks, inner.clone())
-            .await;
+        #[cfg(any(target_os = "ios", target_os = "android"))]
+        {
+            // ensure network listener is fired on network changes
+            self.notify_on_network_change(&networks, inner.clone())
+                .await;
+        }
 
         Ok(())
     }
@@ -280,7 +282,7 @@ impl AgentInner {
                         );
                     } else {
                         self.tun_device
-                            .remove_address(IpAddr::V4(tun_state.ip))
+                            .remove_address(std::net::IpAddr::V4(tun_state.ip))
                             .expect("Failed to add address");
                     }
                 }

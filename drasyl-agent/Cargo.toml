@@ -47,7 +47,8 @@ windows-service = "0.8.0"
 [target."cfg(target_os = \"macos\")".dependencies]
 net-route = "0.4.6"
 hickory-proto = "0.25.2"
-hickory-server = "0.25.2"
+hickory-server = { version = "0.25.2", features = ["resolver"] }
+hickory-resolver = "0.25.2"
 async-trait = "0.1.89"
 
 [target."cfg(target_os = \"linux\")".dependencies]
@@ -55,13 +56,15 @@ net-route = "0.4.6"
 
 [target."cfg(target_os = \"ios\")".dependencies]
 hickory-proto = "0.25.2"
-hickory-server = "0.25.2"
+hickory-server = { version = "0.25.2", features = ["resolver"] }
+hickory-resolver = "0.25.2"
 async-trait = "0.1.89"
 
 [target."cfg(target_os = \"android\")".dependencies]
 tracing-android = "0.2.0"
 hickory-proto = "0.25.2"
-hickory-server = "0.25.2"
+hickory-server = { version = "0.25.2", features = ["resolver"] }
+hickory-resolver = "0.25.2"
 async-trait = "0.1.89"
 
 [features]

@@ -1,4 +1,5 @@
 use crate::agent::Error;
+use crate::agent::PlatformDependent;
 use crate::agent::dns::AgentDnsInterface;
 use crate::network::Network;
 use std::collections::HashMap;
@@ -6,11 +7,12 @@ use tokio::sync::MutexGuard;
 use tracing::{error, trace};
 use url::Url;
 use {std::fs, std::io::Write};
+use std::sync::Arc;
 
 pub struct AgentDns {}
 
 impl AgentDns {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(_platform_dependent: Arc<PlatformDependent>) -> Self {
         Self {}
     }
 
