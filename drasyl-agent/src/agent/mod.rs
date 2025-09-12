@@ -4,14 +4,13 @@ mod dns;
 mod error;
 mod housekeeping;
 mod inner;
+#[cfg(any(target_os = "ios", target_os = "android"))]
 mod network_listener;
 mod node;
 mod routing;
 mod tun;
 
-pub(crate) use crate::agent::network_listener::NetworkListener;
 use crate::network::Network;
-use cfg_if::cfg_if;
 pub use config::*;
 pub use error::*;
 pub use inner::*;
@@ -22,7 +21,6 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tracing::{error, info, trace, warn};
-use tun_rs::AsyncDevice as TunDevice;
 use url::Url;
 
 pub struct Agent {
@@ -34,8 +32,7 @@ impl Agent {
         config: AgentConfig, // Agent configuration (identity, networks, etc.)
         config_path: String, // Path to configuration file
         token_path: String,  // Path to store authentication tokens
-        tun_device: Option<Arc<TunDevice>>, // Optional TUN device for network tunneling
-        network_listener: Option<NetworkListener>, // Optional callback for network changes
+        platform_dependent: PlatformDependent, // optional platform-dependent parameters
     ) -> Result<Self, Error> {
         info!("Start agent.");
 
@@ -45,19 +42,10 @@ impl Agent {
         let (node, recv_buf_rx) = AgentInner::bind_node(&config).await?;
 
         // create tun device
-        let tun_device = match tun_device {
-            Some(tun_device) => tun_device,
-            None => {
-                trace!("No tun device supplied, creating one");
-                cfg_if! {
-                    if #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))] {
-                        AgentInner::create_tun_device(&config)?
-                    } else {
-                        return Err(Error::UnsupportedTunCreationPlatform);
-                    }
-                }
-            }
-        };
+        #[cfg(any(target_os = "ios", target_os = "android"))]
+        let tun_device = platform_dependent.tun_device.clone();
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        let tun_device = AgentInner::create_tun_device(&config)?;
 
         // options
         let channel_cap = util::get_env("CHANNEL_CAP", 512);
@@ -79,7 +67,7 @@ impl Agent {
             config_path,
             token_path,
             config.mtu.unwrap_or(AgentConfig::default_mtu()),
-            network_listener,
+            Arc::new(platform_dependent),
         ));
 
         let mut join_set = JoinSet::new();
@@ -266,4 +254,13 @@ impl MessageSink for ChannelSink {
             Err(e) => warn!("Received APP dropped: {e}"),
         }
     }
+}
+
+pub struct PlatformDependent {
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    pub tun_device: Arc<tun_rs::AsyncDevice>,
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    pub network_listener: NetworkListener,
+    #[cfg(target_os = "android")]
+    pub dns_servers: Vec<std::net::Ipv4Addr>,
 }

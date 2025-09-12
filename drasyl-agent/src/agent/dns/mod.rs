@@ -60,7 +60,7 @@ cfg_if! {
         pub struct AgentDns {}
 
         impl AgentDns {
-            pub(crate) fn new() -> Self {
+            pub(crate) fn new(_platform_dependent: Arc<PlatformDependent>) -> Self {
                 Self {}
             }
         }

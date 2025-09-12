@@ -1,3 +1,4 @@
+use crate::agent::PlatformDependent;
 use crate::agent::dns::AgentDnsInterface;
 use crate::network::Network;
 use arc_swap::ArcSwap;
@@ -8,11 +9,11 @@ use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{DNSClass, Name, RData, Record};
 use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
 use hickory_proto::xfer::Protocol;
+use hickory_resolver::config::*;
 use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageResponse, ZoneType};
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
-use hickory_server::store::in_memory::InMemoryAuthority;
 use hickory_server::store::forwarder::{ForwardAuthority, ForwardConfig};
-use hickory_resolver::config::*;
+use hickory_server::store::in_memory::InMemoryAuthority;
 use ipnet::Ipv4Net;
 use std::collections::HashMap;
 use std::io;
@@ -22,7 +23,6 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::SeqCst;
-use std::sync::Mutex;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
@@ -36,50 +36,45 @@ const SCUTIL_DNS_KEY: &str = "/Network/Service/drasyl/DNS";
 pub struct AgentDns {
     embedded_catalog: ArcSwap<Catalog>,
     server_ip: AtomicU32,
-    upstream_servers: Arc<Mutex<Vec<NameServerConfig>>>,
+    upstream_servers: Vec<NameServerConfig>,
 }
 
 impl AgentDns {
-    /// Returns the default list of upstream DNS servers
-    /// Set to empty vector to disable upstream DNS by default
-    fn default_upstream_servers() -> Vec<NameServerConfig> {
-        vec![
-            NameServerConfig::new(SocketAddr::from(([8, 8, 8, 8], 53)), Protocol::Udp),
-            NameServerConfig::new(SocketAddr::from(([8, 8, 4, 4], 53)), Protocol::Udp),
-            NameServerConfig::new(SocketAddr::from(([192, 168, 1, 145], 53)), Protocol::Udp),
-        ]
-    }
+    pub(crate) fn new(platform_dependent: Arc<PlatformDependent>) -> Self {
+        #[cfg(target_os = "android")]
+        trace!(
+            "Embedded DNS: Initializing DNS with upstream servers: {:?}",
+            platform_dependent.dns_servers
+        );
+        let upstream_servers = {
+            #[cfg(target_os = "android")]
+            {
+                platform_dependent
+                    .dns_servers
+                    .iter()
+                    .map(|&ip| NameServerConfig::new(SocketAddr::from((ip, 53)), Protocol::Udp))
+                    .collect()
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                Vec::new()
+            }
+        };
 
-    /// Gets the current upstream DNS servers
-    fn get_upstream_servers(&self) -> Vec<NameServerConfig> {
-        self.upstream_servers.lock().unwrap().clone()
-    }
-
-    /// Updates the upstream DNS servers configuration
-    /// This allows dynamic reconfiguration of DNS servers
-    pub fn update_upstream_servers(&self, new_servers: Vec<NameServerConfig>) {
-        trace!("Updating upstream DNS servers: {:?}", new_servers);
-        *self.upstream_servers.lock().unwrap() = new_servers;
-    }
-
-    /// Clears all upstream DNS servers
-    /// This disables upstream DNS forwarding
-    pub fn clear_upstream_servers(&self) {
-        trace!("Clearing all upstream DNS servers");
-        *self.upstream_servers.lock().unwrap() = Vec::new();
-    }
-
-    pub(crate) fn new() -> Self {
         Self {
             embedded_catalog: ArcSwap::from_pointee(Catalog::new()),
             server_ip: AtomicU32::default(),
-            upstream_servers: Arc::new(Mutex::new(Self::default_upstream_servers())),
+            upstream_servers,
         }
     }
 
     #[allow(unused)]
     #[allow(clippy::unreadable_literal)]
-    fn build_catalog(&self, networks: &mut MutexGuard<HashMap<Url, Network>>, upstream_servers: &[NameServerConfig]) -> Catalog {
+    fn build_catalog(
+        &self,
+        networks: &mut MutexGuard<HashMap<Url, Network>>,
+        upstream_servers: &[NameServerConfig],
+    ) -> Catalog {
         trace!("Embedded DNS: Building DNS catalog");
         let mut catalog = Catalog::new();
 
@@ -95,7 +90,10 @@ impl AgentDns {
                 .build()
                 .expect("Failed to create ForwardAuthority");
             catalog.upsert(root_name.into(), vec![Arc::new(forward_authority)]);
-            trace!("Added ForwardAuthority for root zone with upstream DNS forwarding: {:?}", upstream_servers);
+            trace!(
+                "Added ForwardAuthority for root zone with upstream DNS forwarding: {:?}",
+                upstream_servers
+            );
         } else {
             trace!("No upstream servers configured, skipping ForwardAuthority for root zone");
         }
@@ -154,13 +152,13 @@ impl AgentDnsInterface for AgentDns {
 
     async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
         trace!("Embedded DNS: Update all hostnames");
-        
+
         // Get current upstream servers configuration
-        let upstream_servers = self.get_upstream_servers();
-        
+        let upstream_servers = &self.upstream_servers;
+
         // update DNS entries
         self.embedded_catalog
-            .store(Arc::new(self.build_catalog(networks, &upstream_servers)));
+            .store(Arc::new(self.build_catalog(networks, upstream_servers)));
 
         let mut i = 0;
         for (_, network) in networks.iter() {

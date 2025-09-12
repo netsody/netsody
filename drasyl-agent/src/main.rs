@@ -1,6 +1,6 @@
 use clap::arg;
 use clap::{Parser, Subcommand};
-use drasyl_agent::agent::{Agent, AgentConfig};
+use drasyl_agent::agent::{Agent, AgentConfig, PlatformDependent};
 use drasyl_agent::rest_api::{RestApiClient, RestApiServer};
 use drasyl_agent::version_info::VersionInfo;
 #[cfg(target_os = "windows")]
@@ -205,9 +205,14 @@ fn run_agent(
         {
             let token_path = token_path.to_str().expect("Invalid token path").to_owned();
             let agent = Arc::new(
-                Agent::start(config, config_path.to_string(), token_path, None, None)
-                    .await
-                    .expect("Failed to start agent"),
+                Agent::start(
+                    config,
+                    config_path.to_string(),
+                    token_path,
+                    PlatformDependent {},
+                )
+                .await
+                .expect("Failed to start agent"),
             );
             let rest_api = RestApiServer::new(agent.clone());
 
