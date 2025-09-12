@@ -635,7 +635,7 @@ pub struct NetworkPolicy {
 
 impl Hash for NetworkPolicy {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Sortiere die Gruppen, um eine konsistente Hash-Berechnung zu gewährleisten
+        // Sort groups to ensure consistent hash calculation
         let mut source_groups: Vec<&String> = self.source_groups.iter().collect();
         source_groups.sort();
         for group in source_groups {
