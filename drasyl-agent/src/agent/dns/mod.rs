@@ -57,6 +57,8 @@ cfg_if! {
     }
     else {
         // unsupported platform
+        use crate::agent::PlatformDependent;
+
         pub struct AgentDns {}
 
         impl AgentDns {
