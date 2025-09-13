@@ -111,12 +111,14 @@ impl AgentInner {
                                 .effective_routing_list(&inner.id.pk)
                                 .expect("Failed to get effective routing list");
                             let desired_hostnames = config.hostnames(&inner.id.pk);
+                            let desired_forwarding = config.is_gateway(&inner.id.pk);
                             Some(LocalNodeState {
                                 subnet: config.subnet,
                                 ip: desired_ip,
                                 access_rules: desired_effective_access_rule_list,
                                 routes: desired_effective_routing_list,
                                 hostnames: desired_hostnames,
+                                forwarding: desired_forwarding,
                             })
                         }
                         None => None,
@@ -218,11 +220,76 @@ impl AgentInner {
                 }
             };
 
+            // forwarding
+            let current_forwarding = current
+                .as_ref()
+                .map(|state| state.forwarding)
+                .unwrap_or(false);
+            let applied_forwarding = if current_forwarding == desired.forwarding {
+                current_forwarding
+            } else if !desired.forwarding {
+                // We no longer need forwarding, but leave system setting unchanged
+                // as other programs might still need it
+                cfg_if! {
+                    if #[cfg(target_os = "linux")] {
+                        trace!("No longer configured as gateway. Leaving IP forwarding setting unchanged (other programs might need it).");
+                    }
+                    else {
+                        trace!("No longer configured as gateway.");
+                    }
+                }
+                desired.forwarding
+            } else {
+                // We need forwarding enabled
+                cfg_if! {
+                    if #[cfg(target_os = "linux")] {
+                        use sysctl::Sysctl;
+
+                        warn!("We're configured as a gateway. Ensure forwarding is enabled.");
+
+                        match sysctl::Ctl::new("net.ipv4.ip_forward") {
+                            Ok(ctl) => match ctl.value_string() {
+                                Ok(ref s) if s == "1" => {
+                                    trace!("IP forwarding is already enabled.");
+                                    desired.forwarding
+                                }
+                                Ok(_) => {
+                                    trace!("IP forwarding is not enabled. Enabling...");
+                                    match ctl.set_value_string("1") {
+                                        Ok(_) => {
+                                            trace!("Enabled IP forwarding");
+                                            desired.forwarding
+                                        },
+                                        Err(e) => {
+                                            error!("Failed to enable IP forwarding: {}", e);
+                                            current_forwarding
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to get value for Ctl '{}': {}", "net.ipv4.ip_forward", e);
+                                    current_forwarding
+                                }
+                            },
+                            Err(e) => {
+                                error!("Failed to construct Ctl for '{}': {}", "net.ipv4.ip_forward", e);
+                                current_forwarding
+                            }
+                        }
+                    }
+                    else {
+                        warn!("We're configured as a gateway. Forwarding is only supported on Linux.");
+                        current_forwarding
+                    }
+                }
+            };
+
             network.state = Some(LocalNodeState {
                 subnet: desired.subnet,
                 ip: desired.ip,
                 access_rules: desired.access_rules.clone(),
                 routes: applied_routes,
+                forwarding: applied_forwarding,
                 hostnames: desired.hostnames.clone(),
             });
 

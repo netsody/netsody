@@ -243,6 +243,18 @@ impl NetworkConfig {
         }
         Ok(EffectiveRoutingList(physical_route))
     }
+
+    /// Returns true if at least one route exists with the given node as gateway
+    ///
+    /// # Arguments
+    /// * `my_pk` - The public key of the node to check
+    ///
+    /// # Returns
+    /// * `true` if the node is configured as a gateway for at least one route
+    /// * `false` if the node is not a gateway for any route
+    pub(crate) fn is_gateway(&self, my_pk: &PubKey) -> bool {
+        self.routes.values().any(|route| route.gw == *my_pk)
+    }
 }
 
 /// Checks if a node has access to a route
@@ -1424,6 +1436,72 @@ groups = ["a"]
         assert!(
             rules.values().any(|rule| rule == &expected_in_gateway_deny),
             "IN rule for gateway 192.168.1.2/32 should be DENY"
+        );
+    }
+
+    #[test]
+    fn test_is_gateway_returns_true_when_node_is_gateway() {
+        let toml_str = r#"
+            network = "192.168.1.0/24"
+            name = "Test Network"
+
+            [[node]]
+            pk       = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ip       = "192.168.1.1"
+            hostname = "gateway-node"
+
+            [[node]]
+            pk       = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ip       = "192.168.1.2"
+            hostname = "client-node"
+
+            [[route]]
+            dest   = "10.0.0.0/8"
+            gw     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "#;
+
+        let config = NetworkConfig::try_from(toml_str).unwrap();
+        let my_pk =
+            PubKey::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .unwrap();
+
+        // Test that is_gateway returns true when my_pk is a gateway
+        assert!(
+            config.is_gateway(&my_pk),
+            "is_gateway should return true when node is a gateway"
+        );
+    }
+
+    #[test]
+    fn test_is_gateway_returns_false_when_node_is_not_gateway() {
+        let toml_str = r#"
+            network = "192.168.1.0/24"
+            name = "Test Network"
+
+            [[node]]
+            pk       = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ip       = "192.168.1.1"
+            hostname = "client-node"
+
+            [[node]]
+            pk       = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ip       = "192.168.1.2"
+            hostname = "gateway-node"
+
+            [[route]]
+            dest   = "10.0.0.0/8"
+            gw     = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "#;
+
+        let config = NetworkConfig::try_from(toml_str).unwrap();
+        let my_pk =
+            PubKey::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .unwrap();
+
+        // Test that is_gateway returns false when my_pk is not a gateway
+        assert!(
+            !config.is_gateway(&my_pk),
+            "is_gateway should return false when node is not a gateway"
         );
     }
 }
