@@ -58,8 +58,8 @@ You remain in control of network membership and permitted communication, followi
       - Linux
       - Docker
   - Planned targets:
-      - iOS
-      - Android
+      - iOS (soon)
+      - Android (soon)
       - OpenWrt
 
 # Get Started
