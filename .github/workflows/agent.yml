@@ -102,3 +102,4 @@ jobs:
         with:
           name: drasyl-${{ matrix.job_name }}
           path: ${{ matrix.path }}
+        if: always()
