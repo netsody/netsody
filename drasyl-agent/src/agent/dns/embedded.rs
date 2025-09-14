@@ -36,7 +36,7 @@ const SCUTIL_DNS_KEY: &str = "/Network/Service/drasyl/DNS";
 pub struct AgentDns {
     embedded_catalog: ArcSwap<Catalog>,
     server_ip: AtomicU32,
-    upstream_servers: Vec<NameServerConfig>,
+    upstream_servers: NameServerConfigGroup,
 }
 
 impl AgentDns {
@@ -49,15 +49,17 @@ impl AgentDns {
         let upstream_servers = {
             #[cfg(target_os = "android")]
             {
-                platform_dependent
-                    .dns_servers
-                    .iter()
-                    .map(|&ip| NameServerConfig::new(SocketAddr::from((ip, 53)), Protocol::Udp))
-                    .collect()
+                NameServerConfigGroup::from(
+                    platform_dependent
+                        .dns_servers
+                        .iter()
+                        .map(|&ip| NameServerConfig::new(SocketAddr::from((ip, 53)), Protocol::Udp))
+                        .collect::<Vec<_>>(),
+                );
             }
             #[cfg(not(target_os = "android"))]
             {
-                Vec::new()
+                NameServerConfigGroup::new()
             }
         };
 
@@ -73,7 +75,7 @@ impl AgentDns {
     fn build_catalog(
         &self,
         networks: &mut MutexGuard<HashMap<Url, Network>>,
-        upstream_servers: &[NameServerConfig],
+        upstream_servers: &NameServerConfigGroup,
     ) -> Catalog {
         trace!("Building DNS catalog");
         let mut catalog = Catalog::new();
@@ -85,7 +87,7 @@ impl AgentDns {
         if !upstream_servers.is_empty() {
             let root_name = Name::parse(".", None).unwrap();
             let forward_config = ForwardConfig {
-                name_servers: NameServerConfigGroup::from(upstream_servers.to_vec()),
+                name_servers: upstream_servers.clone(),
                 options: Some(ResolverOpts::default()),
             };
             let forward_authority = ForwardAuthority::builder_tokio(forward_config)
@@ -163,12 +165,10 @@ impl AgentDnsInterface for AgentDns {
     async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
         trace!("Update all hostnames");
 
-        // Get current upstream servers configuration
-        let upstream_servers = &self.upstream_servers;
-
         // update DNS entries
-        self.embedded_catalog
-            .store(Arc::new(self.build_catalog(networks, upstream_servers)));
+        self.embedded_catalog.store(Arc::new(
+            self.build_catalog(networks, &self.upstream_servers),
+        ));
 
         let mut i = 0;
         for (_, network) in networks.iter() {
