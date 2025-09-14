@@ -665,6 +665,7 @@ pub extern "C" fn drasyl_agent_start(
     tun_device: &mut TunDevicePtr,
     networks_change_callback: extern "C" fn(change: *const NetworkChange),
     dns_servers: *const c_char,
+    dot_server: *const c_char,
     agent: *mut *mut AgentPtr,
 ) -> c_int {
     if agent.is_null() {
@@ -757,6 +758,17 @@ pub extern "C" fn drasyl_agent_start(
                         .filter(|s| !s.is_empty())
                         .filter_map(|s| s.parse::<std::net::Ipv4Addr>().ok())
                         .collect()
+                },
+                #[cfg(target_os = "android")]
+                dot_server: {
+                    if dot_server.is_null() {
+                        "".to_string()
+                    } else {
+                        match CStr::from_ptr(dot_server).to_str() {
+                            Ok(s) => s.to_string(),
+                            Err(_) => "".to_string(),
+                        }
+                    }
                 },
             },
         )) {

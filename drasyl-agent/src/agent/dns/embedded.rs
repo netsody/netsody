@@ -26,6 +26,7 @@ use std::sync::atomic::Ordering::SeqCst;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
+use tokio::runtime::Handle;
 use tokio::sync::MutexGuard;
 use tracing::{Level, debug, enabled, error, instrument, trace};
 use tun_rs::AsyncDevice;
@@ -36,11 +37,12 @@ const SCUTIL_DNS_KEY: &str = "/Network/Service/drasyl/DNS";
 pub struct AgentDns {
     embedded_catalog: ArcSwap<Catalog>,
     server_ip: AtomicU32,
-    upstream_servers: Vec<NameServerConfig>,
+    upstream_servers: NameServerConfigGroup,
 }
 
 impl AgentDns {
-    pub(crate) fn new(platform_dependent: Arc<PlatformDependent>) -> Self {
+    #[allow(unused_variables)]
+    pub(crate) async fn new(platform_dependent: Arc<PlatformDependent>) -> Self {
         #[cfg(target_os = "android")]
         trace!(
             "Initializing DNS with upstream servers: {:?}",
@@ -49,15 +51,76 @@ impl AgentDns {
         let upstream_servers = {
             #[cfg(target_os = "android")]
             {
-                platform_dependent
-                    .dns_servers
-                    .iter()
-                    .map(|&ip| NameServerConfig::new(SocketAddr::from((ip, 53)), Protocol::Udp))
-                    .collect()
+                use tokio::net::lookup_host;
+                use tokio::time::{Duration, timeout};
+                use tracing::warn;
+
+                // Create platform DNS servers fallback (used in multiple places)
+                let platform_servers = NameServerConfigGroup::from(
+                    platform_dependent
+                        .dns_servers
+                        .iter()
+                        .map(|&ip| NameServerConfig::new(SocketAddr::from((ip, 53)), Protocol::Udp))
+                        .collect::<Vec<_>>(),
+                );
+
+                if !platform_dependent.dot_server.is_empty() {
+                    // Resolve DoT server hostname and use TLS
+                    trace!(
+                        "DoT server configured, resolving hostname '{}'",
+                        platform_dependent.dot_server
+                    );
+                    match timeout(
+                        Duration::from_millis(5000),
+                        lookup_host((&*platform_dependent.dot_server, 853)),
+                    )
+                    .await
+                    {
+                        Ok(Ok(addrs)) => {
+                            let ips: Vec<IpAddr> = addrs.map(|addr| addr.ip()).collect();
+                            if ips.is_empty() {
+                                warn!(
+                                    "No IP addresses found for DoT server '{}'. Falling back to DNS servers.",
+                                    platform_dependent.dot_server
+                                );
+                                platform_servers
+                            } else {
+                                trace!(
+                                    "Resolved DoT server '{}' to IPs: {:?}",
+                                    platform_dependent.dot_server, ips
+                                );
+                                NameServerConfigGroup::from_ips_tls(
+                                    &ips,
+                                    853,
+                                    platform_dependent.dot_server.clone(),
+                                    true,
+                                )
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            warn!(
+                                "Failed to resolve DoT server '{}': {}. Falling back to DNS servers.",
+                                platform_dependent.dot_server, e
+                            );
+                            platform_servers
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Timeout while resolving DoT server '{}'. Falling back to DNS servers.",
+                                platform_dependent.dot_server
+                            );
+                            platform_servers
+                        }
+                    }
+                } else {
+                    // Use platform DNS servers if no DoT server configured
+                    trace!("No DoT server configured, using DNS servers");
+                    platform_servers
+                }
             }
             #[cfg(not(target_os = "android"))]
             {
-                Vec::new()
+                NameServerConfigGroup::new()
             }
         };
 
@@ -73,7 +136,7 @@ impl AgentDns {
     fn build_catalog(
         &self,
         networks: &mut MutexGuard<HashMap<Url, Network>>,
-        upstream_servers: &[NameServerConfig],
+        upstream_servers: &NameServerConfigGroup,
     ) -> Catalog {
         trace!("Building DNS catalog");
         let mut catalog = Catalog::new();
@@ -85,7 +148,7 @@ impl AgentDns {
         if !upstream_servers.is_empty() {
             let root_name = Name::parse(".", None).unwrap();
             let forward_config = ForwardConfig {
-                name_servers: NameServerConfigGroup::from(upstream_servers.to_vec()),
+                name_servers: upstream_servers.clone(),
                 options: Some(ResolverOpts::default()),
             };
             let forward_authority = ForwardAuthority::builder_tokio(forward_config)
@@ -163,12 +226,10 @@ impl AgentDnsInterface for AgentDns {
     async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
         trace!("Update all hostnames");
 
-        // Get current upstream servers configuration
-        let upstream_servers = &self.upstream_servers;
-
         // update DNS entries
-        self.embedded_catalog
-            .store(Arc::new(self.build_catalog(networks, upstream_servers)));
+        self.embedded_catalog.store(Arc::new(
+            self.build_catalog(networks, &self.upstream_servers),
+        ));
 
         let mut i = 0;
         for (_, network) in networks.iter() {

@@ -12,7 +12,7 @@ use {std::fs, std::io::Write};
 pub struct AgentDns {}
 
 impl AgentDns {
-    pub(crate) fn new(_platform_dependent: Arc<PlatformDependent>) -> Self {
+    pub(crate) async fn new(_platform_dependent: Arc<PlatformDependent>) -> Self {
         Self {}
     }
 
