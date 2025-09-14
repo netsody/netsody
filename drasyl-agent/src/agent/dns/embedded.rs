@@ -27,7 +27,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
 use tokio::sync::MutexGuard;
-use tracing::{debug, error, instrument, trace};
+use tracing::{Level, debug, enabled, error, instrument, trace};
 use tun_rs::AsyncDevice;
 use url::Url;
 
@@ -43,7 +43,7 @@ impl AgentDns {
     pub(crate) fn new(platform_dependent: Arc<PlatformDependent>) -> Self {
         #[cfg(target_os = "android")]
         trace!(
-            "Embedded DNS: Initializing DNS with upstream servers: {:?}",
+            "Initializing DNS with upstream servers: {:?}",
             platform_dependent.dns_servers
         );
         let upstream_servers = {
@@ -75,8 +75,10 @@ impl AgentDns {
         networks: &mut MutexGuard<HashMap<Url, Network>>,
         upstream_servers: &[NameServerConfig],
     ) -> Catalog {
-        trace!("Embedded DNS: Building DNS catalog");
+        trace!("Building DNS catalog");
         let mut catalog = Catalog::new();
+
+        trace!("Using upstream servers: {:?}", upstream_servers);
 
         // Add ForwardAuthority for root zone first (catches all queries not handled by specific zones)
         // Only if upstream servers are configured
@@ -132,11 +134,19 @@ impl AgentDnsInterface for AgentDns {
     }
 
     fn is_server_ip(&self, ip: Ipv4Addr) -> bool {
-        self.server_ip.load(SeqCst) == ip.to_bits()
+        if enabled!(Level::TRACE) {
+            trace!(
+                "Checking if IP {} is the DNS server IP {}",
+                ip,
+                Ipv4Addr::from(self.server_ip.load(SeqCst))
+            );
+        }
+        let server_ip = self.server_ip.load(SeqCst);
+        server_ip != 0 && server_ip == ip.to_bits()
     }
 
     async fn shutdown(&self) {
-        trace!("Embedded DNS: Shutting down DNS");
+        trace!("Shutting down DNS");
         #[cfg(target_os = "macos")]
         {
             if let Err(e) = scutil_remove().await {
@@ -151,7 +161,7 @@ impl AgentDnsInterface for AgentDns {
     }
 
     async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
-        trace!("Embedded DNS: Update all hostnames");
+        trace!("Update all hostnames");
 
         // Get current upstream servers configuration
         let upstream_servers = &self.upstream_servers;
@@ -219,7 +229,6 @@ impl AgentDnsInterface for AgentDns {
 
         // method to handle the request
         let catalog = self.embedded_catalog.load();
-        trace!("Cloned DNS catalog for request handling");
         let inner_handle_request = |message: MessageRequest, response_handler: ResponseHandle| async move {
             if message.message_type() == MessageType::Response {
                 trace!("Dropping DNS response message to prevent reflection attacks");

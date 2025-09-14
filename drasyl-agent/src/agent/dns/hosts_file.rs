@@ -3,11 +3,11 @@ use crate::agent::PlatformDependent;
 use crate::agent::dns::AgentDnsInterface;
 use crate::network::Network;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::MutexGuard;
 use tracing::{error, trace};
 use url::Url;
 use {std::fs, std::io::Write};
-use std::sync::Arc;
 
 pub struct AgentDns {}
 
