@@ -55,7 +55,7 @@ impl AgentDns {
                         .iter()
                         .map(|&ip| NameServerConfig::new(SocketAddr::from((ip, 53)), Protocol::Udp))
                         .collect::<Vec<_>>(),
-                );
+                )
             }
             #[cfg(not(target_os = "android"))]
             {
