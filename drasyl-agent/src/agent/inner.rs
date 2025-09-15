@@ -17,7 +17,7 @@ use p2p::identity::{Identity, PubKey};
 use p2p::message::LONG_HEADER_MAGIC_NUMBER;
 use p2p::node::{Node, SendHandle};
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
 pub(crate) use crate::agent::network_listener::{NetworkChange, NetworkListener};
 use crate::agent::routing::{AgentRouting, AgentRoutingInterface};
 use crate::agent::{AgentConfig, PlatformDependent};
@@ -53,7 +53,7 @@ pub struct AgentInner {
     pub(crate) mtu: u16,
     #[allow(dead_code)]
     pub(crate) platform_dependent: Arc<PlatformDependent>,
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
     pub(crate) last_network_change: Mutex<Option<NetworkChange>>,
     client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
 }
@@ -98,7 +98,7 @@ impl AgentInner {
             token_path,
             mtu,
             platform_dependent,
-            #[cfg(any(target_os = "ios", target_os = "android"))]
+            #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
             last_network_change: Mutex::default(),
             client: Client::builder(TokioExecutor::new())
                 .pool_max_idle_per_host(0)

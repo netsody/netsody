@@ -59,7 +59,7 @@ impl AgentInner {
         }
         trace!("Finished housekeeping");
 
-        #[cfg(any(target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
         {
             // ensure network listener is fired on network changes
             self.notify_on_network_change(&networks, inner.clone())

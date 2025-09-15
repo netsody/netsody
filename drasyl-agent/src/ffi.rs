@@ -681,9 +681,9 @@ pub extern "C" fn drasyl_agent_start(
             "".to_string(),
             "".to_string(),
             PlatformDependent {
-                #[cfg(any(target_os = "ios", target_os = "android"))]
+                #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
                 tun_device: tun_device.clone(),
-                #[cfg(any(target_os = "ios", target_os = "android"))]
+                #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
                 network_listener: Box::new(move |change: agent::NetworkChange| {
                     // Convert Rust NetworkChange to C NetworkChange
                     // Use CString to ensure proper null-termination and lifetime

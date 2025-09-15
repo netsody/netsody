@@ -51,9 +51,9 @@ echo "📱 ${PLATFORM_NAME} deployment target: ${DEPLOYMENT_TARGET}"
 echo "🚀 Building for ${PLATFORM_NAME} device (${TARGET_DEVICE})..."
 if [[ "${BUILD_TVOS}" == true ]]; then
     if [[ "${BUILD_TYPE}" == "release" ]]; then
-        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --features ffi,dns --target "${TARGET_DEVICE}" --release
+        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --lib --features ffi,dns --target "${TARGET_DEVICE}" --release
     else
-        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --features ffi,dns --target "${TARGET_DEVICE}"
+        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --lib --features ffi,dns --target "${TARGET_DEVICE}"
     fi
 else
     if [[ "${BUILD_TYPE}" == "release" ]]; then
@@ -66,9 +66,9 @@ fi
 echo "🚀 Building for ${PLATFORM_NAME} simulator (${TARGET_SIMULATOR})..."
 if [[ "${BUILD_TVOS}" == true ]]; then
     if [[ "${BUILD_TYPE}" == "release" ]]; then
-        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --features ffi,dns --target "${TARGET_SIMULATOR}" --release
+        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --lib --features ffi,dns --target "${TARGET_SIMULATOR}" --release
     else
-        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --features ffi,dns --target "${TARGET_SIMULATOR}"
+        cargo +nightly build -Z build-std=std,panic_abort --package "${CRATE_NAME}" --lib --features ffi,dns --target "${TARGET_SIMULATOR}"
     fi
 else
     if [[ "${BUILD_TYPE}" == "release" ]]; then

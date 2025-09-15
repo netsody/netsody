@@ -4,7 +4,7 @@ mod dns;
 mod error;
 mod housekeeping;
 mod inner;
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
 mod network_listener;
 mod node;
 mod routing;
@@ -42,9 +42,9 @@ impl Agent {
         let (node, recv_buf_rx) = AgentInner::bind_node(&config).await?;
 
         // create tun device
-        #[cfg(any(target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
         let tun_device = platform_dependent.tun_device.clone();
-        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        #[cfg(not(any(target_os = "ios", target_os = "tvos", target_os = "android")))]
         let tun_device = AgentInner::create_tun_device(&config)?;
 
         // options
@@ -257,9 +257,9 @@ impl MessageSink for ChannelSink {
 }
 
 pub struct PlatformDependent {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
     pub tun_device: Arc<tun_rs::AsyncDevice>,
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
     pub network_listener: NetworkListener,
     #[cfg(target_os = "android")]
     pub dns_servers: Vec<std::net::Ipv4Addr>,
