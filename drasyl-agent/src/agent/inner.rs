@@ -17,9 +17,10 @@ use p2p::identity::{Identity, PubKey};
 use p2p::message::LONG_HEADER_MAGIC_NUMBER;
 use p2p::node::{Node, SendHandle};
 
-use crate::agent::AgentConfig;
+#[cfg(any(target_os = "ios", target_os = "android"))]
 pub(crate) use crate::agent::network_listener::{NetworkChange, NetworkListener};
 use crate::agent::routing::{AgentRouting, AgentRoutingInterface};
+use crate::agent::{AgentConfig, PlatformDependent};
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
 use std::fs;
@@ -50,7 +51,9 @@ pub struct AgentInner {
     pub(crate) config_path: String,
     pub(crate) token_path: String,
     pub(crate) mtu: u16,
-    pub(crate) network_listener: Option<Arc<NetworkListener>>,
+    #[allow(dead_code)]
+    pub(crate) platform_dependent: Arc<PlatformDependent>,
+    #[cfg(any(target_os = "ios", target_os = "android"))]
     pub(crate) last_network_change: Mutex<Option<NetworkChange>>,
     client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
 }
@@ -69,7 +72,7 @@ impl AgentInner {
         config_path: String,
         token_path: String,
         mtu: u16,
-        network_listener: Option<NetworkListener>,
+        platform_dependent: Arc<PlatformDependent>,
     ) -> Self {
         let https = HttpsConnectorBuilder::new()
             .with_webpki_roots()
@@ -86,7 +89,7 @@ impl AgentInner {
             tun_device,
             routing: AgentRouting::new(),
             #[cfg(feature = "dns")]
-            dns: crate::agent::dns::AgentDns::new(),
+            dns: crate::agent::dns::AgentDns::new(platform_dependent.clone()),
             trie_tx: ArcSwap::new(Arc::new(TrieTx::new())),
             trie_rx: ArcSwap::new(Arc::new(TrieRx::new())),
             tun_tx,
@@ -94,7 +97,8 @@ impl AgentInner {
             config_path,
             token_path,
             mtu,
-            network_listener: network_listener.map(Arc::new),
+            platform_dependent,
+            #[cfg(any(target_os = "ios", target_os = "android"))]
             last_network_change: Mutex::default(),
             client: Client::builder(TokioExecutor::new())
                 .pool_max_idle_per_host(0)

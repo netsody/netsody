@@ -227,9 +227,11 @@ impl Node {
             }
         }
 
-        // Check if we have any UDP bindings, if not, return an error
+        // Check if we have any UDP bindings, if not, write warning to log
         if udp_bindings.is_empty() {
-            return Err(Error::NoUdpBindings);
+            warn!(
+                "Could not bind to any UDP addresses. This may be because the system currently has no IP address (which is fine; the node will automatically bind once addresses become available)."
+            );
         }
 
         // peers

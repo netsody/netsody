@@ -56,13 +56,14 @@ impl NodeInner {
 
         loop {
             tokio::select! {
+                biased;
+                _ = cancellation_token.cancelled() => {
+                    break;
+                }
                 _ = interval.tick() => {
                     if let Err(e) = inner.housekeeping(&inner).await {
                         error!("Error in housekeeping: {e}");
                     }
-                }
-                _ = cancellation_token.cancelled() => {
-                    break;
                 }
             }
         }

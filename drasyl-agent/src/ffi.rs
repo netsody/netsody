@@ -1,5 +1,5 @@
 use crate::agent;
-use crate::agent::{Agent, AgentConfig, Error, NetworkListener};
+use crate::agent::{Agent, AgentConfig, Error, PlatformDependent};
 use crate::network::Network;
 use crate::version_info::VersionInfo;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -619,11 +619,47 @@ pub struct NetworkChange {
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
+pub extern "C" fn drasyl_agent_network_change_ips(change: *const NetworkChange) -> *const c_char {
+    if change.is_null() {
+        return std::ptr::null();
+    }
+
+    unsafe { (*change).ips }
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn drasyl_agent_network_change_routes(
+    change: *const NetworkChange,
+) -> *const c_char {
+    if change.is_null() {
+        return std::ptr::null();
+    }
+
+    unsafe { (*change).routes }
+}
+
+#[cfg(feature = "dns")]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn drasyl_agent_network_change_dns_server(
+    change: *const NetworkChange,
+) -> *const c_char {
+    if change.is_null() {
+        return std::ptr::null();
+    }
+
+    unsafe { (*change).dns_server }
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
 pub extern "C" fn drasyl_agent_start(
     runtime: &mut RuntimePtr,
     config: &mut AgentConfigPtr,
     tun_device: &mut TunDevicePtr,
-    networks_change_callback: Option<extern "C" fn(change: *const NetworkChange)>,
+    networks_change_callback: extern "C" fn(change: *const NetworkChange),
+    dns_servers: *const c_char,
     agent: *mut *mut AgentPtr,
 ) -> c_int {
     if agent.is_null() {
@@ -640,69 +676,84 @@ pub extern "C" fn drasyl_agent_start(
         // Extract the TunDevice from the pointer
         let tun_device: &Arc<TunDevice> = tun_device.into();
 
-        let network_listener: Option<NetworkListener> = if let Some(cb) = networks_change_callback {
-            Some(Box::new(move |change: agent::NetworkChange| {
-                // Convert Rust NetworkChange to C NetworkChange
-                // Use CString to ensure proper null-termination and lifetime
-                let ips_str = change
-                    .ips
-                    .map(|ips| {
-                        let ips_string = ips
-                            .iter()
-                            .map(|ip| ip.to_string())
-                            .collect::<Vec<String>>()
-                            .join(",");
-
-                        CString::new(ips_string).unwrap_or_default()
-                    })
-                    .unwrap_or_default();
-
-                // Convert routes to comma-separated string
-                let routes_str = change
-                    .routes
-                    .map(|routes| {
-                        let routes_string = routes
-                            .iter()
-                            .map(|route| route.to_string())
-                            .collect::<Vec<String>>()
-                            .join(",");
-
-                        CString::new(routes_string).unwrap_or_default()
-                    })
-                    .unwrap_or_default();
-
-                // Convert DNS server to string
-                #[cfg(feature = "dns")]
-                let dns_server_str = if let Some(dns_server) = change.dns_server {
-                    CString::new(dns_server.to_string()).unwrap_or_default()
-                } else {
-                    CString::default()
-                };
-
-                let c_change = NetworkChange {
-                    ips: ips_str.as_ptr(),
-                    routes: routes_str.as_ptr(),
-                    #[cfg(feature = "dns")]
-                    dns_server: dns_server_str.as_ptr(),
-                };
-
-                trace!(
-                    "Calling network_change_callback with NetworkChange: ips='{}', routes='{}'",
-                    ips_str.to_string_lossy(),
-                    routes_str.to_string_lossy()
-                );
-                cb(&c_change);
-            }))
-        } else {
-            None
-        };
-
         match runtime.block_on(Agent::start(
             agent_config.clone(),
             "".to_string(),
             "".to_string(),
-            Some(tun_device.clone()),
-            network_listener,
+            PlatformDependent {
+                #[cfg(any(target_os = "ios", target_os = "android"))]
+                tun_device: tun_device.clone(),
+                #[cfg(any(target_os = "ios", target_os = "android"))]
+                network_listener: Box::new(move |change: agent::NetworkChange| {
+                    // Convert Rust NetworkChange to C NetworkChange
+                    // Use CString to ensure proper null-termination and lifetime
+                    let ips_str = change
+                        .ips
+                        .map(|ips| {
+                            let ips_string = ips
+                                .iter()
+                                .map(|ip| ip.to_string())
+                                .collect::<Vec<String>>()
+                                .join(",");
+
+                            CString::new(ips_string).unwrap_or_default()
+                        })
+                        .unwrap_or_default();
+
+                    // Convert routes to comma-separated string
+                    let routes_str = change
+                        .routes
+                        .map(|routes| {
+                            let routes_string = routes
+                                .iter()
+                                .map(|route| route.to_string())
+                                .collect::<Vec<String>>()
+                                .join(",");
+
+                            CString::new(routes_string).unwrap_or_default()
+                        })
+                        .unwrap_or_default();
+
+                    // Convert DNS server to string
+                    #[cfg(feature = "dns")]
+                    let dns_server_str = if let Some(dns_server) = change.dns_server {
+                        CString::new(dns_server.to_string()).unwrap_or_default()
+                    } else {
+                        CString::default()
+                    };
+
+                    let c_change = NetworkChange {
+                        ips: ips_str.as_ptr(),
+                        routes: routes_str.as_ptr(),
+                        #[cfg(feature = "dns")]
+                        dns_server: dns_server_str.as_ptr(),
+                    };
+
+                    trace!(
+                        "Calling network_change_callback with NetworkChange: ips='{}', routes='{}'",
+                        ips_str.to_string_lossy(),
+                        routes_str.to_string_lossy()
+                    );
+                    let _ = &(networks_change_callback)(&c_change);
+                }),
+                #[cfg(target_os = "android")]
+                dns_servers: {
+                    let dns_servers = if dns_servers.is_null() {
+                        ""
+                    } else {
+                        match CStr::from_ptr(dns_servers).to_str() {
+                            Ok(s) => s,
+                            Err(_) => "",
+                        }
+                    };
+                    dns_servers
+                        .split(',')
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .filter_map(|s| s.parse::<std::net::Ipv4Addr>().ok())
+                        .collect()
+                },
+            },
         )) {
             Ok(my_agent) => {
                 *agent = Box::into_raw(Box::new(my_agent.into()));

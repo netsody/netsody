@@ -38,7 +38,7 @@ cfg_if! {
         mod net_route;
         pub use net_route::AgentRouting;
     }
-    else if #[cfg(any(target_os = "ios"))] {
+    else if #[cfg(any(target_os = "ios", target_os = "android"))] {
         mod network_listener;
         pub use network_listener::AgentRouting;
     }

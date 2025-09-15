@@ -1,3 +1,4 @@
+use crate::agent::PlatformDependent;
 use crate::agent::dns::AgentDnsInterface;
 use crate::network::Network;
 use arc_swap::ArcSwap;
@@ -8,8 +9,10 @@ use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{DNSClass, Name, RData, Record};
 use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
 use hickory_proto::xfer::Protocol;
+use hickory_resolver::config::*;
 use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageResponse, ZoneType};
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
+use hickory_server::store::forwarder::{ForwardAuthority, ForwardConfig};
 use hickory_server::store::in_memory::InMemoryAuthority;
 use ipnet::Ipv4Net;
 use std::collections::HashMap;
@@ -24,7 +27,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 use tokio::process::Command;
 use tokio::sync::MutexGuard;
-use tracing::{debug, error, instrument, trace};
+use tracing::{Level, debug, enabled, error, instrument, trace};
 use tun_rs::AsyncDevice;
 use url::Url;
 
@@ -33,22 +36,73 @@ const SCUTIL_DNS_KEY: &str = "/Network/Service/drasyl/DNS";
 pub struct AgentDns {
     embedded_catalog: ArcSwap<Catalog>,
     server_ip: AtomicU32,
+    upstream_servers: NameServerConfigGroup,
 }
 
 impl AgentDns {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(platform_dependent: Arc<PlatformDependent>) -> Self {
+        #[cfg(target_os = "android")]
+        trace!(
+            "Initializing DNS with upstream servers: {:?}",
+            platform_dependent.dns_servers
+        );
+        let upstream_servers = {
+            #[cfg(target_os = "android")]
+            {
+                NameServerConfigGroup::from(
+                    platform_dependent
+                        .dns_servers
+                        .iter()
+                        .map(|&ip| NameServerConfig::new(SocketAddr::from((ip, 53)), Protocol::Udp))
+                        .collect::<Vec<_>>(),
+                )
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                NameServerConfigGroup::new()
+            }
+        };
+
         Self {
             embedded_catalog: ArcSwap::from_pointee(Catalog::new()),
             server_ip: AtomicU32::default(),
+            upstream_servers,
         }
     }
 
     #[allow(unused)]
     #[allow(clippy::unreadable_literal)]
-    fn build_catalog(networks: &mut MutexGuard<HashMap<Url, Network>>) -> Catalog {
-        trace!("Embedded DNS: Building DNS catalog");
+    fn build_catalog(
+        &self,
+        networks: &mut MutexGuard<HashMap<Url, Network>>,
+        upstream_servers: &NameServerConfigGroup,
+    ) -> Catalog {
+        trace!("Building DNS catalog");
         let mut catalog = Catalog::new();
 
+        trace!("Using upstream servers: {:?}", upstream_servers);
+
+        // Add ForwardAuthority for root zone first (catches all queries not handled by specific zones)
+        // Only if upstream servers are configured
+        if !upstream_servers.is_empty() {
+            let root_name = Name::parse(".", None).unwrap();
+            let forward_config = ForwardConfig {
+                name_servers: upstream_servers.clone(),
+                options: Some(ResolverOpts::default()),
+            };
+            let forward_authority = ForwardAuthority::builder_tokio(forward_config)
+                .build()
+                .expect("Failed to create ForwardAuthority");
+            catalog.upsert(root_name.into(), vec![Arc::new(forward_authority)]);
+            trace!(
+                "Added ForwardAuthority for root zone with upstream DNS forwarding: {:?}",
+                upstream_servers
+            );
+        } else {
+            trace!("No upstream servers configured, skipping ForwardAuthority for root zone");
+        }
+
+        // Add local drasyl.network zone
         let origin: Name = Name::parse("drasyl.network.", None).unwrap();
         let mut authority = InMemoryAuthority::empty(origin.clone(), ZoneType::External, false);
 
@@ -70,7 +124,7 @@ impl AgentDns {
                 }
             }
         }
-        catalog.upsert(authority.origin().clone(), vec![Arc::new(authority)]);
+        catalog.upsert(authority.origin().clone().into(), vec![Arc::new(authority)]);
 
         catalog
     }
@@ -82,11 +136,19 @@ impl AgentDnsInterface for AgentDns {
     }
 
     fn is_server_ip(&self, ip: Ipv4Addr) -> bool {
-        self.server_ip.load(SeqCst) == ip.to_bits()
+        if enabled!(Level::TRACE) {
+            trace!(
+                "Checking if IP {} is the DNS server IP {}",
+                ip,
+                Ipv4Addr::from(self.server_ip.load(SeqCst))
+            );
+        }
+        let server_ip = self.server_ip.load(SeqCst);
+        server_ip != 0 && server_ip == ip.to_bits()
     }
 
     async fn shutdown(&self) {
-        trace!("Embedded DNS: Shutting down DNS");
+        trace!("Shutting down DNS");
         #[cfg(target_os = "macos")]
         {
             if let Err(e) = scutil_remove().await {
@@ -101,10 +163,12 @@ impl AgentDnsInterface for AgentDns {
     }
 
     async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
-        trace!("Embedded DNS: Update all hostnames");
+        trace!("Update all hostnames");
+
         // update DNS entries
-        self.embedded_catalog
-            .store(Arc::new(Self::build_catalog(networks)));
+        self.embedded_catalog.store(Arc::new(
+            self.build_catalog(networks, &self.upstream_servers),
+        ));
 
         let mut i = 0;
         for (_, network) in networks.iter() {
@@ -165,7 +229,6 @@ impl AgentDnsInterface for AgentDns {
 
         // method to handle the request
         let catalog = self.embedded_catalog.load();
-        trace!("Cloned DNS catalog for request handling");
         let inner_handle_request = |message: MessageRequest, response_handler: ResponseHandle| async move {
             if message.message_type() == MessageType::Response {
                 trace!("Dropping DNS response message to prevent reflection attacks");

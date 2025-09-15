@@ -74,7 +74,6 @@ impl From<node::Error> for c_int {
             node::Error::SendingRelayedError { .. } => -133,
             node::Error::RecipientIsSuperPeer { .. } => -134,
             node::Error::SuperPeerNetworkIdMismatch(_, _) => -135,
-            node::Error::NoUdpBindings => -136,
             Error::SendToSelf => -137,
         }
     }

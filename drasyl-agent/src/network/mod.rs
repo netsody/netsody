@@ -17,6 +17,7 @@ pub struct LocalNodeState {
     pub(crate) ip: Ipv4Addr,
     pub(crate) access_rules: EffectiveAccessRuleList,
     pub(crate) routes: EffectiveRoutingList,
+    pub(crate) forwarding: bool,
     pub(crate) hostnames: HashMap<Ipv4Addr, String>,
 }
 

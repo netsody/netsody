@@ -5,7 +5,6 @@ use crate::network::{LocalNodeState, Network, TunState};
 use cfg_if::cfg_if;
 use ipnet_trie::IpnetTrie;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::MutexGuard;
@@ -60,9 +59,12 @@ impl AgentInner {
         }
         trace!("Finished housekeeping");
 
-        // ensure network listener is fired on network changes
-        self.notify_on_network_change(&networks, inner.clone())
-            .await;
+        #[cfg(any(target_os = "ios", target_os = "android"))]
+        {
+            // ensure network listener is fired on network changes
+            self.notify_on_network_change(&networks, inner.clone())
+                .await;
+        }
 
         Ok(())
     }
@@ -109,12 +111,14 @@ impl AgentInner {
                                 .effective_routing_list(&inner.id.pk)
                                 .expect("Failed to get effective routing list");
                             let desired_hostnames = config.hostnames(&inner.id.pk);
+                            let desired_forwarding = config.is_gateway(&inner.id.pk);
                             Some(LocalNodeState {
                                 subnet: config.subnet,
                                 ip: desired_ip,
                                 access_rules: desired_effective_access_rule_list,
                                 routes: desired_effective_routing_list,
                                 hostnames: desired_hostnames,
+                                forwarding: desired_forwarding,
                             })
                         }
                         None => None,
@@ -216,11 +220,76 @@ impl AgentInner {
                 }
             };
 
+            // forwarding
+            let current_forwarding = current
+                .as_ref()
+                .map(|state| state.forwarding)
+                .unwrap_or(false);
+            let applied_forwarding = if current_forwarding == desired.forwarding {
+                current_forwarding
+            } else if !desired.forwarding {
+                // We no longer need forwarding, but leave system setting unchanged
+                // as other programs might still need it
+                cfg_if! {
+                    if #[cfg(target_os = "linux")] {
+                        trace!("No longer configured as gateway. Leaving IP forwarding setting unchanged (other programs might need it).");
+                    }
+                    else {
+                        trace!("No longer configured as gateway.");
+                    }
+                }
+                desired.forwarding
+            } else {
+                // We need forwarding enabled
+                cfg_if! {
+                    if #[cfg(target_os = "linux")] {
+                        use sysctl::Sysctl;
+
+                        warn!("We're configured as a gateway. Ensure forwarding is enabled.");
+
+                        match sysctl::Ctl::new("net.ipv4.ip_forward") {
+                            Ok(ctl) => match ctl.value_string() {
+                                Ok(ref s) if s == "1" => {
+                                    trace!("IP forwarding is already enabled.");
+                                    desired.forwarding
+                                }
+                                Ok(_) => {
+                                    trace!("IP forwarding is not enabled. Enabling...");
+                                    match ctl.set_value_string("1") {
+                                        Ok(_) => {
+                                            trace!("Enabled IP forwarding");
+                                            desired.forwarding
+                                        },
+                                        Err(e) => {
+                                            error!("Failed to enable IP forwarding: {}", e);
+                                            current_forwarding
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to get value for Ctl '{}': {}", "net.ipv4.ip_forward", e);
+                                    current_forwarding
+                                }
+                            },
+                            Err(e) => {
+                                error!("Failed to construct Ctl for '{}': {}", "net.ipv4.ip_forward", e);
+                                current_forwarding
+                            }
+                        }
+                    }
+                    else {
+                        warn!("We're configured as a gateway. Forwarding is only supported on Linux.");
+                        current_forwarding
+                    }
+                }
+            };
+
             network.state = Some(LocalNodeState {
                 subnet: desired.subnet,
                 ip: desired.ip,
                 access_rules: desired.access_rules.clone(),
                 routes: applied_routes,
+                forwarding: applied_forwarding,
                 hostnames: desired.hostnames.clone(),
             });
 
@@ -233,8 +302,7 @@ impl AgentInner {
                         current_access_rules.map_or("None".to_string(), |v| v.to_string()),
                         desired.access_rules
                     );
-                    self.update_tx_tries(inner.clone(), networks).await;
-                    self.update_rx_tries(inner.clone(), networks).await;
+                    self.update_tries(inner.clone(), networks).await;
                 }
             }
 
@@ -280,7 +348,7 @@ impl AgentInner {
                         );
                     } else {
                         self.tun_device
-                            .remove_address(IpAddr::V4(tun_state.ip))
+                            .remove_address(std::net::IpAddr::V4(tun_state.ip))
                             .expect("Failed to add address");
                     }
                 }
@@ -288,8 +356,7 @@ impl AgentInner {
             }
 
             // access rules
-            self.update_tx_tries(inner.clone(), networks).await;
-            self.update_rx_tries(inner.clone(), networks).await;
+            self.update_tries(inner.clone(), networks).await;
 
             #[cfg(feature = "dns")]
             {
@@ -332,13 +399,14 @@ impl AgentInner {
     }
 
     #[instrument(skip_all)]
-    pub(crate) async fn update_tx_tries(
+    pub(crate) async fn update_tries(
         &self,
         inner: Arc<AgentInner>,
         networks: &MutexGuard<'_, HashMap<Url, Network>>,
     ) {
-        trace!("Rebuild TX tries");
+        trace!("Rebuild tries");
         let mut trie_tx: crate::agent::inner::TrieTx = IpnetTrie::new();
+        let mut trie_rx: crate::agent::inner::TrieRx = IpnetTrie::new();
 
         for (config_url, network) in networks.iter() {
             if let Some(access_rules) = network
@@ -346,7 +414,7 @@ impl AgentInner {
                 .as_ref()
                 .map(|state| state.access_rules.clone())
             {
-                let (network_trie_tx, _) = access_rules.routing_tries();
+                let (network_trie_tx, network_trie_rx) = access_rules.routing_tries();
 
                 trace!(
                     network=?config_url,
@@ -354,20 +422,20 @@ impl AgentInner {
                 );
 
                 // tx
-                for (source, trie) in network_trie_tx.iter() {
-                    let mut source_trie = IpnetTrie::new();
-                    trace!(source_net=?source, "Building TX trie for source network");
+                for (dest, trie) in network_trie_tx.iter() {
+                    let mut dest_trie = IpnetTrie::new();
+                    trace!(dest_net=?dest, "Building TX trie for dest network");
 
-                    for (dest, pk) in trie.iter() {
+                    for (source, pk) in trie.iter() {
                         let send_handle = self
                             .node
                             .send_handle(pk)
                             .expect("Failed to create send handle");
-                        source_trie.insert(dest, send_handle);
+                        dest_trie.insert(source, send_handle);
 
                         trace!(
-                            source_net=?source,
-                            dest_net=?dest,
+                            dest_net=?source,
+                            source_net=?dest,
                             peer=?pk,
                             "Added TX route: {} -> {} via peer {}",
                             source,
@@ -375,7 +443,28 @@ impl AgentInner {
                             pk
                         );
                     }
-                    trie_tx.insert(source, source_trie);
+                    trie_tx.insert(dest, dest_trie);
+                }
+
+                // rx
+                for (source, trie) in network_trie_rx.iter() {
+                    let mut source_trie = IpnetTrie::new();
+                    trace!(source_net=?source, "Building RX trie for source network");
+
+                    for (dest, pk) in trie.iter() {
+                        source_trie.insert(dest, *pk);
+
+                        trace!(
+                            source_net=?source,
+                            dest_net=?dest,
+                            peer=?pk,
+                            "Added RX route: {} -> {} from peer {} to TUN device",
+                            source,
+                            dest,
+                            pk
+                        );
+                    }
+                    trie_rx.insert(source, source_trie);
                 }
             } else {
                 trace!(
@@ -385,63 +474,9 @@ impl AgentInner {
             }
         }
 
-        trace!("TX tries rebuilt successfully.",);
+        trace!("Tries rebuilt successfully.",);
 
         inner.trie_tx.store(Arc::new(trie_tx));
-    }
-
-    #[instrument(skip_all)]
-    pub(crate) async fn update_rx_tries(
-        &self,
-        inner: Arc<AgentInner>,
-        networks: &MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
-        trace!("Rebuild RX tries");
-        let mut trie_rx: crate::agent::inner::TrieRx = IpnetTrie::new();
-
-        for (config_url, network) in networks.iter() {
-            if let Some(access_rules) = network
-                .state
-                .as_ref()
-                .map(|state| state.access_rules.clone())
-            {
-                let (_, network_trie_rx) = access_rules.routing_tries();
-
-                trace!(
-                    network=?config_url,
-                    "Processing access rules for network"
-                );
-
-                // rx
-                for (src, trie) in network_trie_rx.iter() {
-                    let mut source_trie = IpnetTrie::new();
-                    trace!(source_net=?src, "Building RX trie for source network");
-
-                    for (source, pk) in trie.iter() {
-                        source_trie.insert(source, *pk);
-
-                        trace!(
-                            source_net=?src,
-                            dest_net=?source,
-                            peer=?pk,
-                            "Added RX route: {} -> {} from peer {} to TUN device",
-                            src,
-                            source,
-                            pk
-                        );
-                    }
-                    trie_rx.insert(src, source_trie);
-                }
-            } else {
-                trace!(
-                    network=?config_url,
-                    "No access rules available for network"
-                );
-            }
-        }
-
-        trace!("RX tries rebuilt successfully.",);
-
         inner.trie_rx.store(Arc::new(trie_rx));
     }
 }
