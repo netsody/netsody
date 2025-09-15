@@ -88,7 +88,7 @@ jobs:
         if: success() && startsWith(matrix.os, 'ubuntu-')
 
       - name: Create Windows Installer
-        uses: joncloud/makensis-action@v4.1
+        uses: joncloud/makensis-action@v5.0
         with:
           script-file: ./drasyl-ui/installer-windows.nsi
         if: success() && startsWith(matrix.os, 'windows-')
