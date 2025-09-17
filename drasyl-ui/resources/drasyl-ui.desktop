@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=drasyl UI
-Exec=/usr/bin/drasyl-ui
-Icon=drasyl-ui
-Type=Application
-Categories=Utility;
-Keywords=network;overlay;vpn;peer-to-peer;
