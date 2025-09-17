@@ -1,4 +1,4 @@
-[<img src="https://docs.netsody.io/img/logo-text.svg" alt="Netsody" width="200"/>](https://netsody.io)
+[<img src="https://docs.netsody.io/img/logo-text.svg" alt="Netsody" width="300"/>](https://netsody.io)
 
 [Website](https://netsody.io) |
 [Documentation](https://docs.netsody.io) |
@@ -11,7 +11,7 @@
 
 # Netsody
 
-[Netsody](https://github.com/netsody/netsody) ([dʁazy:l]) is a lightweight, software-defined overlay networking solution built on a [fast and secure peer-to-peer protocol](./netsody-p2p).
+[Netsody](https://github.com/netsody/netsody) is a lightweight, software-defined overlay networking solution built on a [fast and secure peer-to-peer protocol](./netsody-p2p).
 
 It enables you to seamlessly interconnect all your devices in your organization, team, or home, regardless of typical network barriers prevalent between physical networks.
 Unlike traditional VPNs, Netsody establishes direct, peer-to-peer connections between all devices, creating a mesh overlay that optimally utilizes the underlying physical network.
