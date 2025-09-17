@@ -1,0 +1,75 @@
+[package]
+name = "netsody-p2p"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tracing = { workspace = true }
+thiserror = { workspace = true }
+derive_builder = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "signal"] }
+tokio-util = { workspace = true, features = ["codec"] }
+papaya = { workspace = true }
+ahash = { workspace = true }
+serde = { workspace = true, optional = true }
+lazy_static = { workspace = true }
+arc-swap = { workspace = true }
+futures = { workspace = true }
+if-addrs = "0.14.0"
+aegis = "0.9.0"
+rand_chacha = { version = "0.9.0", features = ["os_rng"] }
+zerocopy = { version = "0.8.27", features = ["derive"] }
+lz4_flex = { version = "0.11" }
+socket2 = { version = "0.6.0", features = ["all"] }
+bytes = "1.10.1"
+prometheus = { workspace = true, optional = true, features = ["push"] }
+ed25519-dalek = { version = "2.2.0", features = ["rand_core", "zeroize"] }
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
+blake2b_simd = "1.0.3"
+sha2 = { version = "0.11.0-rc.2", features = ["zeroize"] }
+zeroize = "1.8.1"
+
+[dev-dependencies]
+criterion = { version = "0.7", features = ["async_tokio", "html_reports"] }
+tracing-subscriber  = { workspace = true }
+libsodium-sys-stable = { version = "1.22.4", features = ["minimal"] }
+
+[[bench]]
+name = "crypto"
+harness = false
+
+[[bench]]
+name = "sha256"
+harness = false
+
+[[bench]]
+name = "random_bytes"
+harness = false
+
+[[bench]]
+name = "node"
+harness = false
+
+[[bench]]
+name = "clock"
+harness = false
+
+[lints.clippy]
+explicit_iter_loop = "deny"
+manual_string_new = "deny"
+map_unwrap_or = "deny"
+ref_option = "deny"
+redundant_closure_for_method_calls = "deny"
+semicolon_if_nothing_returned = "deny"
+single_match_else = "deny"
+uninlined_format_args = "deny"
+unused_async = "deny"
+wildcard_imports = "deny"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[features]
+ffi = []
+serde = ["dep:serde"]
+prometheus = ["dep:prometheus"]

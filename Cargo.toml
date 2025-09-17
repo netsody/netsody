@@ -1,8 +1,11 @@
 [workspace]
 members = [
-    "drasyl-p2p",
-    "drasyl-agent"
-, "drasyl-sp", "drasyl-bench", "drasyl-ui"]
+    "netsody-p2p",
+    "netsody-agent",
+    "netsody-sp",
+    "netsody-bench",
+    "netsody-ui"
+]
 resolver = "3"
 
 [workspace.dependencies]

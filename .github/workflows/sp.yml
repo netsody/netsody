@@ -25,20 +25,20 @@ jobs:
           - job_name: linux-amd64
             os: ubuntu-22.04
             path: |
-              target/release/drasyl-sp
+              target/release/netsody-sp
 
-    name: Build drasyl-sp on ${{ matrix.job_name }}
+    name: Build netsody-sp on ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build drasyl-sp
-        run: cargo build --verbose --package drasyl-sp --features prometheus --release
+      - name: Build netsody-sp
+        run: cargo build --verbose --package netsody-sp --features prometheus --release
 
-      - name: Upload drasyl-sp artifact
+      - name: Upload netsody-sp artifact
         uses: actions/upload-artifact@v4
         with:
-          name: drasyl-sp-${{ matrix.job_name }}
+          name: netsody-sp-${{ matrix.job_name }}
           path: ${{ matrix.path }}

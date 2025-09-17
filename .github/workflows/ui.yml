@@ -28,30 +28,30 @@ jobs:
           - job_name: linux-amd64
             os: ubuntu-22.04
             path: |
-              target/release/drasyl-ui
+              target/release/netsody-ui
               target/release/*.deb
 
           - job_name: macos-amd64
             os: macOS-13
             path: |
-              target/release/drasyl-ui
+              target/release/netsody-ui
               target/release/*.app
               target/release/*.pkg
 
           - job_name: macos-arm64
             os: macOS-latest
             path: |
-              target/release/drasyl-ui
+              target/release/netsody-ui
               target/release/*.app
               target/release/*.pkg
 
           - job_name: windows-amd64
-            os: windows-latest
+            os: windows-2022
             path: |
-              target/release/drasyl-ui.exe
-              target/release/drasyl_*_windows.exe
+              target/release/netsody-ui.exe
+              target/release/netsody_*_windows.exe
 
-    name: Build drasyl-ui on ${{ matrix.job_name }}
+    name: Build netsody-ui on ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -68,33 +68,33 @@ jobs:
             libayatana-appindicator3-dev
         if: startsWith(matrix.os, 'ubuntu-')
 
-      - name: Build drasyl-ui
-        run: cargo build --verbose --package drasyl-ui --release
+      - name: Build netsody-ui
+        run: cargo build --verbose --package netsody-ui --release
 
-      - name: Bundle drasyl UI.app
-        run: ./drasyl-ui/bundle-macos.sh --release
+      - name: Bundle Netsody UI.app
+        run: ./netsody-ui/bundle-macos.sh --release
         if: success() && startsWith(matrix.os, 'macOS-')
 
-      - name: Build drasyl-agent
-        run: cargo build --verbose --package drasyl-agent --features dns --release
+      - name: Build netsody-agent
+        run: cargo build --verbose --package netsody-agent --features dns --release
         if: startsWith(matrix.os, 'macOS-') || startsWith(matrix.os, 'windows-')
 
       - name: Create macOS Installer
-        run: ./drasyl-ui/installer-macos.sh --release
+        run: ./netsody-ui/installer-macos.sh --release
         if: success() && startsWith(matrix.os, 'macOS-')
 
-      - name: Bundle drasyl-ui.deb
-        run: ./drasyl-ui/bundle-debian.sh --release
+      - name: Bundle netsody-ui.deb
+        run: ./netsody-ui/bundle-debian.sh --release
         if: success() && startsWith(matrix.os, 'ubuntu-')
 
       - name: Create Windows Installer
         uses: joncloud/makensis-action@v5.0
         with:
-          script-file: ./drasyl-ui/installer-windows.nsi
+          script-file: ./netsody-ui/installer-windows.nsi
         if: success() && startsWith(matrix.os, 'windows-')
 
-      - name: Upload drasyl-ui artifact(s)
+      - name: Upload netsody-ui artifact(s)
         uses: actions/upload-artifact@v4
         with:
-          name: drasyl-ui-${{ matrix.job_name }}
+          name: netsody-ui-${{ matrix.job_name }}
           path: ${{ matrix.path }}

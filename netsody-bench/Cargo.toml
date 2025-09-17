@@ -1,0 +1,21 @@
+[package]
+name = "netsody-bench"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+p2p = { package = "netsody-p2p", path = "../netsody-p2p" }
+tokio = { workspace = true }
+tracing-subscriber  = { workspace = true }
+tracing = { workspace = true }
+iroh = { version = "0.34" }
+iroh-base = { version = "0.34", features = ["ticket"] }
+rand = "0.8.5"
+
+[[bin]]
+name = "bench-netsody"
+path = "src/bin/netsody.rs"
+
+[[bin]]
+name = "bench-iroh"
+path = "src/bin/iroh.rs"

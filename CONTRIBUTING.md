@@ -1,6 +1,6 @@
-# Contributing to drasyl
+# Contributing to Netsody
 
-This is a short guide on how to contribute things to drasyl.
+This is a short guide on how to contribute things to Netsody.
 
 ## Table of Contents
 
@@ -20,19 +20,19 @@ Before you begin contributing, please make sure you have:
 
 - Rust toolchain installed (latest stable version recommended)
 - Git installed
-- Basic understanding of the drasyl project structure
+- Basic understanding of the Netsody project structure
 
 ## Development Setup
 
 1. Fork the repository on GitHub
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/drasyl-rs.git
-   cd drasyl-rs
+   git clone https://github.com/YOUR_USERNAME/netsody.git
+   cd netsody
    ```
 3. Add the upstream repository:
    ```bash
-   git remote add upstream https://github.com/original-repo/drasyl-rs.git
+   git remote add upstream https://github.com/original-repo/netsody.git
    ```
 4. Install dependencies:
    ```bash
@@ -43,9 +43,9 @@ Before you begin contributing, please make sure you have:
 
 When filing an issue, please include the following information if possible as well as a description
 of the problem. Make sure you test with
-the latest version of drasyl:
+the latest version of Netsody:
 
-* drasyl version
+* Netsody version
 * Operating system and version
 * Expected behavior
 * Actual behavior
@@ -60,7 +60,7 @@ features.
 
 For end-user related support questions, try using first:
 
-- the drasyl Discord: [![Discord](https://img.shields.io/discord/959492172560891905)](https://discord.gg/2tcZPy7BCu)
+- the Netsody Discord: [![Discord](https://img.shields.io/discord/959492172560891905)](https://netsody.io/discord/)
 
 ## Requesting a feature
 
@@ -183,4 +183,4 @@ If you need help with contributing:
 
 ## Recognition
 
-Contributors will be recognized in the project's release notes. Thank you for contributing to drasyl!
+Contributors will be recognized in the project's release notes. Thank you for contributing to Netsody!
