@@ -19,7 +19,7 @@ target/
 # Visual Studio Code
 .vscode/
 
-# drasyl identity files
+# Netsody identity files
 *.identity
 .DS_Store
 auth.token

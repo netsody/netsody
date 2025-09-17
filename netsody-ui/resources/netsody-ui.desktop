@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Netsody UI
+Exec=/usr/bin/netsody-ui
+Icon=netsody-ui
+Type=Application
+Categories=Utility;
+Keywords=network;overlay;vpn;peer-to-peer;

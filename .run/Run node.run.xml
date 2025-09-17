@@ -1,23 +1,19 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Run node" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
-    <option name="command" value="run --package drasyl-p2p --features prometheus --example node" />
+    <option name="command" value="run --package netsody-p2p --features prometheus --example node" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
-      <env name="DRASYL_HELLO_MAX_AGE" value="60000" />
-      <env name="DRASYL_HELLO_TIMEOUT" value="30000" />
-      <env name="DRASYL_HOUSEKEEPING_INTERVAL" value="5000" />
-      <env name="DRASYL_IDENTITY_FILE" value="node.identity" />
-      <env name="DRASYL_MAX_PEERS" value="8192" />
-      <env name="DRASYL_MIN_POW_DIFFICULTY" value="24" />
-      <env name="DRASYL_PROCESS_UNITES" value="true" />
-      <env name="DRASYL_RECV_BUF_CAP" value="64" />
-      <env name="xDRASYL_SUPER_PEERS" value="udp://127.0.0.1:22527?publicKey=3ab5ae3f1456988543dd3417556d52dd028f2b5524d86bc95d58e91faa9ddf4c&amp;networkId=1&amp;tcpPort=8443" />
-      <env name="DRASYL_UDP_LISTEN" value="0.0.0.0:-1" />
-      <env name="xDRASYL_ARM_MESSAGES" value="false" />
-      <env name="xDRASYL_NETWORK_ID" value="2" />
-      <env name="xRUST_LOG" value="trace,drasyl::node=trace" />
-      <env name="xRUSTFLAGS" value="--cfg tokio_unstable" />
+      <env name="NETSODY_HELLO_MAX_AGE" value="60000" />
+      <env name="NETSODY_HELLO_TIMEOUT" value="30000" />
+      <env name="NETSODY_HOUSEKEEPING_INTERVAL" value="5000" />
+      <env name="NETSODY_IDENTITY_FILE" value="node.identity" />
+      <env name="NETSODY_MAX_PEERS" value="8192" />
+      <env name="NETSODY_MIN_POW_DIFFICULTY" value="24" />
+      <env name="NETSODY_PROCESS_UNITES" value="true" />
+      <env name="NETSODY_RECV_BUF_CAP" value="64" />
+      <env name="NETSODY_UDP_LISTEN" value="0.0.0.0:-1" />
+      <env name="RUST_LOG" value="trace,netsody::node=trace" />
     </envs>
     <option name="emulateTerminal" value="true" />
     <option name="channel" value="DEFAULT" />

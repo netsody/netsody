@@ -2,7 +2,7 @@
 # Visit https://bit.ly/cffinit to generate yours today!
 
 cff-version: 1.2.0
-title: drasyl - secure, software-defined overlay networks, connecting all your devices
+title: Netsody - secure, software-defined overlay networks, connecting all your devices
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -11,17 +11,17 @@ authors:
   - given-names: Heiko
     family-names: Bornholdt
     orcid: 'https://orcid.org/0000-0003-0013-7966'
-    affiliation: University of Hamburg
-    email: heiko.bornholdt@uni-hamburg.de
+    affiliation: Netsody
+    email: heiko@netsody.io
   - given-names: Kevin
     family-names: Röbert
-    email: kevin.roebert@uni-hamburg.de
-    affiliation: University of Hamburg
+    email: kevin@netsody.io
+    affiliation: Netsody
     orcid: 'https://orcid.org/0009-0006-5377-6541'
-repository-code: 'https://github.com/drasyl/drasyl-rs'
-url: 'https://drasyl.org'
+repository-code: 'https://github.com/netsody/netsody'
+url: 'https://netsody.io'
 abstract: >-
-  drasyl provides secure, software-defined overlay networks, connecting all your devices.
+  Netsody provides secure, software-defined overlay networks, connecting all your devices.
 keywords:
   - rust
   - mesh-networks

@@ -30,37 +30,37 @@ jobs:
           - job_name: linux-amd64
             os: ubuntu-22.04
             path: |
-              target/release/drasyl
+              target/release/netsody
               target/release/*.deb
               target/release/*.pkg.tar.*
 
           - job_name: linux-arm64
             os: [ self-hosted, linux, ARM64 ]
             path: |
-              target/release/drasyl
+              target/release/netsody
               target/release/*.deb
               target/release/*.pkg.tar.*
 
           - job_name: linux-armv7
             os: ubuntu-22.04
             path: |
-              target/release/drasyl
+              target/release/netsody
               target/release/*.deb
               target/release/*.pkg.tar.*
 
           - job_name: macos-amd64
             os: macOS-13
-            path: target/release/drasyl
+            path: target/release/netsody
 
           - job_name: macos-arm64
             os: macOS-latest
-            path: target/release/drasyl
+            path: target/release/netsody
 
           - job_name: windows-amd64
-            os: windows-latest
-            path: target/release/drasyl.exe
+            os: windows-2022
+            path: target/release/netsody.exe
 
-    name: Build drasyl-agent on ${{ matrix.job_name }}
+    name: Build netsody-agent on ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -75,31 +75,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build drasyl-agent
-        run: cargo build --verbose --package drasyl-agent --features dns --release
+      - name: Build netsody-agent
+        run: cargo build --verbose --package netsody-agent --features dns --release
         if: ${{ success() && matrix.job_name != 'linux-armv7' }}
 
       - name: Install cross (Docker-based cross-compile)
         run: cargo install cross --git https://github.com/cross-rs/cross
         if: ${{ success() && matrix.job_name == 'linux-armv7' }}
 
-      - name: Build drasyl-agent on armv7
+      - name: Build netsody-agent on armv7
         run: |
-          cross build --target armv7-unknown-linux-gnueabihf -p drasyl-agent --features dns --release
+          cross build --target armv7-unknown-linux-gnueabihf -p netsody-agent --features dns --release
           mv target/armv7-unknown-linux-gnueabihf/* target/
         if: ${{ success() && matrix.job_name == 'linux-armv7' }}
 
-      - name: Bundle drasyl-agent.deb
-        run: ./drasyl-agent/bundle-debian.sh --release
+      - name: Bundle netsody-agent.deb
+        run: ./netsody-agent/bundle-debian.sh --release
         if: success() && startsWith(matrix.job_name, 'linux-')
 
-      - name: Bundle drasyl-agent.pkg.tar (Arch)
-        run: ./drasyl-agent/bundle-arch.sh --release
+      - name: Bundle netsody-agent.pkg.tar (Arch)
+        run: ./netsody-agent/bundle-arch.sh --release
         if: success() && startsWith(matrix.job_name, 'linux-')
 
-      - name: Upload drasyl-agent artifact
+      - name: Upload netsody-agent artifact
         uses: actions/upload-artifact@v4
         with:
-          name: drasyl-${{ matrix.job_name }}
+          name: netsody-${{ matrix.job_name }}
           path: ${{ matrix.path }}
         if: always()

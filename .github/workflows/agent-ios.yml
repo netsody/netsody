@@ -15,22 +15,22 @@ env:
 
 jobs:
   build:
-    name: Build drasyl-agent for iOS
+    name: Build netsody-agent for iOS
     runs-on: macOS-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build DrasylAgent.xcframework
+      - name: Build NetsodyAgent.xcframework
         run: |
           rustup target add aarch64-apple-ios
           rustup target add aarch64-apple-ios-sim
           cargo install bindgen-cli cbindgen
-          ./drasyl-agent/build-ios.sh --release
+          ./netsody-agent/build-ios.sh --release
 
-      - name: Upload drasyl-agent FFI artifact
+      - name: Upload netsody-agent FFI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: drasyl-ios-${{ matrix.job_name }}
-          path: target/release/DrasylAgent.xcframework
+          name: netsody-ios
+          path: target/release/NetsodyAgent.xcframework

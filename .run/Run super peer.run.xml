@@ -2,21 +2,21 @@
   <configuration default="false" name="Run super peer" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
     <target name="@@@LOCAL@@@" />
-    <option name="command" value="run --package drasyl-sp --features prometheus" />
+    <option name="command" value="run --package netsody-sp --features prometheus" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
-      <env name="DRASYL_ARM_MESSAGES" value="true" />
-      <env name="DRASYL_HELLO_MAX_AGE" value="60000" />
-      <env name="DRASYL_HELLO_TIMEOUT" value="30000" />
-      <env name="DRASYL_IDENTITY_FILE" value="super_peer.identity" />
-      <env name="DRASYL_MAX_PEERS" value="8192" />
-      <env name="DRASYL_MIN_POW_DIFFICULTY" value="24" />
-      <env name="DRASYL_NETWORK_ID" value="1" />
-      <env name="DRASYL_SEND_UNITES" value="1800" />
-      <env name="DRASYL_TCP4_LISTEN" value="" />
-      <env name="DRASYL_TCP6_LISTEN" value="[::]:8443" />
-      <env name="DRASYL_UDP4_LISTEN" value="" />
-      <env name="DRASYL_UDP6_LISTEN" value="[::]:22527" />
+      <env name="NETSODY_ARM_MESSAGES" value="true" />
+      <env name="NETSODY_HELLO_MAX_AGE" value="60000" />
+      <env name="NETSODY_HELLO_TIMEOUT" value="30000" />
+      <env name="NETSODY_IDENTITY_FILE" value="super_peer.identity" />
+      <env name="NETSODY_MAX_PEERS" value="8192" />
+      <env name="NETSODY_MIN_POW_DIFFICULTY" value="24" />
+      <env name="NETSODY_NETWORK_ID" value="1" />
+      <env name="NETSODY_SEND_UNITES" value="1800" />
+      <env name="NETSODY_TCP4_LISTEN" value="" />
+      <env name="NETSODY_TCP6_LISTEN" value="[::]:8443" />
+      <env name="NETSODY_UDP4_LISTEN" value="" />
+      <env name="NETSODY_UDP6_LISTEN" value="[::]:22527" />
       <env name="RUST_LOG" value="trace" />
       <env name="xRUSTFLAGS" value="--cfg tokio_unstable" />
     </envs>
