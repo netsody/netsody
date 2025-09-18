@@ -168,7 +168,7 @@ impl AgentInner {
                                                     }
                                                 }
                                                 else {
-                                                    trace!("No DNS query to DNS server. Payload: {}", bytes_to_hex(&buf));
+                                                    trace!("No DNS query to DNS server. Payload: {}", bytes_to_hex(buf));
                                                 }
                                             }
 

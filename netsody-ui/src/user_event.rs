@@ -5,6 +5,7 @@ use tray_icon::menu::MenuEvent;
 
 #[allow(clippy::large_enum_variant)]
 pub enum UserEvent {
+    #[allow(dead_code)]
     TrayIconEvent(TrayIconEvent),
     MenuEvent(MenuEvent),
     Status(Result<Status, String>),

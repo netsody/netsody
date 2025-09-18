@@ -8,6 +8,7 @@ use tun_rs::AsyncDevice;
 use url::Url;
 
 pub trait AgentDnsInterface {
+    #[allow(dead_code)]
     fn server_ip(&self) -> Option<Ipv4Addr> {
         None
     }

@@ -40,6 +40,7 @@ pub struct AgentDns {
 }
 
 impl AgentDns {
+    #[allow(unused_variables)]
     pub(crate) fn new(platform_dependent: Arc<PlatformDependent>) -> Self {
         #[cfg(target_os = "android")]
         trace!(
@@ -112,8 +113,7 @@ impl AgentDns {
                     trace!("Adding DNS A record: {}.netsody.me -> {}", hostname, ip);
                     authority.upsert_mut(
                         Record::from_rdata(
-                            Name::parse(format!("{hostname}.netsody.me.").as_str(), None)
-                                .unwrap(),
+                            Name::parse(format!("{hostname}.netsody.me.").as_str(), None).unwrap(),
                             60,
                             RData::A(A(ip)),
                         )
@@ -124,7 +124,7 @@ impl AgentDns {
                 }
             }
         }
-        catalog.upsert(authority.origin().clone().into(), vec![Arc::new(authority)]);
+        catalog.upsert(authority.origin().clone(), vec![Arc::new(authority)]);
 
         catalog
     }
