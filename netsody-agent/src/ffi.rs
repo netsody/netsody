@@ -63,17 +63,13 @@ pub extern "C" fn netsody_agent_version() -> *const c_char {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn netsody_agent_init_logging() -> c_int {
-    // Set the global subscriber with TRACE level
-    let subscriber = FmtSubscriber::builder()
-        .with_ansi(false)
-        .with_max_level(Level::TRACE) // or Level::DEBUG, etc.
-        .finish();
+    // Default logging for other platforms
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_oslog::OsLogger;
 
-    #[cfg(target_os = "android")]
-    let subscriber = {
-        use tracing_subscriber::layer::SubscriberExt;
-        subscriber.with(tracing_android::layer(env!("CARGO_PKG_NAME")).unwrap())
-    };
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::LevelFilter::TRACE)
+        .with(OsLogger::new(env!("CARGO_PKG_NAME"), "default"));
 
     match tracing::subscriber::set_global_default(subscriber) {
         Ok(_) => 0,
