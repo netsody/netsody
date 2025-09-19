@@ -389,7 +389,10 @@ pub extern "C" fn netsody_node_opts_builder_super_peers(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn netsody_node_opts_builder_mtu(builder: &mut NodeOptsBuilder, mtu: usize) -> c_int {
+pub extern "C" fn netsody_node_opts_builder_mtu(
+    builder: &mut NodeOptsBuilder,
+    mtu: usize,
+) -> c_int {
     builder.mtu(mtu);
     0
 }
