@@ -1,3 +1,4 @@
+use crate::agent::netif::AgentNetifInterface;
 use crate::agent::{AgentConfig, AgentInner, ChannelSink, Error, is_netsody_control_packet};
 use etherparse::Ipv4HeaderSlice;
 use flume::Receiver;
@@ -179,7 +180,7 @@ impl AgentInner {
                                                             expected_key
                                                         );
                                                     }
-                                                    else if let Err(e) = inner_clone.tun_device.send(&buf).await {
+                                                    else if let Err(e) = inner_clone.netif.send(&buf).await {
                                                         warn!(
                                                             peer=?sender_key,
                                                             src=?ip_hdr.source_addr(),

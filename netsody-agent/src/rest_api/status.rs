@@ -1,5 +1,8 @@
 use crate::agent::Agent;
-use crate::network::{EffectiveAccessRuleList, EffectiveRoutingList, Network};
+use crate::network::{
+    AgentState, AgentStateStatus, AppliedStatus, EffectiveAccessRuleList, EffectiveRoutingList,
+    Network,
+};
 use crate::rest_api::RestApiClient;
 use crate::rest_api::auth::AuthToken;
 use crate::rest_api::error::Error;
@@ -9,7 +12,6 @@ use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Local, Utc};
 use humantime::format_duration;
-use ipnet::Ipv4Net;
 use p2p::identity::PubKey;
 use p2p::message::ShortId;
 use p2p::node::{HELLO_TIMEOUT_DEFAULT, NodeOpts};
@@ -17,7 +19,7 @@ use p2p::peer::{NodePeer, Peer, PeerPathInner, PeerPathKey, PowStatus, SessionKe
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -450,35 +452,27 @@ impl fmt::Display for NodePeerStatus {
 
 #[derive(Serialize, Deserialize)]
 pub struct NetworkStatus {
-    pub subnet: Option<Ipv4Net>,
-    pub ip: Option<Ipv4Addr>,
-    pub name: Option<String>,
     pub disabled: bool,
-    access_rules: Option<EffectiveAccessRuleList>,
-    routes: Option<EffectiveRoutingList>,
-    hostnames: Option<HashMap<Ipv4Addr, String>>,
+    pub name: Option<String>,
+    pub status: AgentStateStatus,
+    pub desired_state: AgentState,
+    pub current_state: AgentState,
 }
 
 impl NetworkStatus {
     fn new(network: &Network) -> Self {
         Self {
-            subnet: network.state.as_ref().map(|state| state.subnet),
-            ip: network.state.as_ref().map(|state| state.ip),
-            name: network.name.clone(),
             disabled: network.disabled,
-            access_rules: network
-                .state
-                .as_ref()
-                .map(|state| state.access_rules.clone()),
-            routes: network.state.as_ref().map(|state| state.routes.clone()),
-            hostnames: network.state.as_ref().map(|state| state.hostnames.clone()),
+            name: network.name.clone(),
+            status: network.status.clone(),
+            desired_state: network.desired_state.clone(),
+            current_state: network.current_state.clone(),
         }
     }
 }
 
 impl fmt::Display for NetworkStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Disabled: {}", self.disabled)?;
         writeln!(
             f,
             "Name: {}",
@@ -486,60 +480,136 @@ impl fmt::Display for NetworkStatus {
                 .as_ref()
                 .map_or("None".to_string(), |name| name.to_string())
         )?;
-        writeln!(
-            f,
-            "Subnet: {}",
-            self.subnet
-                .as_ref()
-                .map_or("None".to_string(), |s| s.to_string())
-        )?;
-        writeln!(
-            f,
-            "IP: {}",
-            self.ip
-                .as_ref()
-                .map_or("None".to_string(), |ip| ip.to_string())
-        )?;
-        match &self.access_rules {
-            Some(virtual_routes) if !virtual_routes.is_empty() => {
-                writeln!(f, "Access Rules:")?;
-                if let Some(virtual_routes) = &self.access_rules {
-                    for line in virtual_routes.to_string().lines() {
-                        writeln!(f, "  {line}")?;
-                    }
-                }
-            }
-            _ => {
-                writeln!(f, "Access Rules: None")?;
-            }
+        writeln!(f, "Disabled: {}", self.disabled)?;
+        writeln!(f, "Status: {:?}", self.status)?;
+
+        // ip
+        if self.current_state.ip == self.desired_state.ip {
+            writeln!(f, "IP: {}", self.current_state.ip)?;
+        } else {
+            writeln!(f, "IP:")?;
+            writeln!(f, "  Current: {}", self.current_state.ip)?;
+            writeln!(f, "  Desired: {}", self.desired_state.ip)?;
         }
-        match &self.routes {
-            Some(routes) if !routes.is_empty() => {
-                writeln!(f, "Routes:")?;
-                for line in routes.to_string().lines() {
-                    writeln!(f, "  {line}")?;
-                }
-            }
-            _ => {
-                writeln!(f, "Routes: None")?;
-            }
-        }
-        #[cfg(all(feature = "dns", any(target_os = "macos", target_os = "linux")))]
-        {
-            match &self.hostnames {
-                Some(hostnames) if !hostnames.is_empty() => {
-                    writeln!(f, "Hostnames:")?;
-                    if let Some(hostnames) = &self.hostnames {
-                        let mut entries: Vec<_> = hostnames.iter().collect();
-                        entries.sort_by(|a, b| a.0.cmp(b.0));
-                        for (ip_addr, hostname) in entries {
-                            writeln!(f, "  {ip_addr:<15} {hostname}")?;
-                        }
+
+        // access rules
+        let write_access_rules = |f: &mut std::fmt::Formatter,
+                                  access_rules_opt: &Option<EffectiveAccessRuleList>,
+                                  indent: &str|
+         -> Result<(), std::fmt::Error> {
+            match access_rules_opt {
+                Some(access_rules) if !access_rules.is_empty() => {
+                    for line in access_rules.to_string().lines() {
+                        writeln!(f, "{indent}{line}")?;
                     }
                 }
                 _ => {
-                    writeln!(f, "Hostnames: None")?;
+                    writeln!(f, "{indent}Empty")?;
                 }
+            }
+            Ok(())
+        };
+        if self.current_state.access_rules == self.desired_state.access_rules {
+            writeln!(f, "Access Rules:")?;
+            write_access_rules(f, &self.current_state.access_rules.applied, "  ")?;
+        } else {
+            writeln!(f, "Access Rules:")?;
+            writeln!(f, "  Current:")?;
+            write_access_rules(f, &self.current_state.access_rules.applied, "    ")?;
+            writeln!(f, "  Desired:")?;
+            write_access_rules(f, &self.desired_state.access_rules.applied, "    ")?;
+        }
+
+        // routes
+        let write_routes = |f: &mut std::fmt::Formatter,
+                            status: &AppliedStatus<EffectiveRoutingList>,
+                            indent: &str|
+         -> Result<(), std::fmt::Error> {
+            match &status.applied {
+                Some(routes) if !routes.is_empty() => {
+                    for line in routes.to_string().lines() {
+                        writeln!(f, "{indent}{line}")?;
+                    }
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{indent}Error: {}", error)?;
+                    }
+                }
+                Some(_) => {
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{indent}Empty (Error: {})", error)?;
+                    } else {
+                        writeln!(f, "{indent}Empty")?;
+                    }
+                }
+                _ => {
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{indent}None (Error: {})", error)?;
+                    } else {
+                        writeln!(f, "{indent}None")?;
+                    }
+                }
+            }
+            Ok(())
+        };
+        if self.current_state.routes == self.desired_state.routes {
+            writeln!(f, "Routes:")?;
+            write_routes(f, &self.current_state.routes, "  ")?;
+        } else {
+            writeln!(f, "Routes:")?;
+            writeln!(f, "  Current:")?;
+            write_routes(f, &self.current_state.routes, "    ")?;
+            writeln!(f, "  Desired:")?;
+            write_routes(f, &self.desired_state.routes, "    ")?;
+        }
+
+        // forwarding
+        if self.current_state.forwarding == self.desired_state.forwarding {
+            writeln!(f, "Forwarding: {}", self.current_state.forwarding)?;
+        } else {
+            writeln!(f, "Forwarding:")?;
+            writeln!(f, "  Current: {}", self.current_state.forwarding)?;
+            writeln!(f, "  Desired: {}", self.desired_state.forwarding)?;
+        }
+
+        #[cfg(all(
+            feature = "dns",
+            any(
+                target_os = "macos",
+                target_os = "linux",
+                target_os = "ios",
+                target_os = "android"
+            )
+        ))]
+        {
+            use crate::network::HostnameList;
+
+            // hostnames
+            let write_hostnames = |f: &mut std::fmt::Formatter,
+                                   hostnames_opt: &Option<HostnameList>,
+                                   indent: &str|
+             -> Result<(), std::fmt::Error> {
+                match hostnames_opt {
+                    Some(hostnames) if !hostnames.is_empty() => {
+                        for line in hostnames.to_string().lines() {
+                            writeln!(f, "{indent}{line}")?;
+                        }
+                    }
+                    _ => {
+                        writeln!(f, "{indent}Empty")?;
+                    }
+                }
+                Ok(())
+            };
+
+            if self.current_state.hostnames == self.desired_state.hostnames {
+                writeln!(f, "Hostnames:")?;
+                write_hostnames(f, &self.current_state.hostnames.applied, "  ")?;
+            } else {
+                writeln!(f, "Hostnames:")?;
+                writeln!(f, "  Current:")?;
+                write_hostnames(f, &self.current_state.hostnames.applied, "    ")?;
+                writeln!(f, "  Desired:")?;
+                write_hostnames(f, &self.desired_state.hostnames.applied, "    ")?;
             }
         }
 
