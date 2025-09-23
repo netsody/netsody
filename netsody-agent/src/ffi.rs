@@ -312,8 +312,9 @@ pub extern "C" fn netsody_agent_config_network_add(
             config_url: network_url_str.to_string(),
             disabled: false,
             name: None,
-            state: None,
-            tun_state: None,
+            current_state: Default::default(),
+            desired_state: Default::default(),
+            status: Default::default(),
         };
 
         // Add network to config

@@ -310,12 +310,11 @@ impl App {
     }
 
     fn network_ip(network: &NetworkStatus) -> String {
-        match (network.subnet, network.ip) {
-            (Some(subnet), Some(ip)) => {
-                format!("{0}/{1}", ip, subnet.prefix_len())
-            }
-            _ => "None".to_string(),
-        }
+        network
+            .current_state
+            .ip
+            .applied
+            .map_or("None".to_string(), |ip| ip.to_string())
     }
 
     /// Sanitizes text for use in menu items by only allowing safe characters

@@ -2,15 +2,16 @@ mod config;
 #[cfg(feature = "dns")]
 mod dns;
 mod error;
+mod firewall;
 mod housekeeping;
 mod inner;
+mod netif;
 #[cfg(any(target_os = "ios", target_os = "android"))]
 mod network_listener;
 mod node;
-mod routing;
-mod tun;
+mod router;
 
-use crate::network::Network;
+use crate::network::{AgentState, Network};
 pub use config::*;
 pub use error::*;
 pub use inner::*;
@@ -41,12 +42,6 @@ impl Agent {
         // bind node
         let (node, recv_buf_rx) = AgentInner::bind_node(&config).await?;
 
-        // create tun device
-        #[cfg(any(target_os = "ios", target_os = "android"))]
-        let tun_device = platform_dependent.tun_device.clone();
-        #[cfg(not(any(target_os = "ios", target_os = "android")))]
-        let tun_device = AgentInner::create_tun_device(&config)?;
-
         // options
         let channel_cap = util::get_env("CHANNEL_CAP", 512);
 
@@ -61,7 +56,6 @@ impl Agent {
             cancellation_token,
             node,
             recv_buf_rx,
-            tun_device,
             tun_tx.clone(),
             netsody_rx.clone(),
             config_path,
@@ -74,12 +68,6 @@ impl Agent {
 
         // node runner task
         join_set.spawn(AgentInner::node_runner(
-            inner.clone(),
-            inner.cancellation_token.clone(),
-        ));
-
-        // tun runner task
-        join_set.spawn(AgentInner::tun_runner(
             inner.clone(),
             inner.cancellation_token.clone(),
         ));
@@ -112,7 +100,7 @@ impl Agent {
 
     pub async fn shutdown(&self) {
         info!("Shutdown agent.");
-        self.inner.shutdown().await;
+        self.inner.shutdown(self.inner.clone()).await;
         info!("Agent shut down.");
     }
 
@@ -141,8 +129,9 @@ impl Agent {
             config_url: config_url.to_string(),
             disabled: false,
             name: None,
-            state: None,
-            tun_state: None,
+            desired_state: Default::default(),
+            current_state: Default::default(),
+            status: Default::default(),
         };
         networks.insert(url, network);
 
@@ -162,24 +151,26 @@ impl Agent {
         // check if network exists and remove it
         trace!("Locking networks to check if network exists");
         let mut networks = self.inner.networks.lock().await;
-        if !networks.contains_key(&url) {
-            return Err(Error::NetworkNotFound {
+        if let Some(network) = networks.get_mut(&url) {
+            network.desired_state = AgentState::default();
+
+            // shutdown network
+            trace!("Shutting down network");
+            self.inner
+                .apply_desired_state(self.inner.clone(), &url, &mut networks)
+                .await;
+            let _ = networks.remove(&url);
+
+            // persist configuration
+            self.inner.save_config(&networks).await?;
+
+            info!("Network '{}' removed successfully", config_url);
+            Ok(())
+        } else {
+            Err(Error::NetworkNotFound {
                 config_url: config_url.to_string(),
-            });
+            })
         }
-
-        // shutdown network
-        trace!("Shutting down network");
-        self.inner
-            .teardown_network(self.inner.clone(), url.clone(), &mut networks)
-            .await;
-        let _ = networks.remove(&url);
-
-        // persist configuration
-        self.inner.save_config(&networks).await?;
-
-        info!("Network '{}' removed successfully", config_url);
-        Ok(())
     }
 
     /// disables a network

@@ -1,10 +1,14 @@
 use crate::agent::Error;
 use crate::agent::inner::AgentInner;
-use crate::agent::routing::AgentRoutingInterface;
-use crate::network::{LocalNodeState, Network, TunState};
-use cfg_if::cfg_if;
-use ipnet_trie::IpnetTrie;
+use crate::network::{AgentState, AgentStateStatus, AppliedStatus, Network, NetworkConfig};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use http::Request;
+use http_body_util::BodyExt;
+use http_body_util::Empty;
+use ipnet::Ipv4Net;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::MutexGuard;
@@ -13,9 +17,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, instrument, trace, warn};
 use url::Url;
 
-/// Timeout in milliseconds for fetching network config.
-/// If a config cannot be received within this time, the fetch is considered failed.
-pub(crate) const CONFIG_FETCH_TIMEOUT: u64 = 5_000;
+/// Timeout in milliseconds for retrieving network config.
+/// If a config cannot be received within this time, the retrieval is considered failed.
+pub(crate) const CONFIG_RETRIEVE_TIMEOUT: u64 = 5_000;
 
 impl AgentInner {
     pub(crate) async fn housekeeping_runner(
@@ -78,16 +82,17 @@ impl AgentInner {
     ) {
         let mut save_config = false;
         if let Some(network) = networks.get_mut(&config_url) {
+            // retrieve network config to get (new) desired state
             match timeout(
-                Duration::from_millis(CONFIG_FETCH_TIMEOUT),
-                self.fetch_network_config(network.config_url.as_str()),
+                Duration::from_millis(CONFIG_RETRIEVE_TIMEOUT),
+                self.retrieve_network_config(network.config_url.as_str()),
             )
             .await
             {
                 Ok(Ok(config)) => {
-                    trace!("Network config fetched successfully");
+                    trace!("Network config retrieved successfully");
 
-                    // Update network name from config
+                    // update network name from config
                     if let (Some(new_name), Some(old_name)) = (
                         config.name.as_ref().filter(|s| !s.trim().is_empty()),
                         network.name.as_ref(),
@@ -102,89 +107,69 @@ impl AgentInner {
                     }
                     network.name = config.name.clone();
 
-                    let desired = match config.ip(&inner.id.pk) {
-                        Some(desired_ip) => {
-                            let desired_effective_access_rule_list = config
-                                .effective_access_rule_list(&inner.id.pk)
-                                .expect("Failed to get effective access rule");
-                            let desired_effective_routing_list = config
-                                .effective_routing_list(&inner.id.pk)
-                                .expect("Failed to get effective routing list");
-                            let desired_hostnames = config.hostnames(&inner.id.pk);
-                            let desired_forwarding = config.is_gateway(&inner.id.pk);
-                            Some(LocalNodeState {
-                                subnet: config.subnet,
-                                ip: desired_ip,
-                                access_rules: desired_effective_access_rule_list,
-                                routes: desired_effective_routing_list,
-                                hostnames: desired_hostnames,
-                                forwarding: desired_forwarding,
-                            })
-                        }
-                        None => None,
-                    };
-
-                    let current = network.state.as_ref().cloned();
-
-                    match (current, desired) {
-                        (Some(_), _) if network.disabled => {
-                            trace!("Network is disabled. We need to teardown everything.");
-                            self.teardown_network(inner.clone(), config_url, networks)
-                                .await;
-                        }
-                        (_, _) if network.disabled => {
-                            trace!("Network is disabled. Nothing to do.");
-                        }
-                        (Some(current), Some(desired)) if current == desired => {
-                            trace!("Network is already in desired state");
-                        }
-                        (Some(current), Some(desired))
-                            if current.tun_state() == desired.tun_state() =>
-                        {
-                            trace!("TUN is in desired state");
-                            self.update_routes_and_hostnames(
-                                inner.clone(),
-                                config_url,
-                                networks,
-                                Some(current),
-                                desired,
-                            )
-                            .await;
-                        }
-                        (current, Some(desired)) => {
-                            if current.is_some() {
-                                trace!(
-                                    "TUN is not in desired state. We need to teardown everything and then setup everything again."
-                                );
-                                self.teardown_network(inner.clone(), config_url.clone(), networks)
-                                    .await;
-                            } else {
-                                trace!("TUN device does not exist. We need to setup everything.");
+                    // create the desired state
+                    network.desired_state = if network.disabled {
+                        trace!("Network is disabled. We need to teardown everything.");
+                        network.status = AgentStateStatus::Disabled;
+                        AgentState::default()
+                    } else {
+                        match config.ip(&inner.id.pk) {
+                            Some(desired_ip) => {
+                                let desired_effective_access_rule_list = config
+                                    .effective_access_rule_list(&inner.id.pk)
+                                    .expect("Failed to get effective access rule");
+                                let desired_effective_routing_list = config
+                                    .effective_routing_list(&inner.id.pk)
+                                    .expect("Failed to get effective routing list");
+                                let desired_hostnames = config.hostnames(&inner.id.pk);
+                                let desired_forwarding = config.is_gateway(&inner.id.pk);
+                                AgentState {
+                                    ip: AppliedStatus::applied(
+                                        Ipv4Net::new(desired_ip, config.subnet.prefix_len())
+                                            .unwrap(),
+                                    ),
+                                    access_rules: AppliedStatus::applied(
+                                        desired_effective_access_rule_list,
+                                    ),
+                                    routes: AppliedStatus::applied(desired_effective_routing_list),
+                                    #[cfg(feature = "dns")]
+                                    hostnames: AppliedStatus::applied(desired_hostnames),
+                                    forwarding: AppliedStatus::applied(desired_forwarding),
+                                }
                             }
-                            self.setup_network(
-                                inner.clone(),
-                                config_url,
-                                networks,
-                                current,
-                                desired,
-                            )
-                            .await;
+                            None => {
+                                trace!("I'm not member of this network.");
+                                network.status = AgentStateStatus::NotAMemberError;
+                                AgentState::default()
+                            }
                         }
-                        (_, None) => {
-                            trace!("I'm not part of this network.");
-                            self.teardown_network(inner.clone(), config_url, networks)
-                                .await;
-                        }
-                    }
+                    };
                 }
                 Ok(Err(e)) => {
-                    warn!("Failed to fetch network config: {}", e);
+                    warn!("Failed to retrieve network config: {}", e);
+                    network.status = AgentStateStatus::RetrieveConfigError(format!("{}", e));
                 }
                 Err(_) => {
                     warn!(
-                        "Timeout of {} ms exceeded while attempting to fetch network config hostname",
-                        CONFIG_FETCH_TIMEOUT
+                        "Timeout of {} ms exceeded while attempting to retrieve network config",
+                        CONFIG_RETRIEVE_TIMEOUT
                     );
+                    network.status = AgentStateStatus::RetrieveConfigError(format!(
+                        "Timeout of {} ms exceeded while attempting to retrieve network config",
+                        CONFIG_RETRIEVE_TIMEOUT
+                    ));
+                }
+            }
+
+            // update network state to be aligned with desired state
+            self.apply_desired_state(inner.clone(), &config_url, networks)
+                .await;
+
+            if let Some(network) = networks.get_mut(&config_url) {
+                if network.current_state == network.desired_state {
+                    network.status = AgentStateStatus::Ok;
+                } else {
+                    network.status = AgentStateStatus::Pending;
                 }
             }
         }
@@ -197,286 +182,109 @@ impl AgentInner {
         }
     }
 
-    async fn update_routes_and_hostnames(
-        &self,
-        inner: Arc<AgentInner>,
-        config_url: Url,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-        current: Option<LocalNodeState>,
-        desired: LocalNodeState,
-    ) {
-        if let Some(network) = networks.get_mut(&config_url) {
-            // routes
-            let applied_routes = match current.as_ref().map(|state| state.routes.clone()) {
-                Some(current_routes) if current_routes == desired.routes => current_routes,
-                current_routes => {
-                    self.routing
-                        .update_network(
-                            current_routes,
-                            Some(desired.routes.clone()),
-                            inner.tun_device.clone(),
-                        )
-                        .await
-                }
-            };
+    pub(crate) async fn retrieve_network_config(&self, url: &str) -> Result<NetworkConfig, Error> {
+        trace!("Retrieving network config from: {}", url);
 
-            // forwarding
-            let current_forwarding = current
-                .as_ref()
-                .map(|state| state.forwarding)
-                .unwrap_or(false);
-            let applied_forwarding = if current_forwarding == desired.forwarding {
-                current_forwarding
-            } else if !desired.forwarding {
-                // We no longer need forwarding, but leave system setting unchanged
-                // as other programs might still need it
-                cfg_if! {
-                    if #[cfg(target_os = "linux")] {
-                        trace!("No longer configured as gateway. Leaving IP forwarding setting unchanged (other programs might need it).");
-                    }
-                    else {
-                        trace!("No longer configured as gateway.");
-                    }
-                }
-                desired.forwarding
-            } else {
-                // We need forwarding enabled
-                cfg_if! {
-                    if #[cfg(target_os = "linux")] {
-                        use sysctl::Sysctl;
-
-                        warn!("We're configured as a gateway. Ensure forwarding is enabled.");
-
-                        match sysctl::Ctl::new("net.ipv4.ip_forward") {
-                            Ok(ctl) => match ctl.value_string() {
-                                Ok(ref s) if s == "1" => {
-                                    trace!("IP forwarding is already enabled.");
-                                    desired.forwarding
-                                }
-                                Ok(_) => {
-                                    trace!("IP forwarding is not enabled. Enabling...");
-                                    match ctl.set_value_string("1") {
-                                        Ok(_) => {
-                                            trace!("Enabled IP forwarding");
-                                            desired.forwarding
-                                        },
-                                        Err(e) => {
-                                            error!("Failed to enable IP forwarding: {}", e);
-                                            current_forwarding
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("Failed to get value for Ctl '{}': {}", "net.ipv4.ip_forward", e);
-                                    current_forwarding
-                                }
-                            },
-                            Err(e) => {
-                                error!("Failed to construct Ctl for '{}': {}", "net.ipv4.ip_forward", e);
-                                current_forwarding
-                            }
-                        }
-                    }
-                    else {
-                        warn!("We're configured as a gateway. Forwarding is only supported on Linux.");
-                        current_forwarding
-                    }
-                }
-            };
-
-            network.state = Some(LocalNodeState {
-                subnet: desired.subnet,
-                ip: desired.ip,
-                access_rules: desired.access_rules.clone(),
-                routes: applied_routes,
-                forwarding: applied_forwarding,
-                hostnames: desired.hostnames.clone(),
-            });
-
-            // access rules
-            match current.as_ref().map(|state| state.access_rules.clone()) {
-                Some(current_access_rules) if current_access_rules == desired.access_rules => {}
-                current_access_rules => {
-                    trace!(
-                        "Access rules change: current=\n{}; desired=\n{}",
-                        current_access_rules.map_or("None".to_string(), |v| v.to_string()),
-                        desired.access_rules
-                    );
-                    self.update_tries(inner.clone(), networks).await;
-                }
+        let body = match url {
+            url if url.starts_with("http://") || url.starts_with("https://") => {
+                self.fetch_with_redirects(url).await?
             }
-
-            #[cfg(feature = "dns")]
-            {
-                use crate::agent::dns::AgentDnsInterface;
-
-                trace!("Update DNS");
-                match current.as_ref().map(|state| state.hostnames.clone()) {
-                    Some(current_hostnames) if current_hostnames == desired.hostnames => {}
-                    _ => {
-                        self.dns.update_network_hostnames(networks).await;
-                    }
-                }
-            }
-        }
-    }
-
-    pub(crate) async fn teardown_network(
-        &self,
-        inner: Arc<AgentInner>,
-        config_url: Url,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
-        if let Some(network) = networks.get_mut(&config_url) {
-            // routes
-            let routes = { network.state.as_ref().map(|state| state.routes.clone()) };
-            if let Some(routes) = routes {
-                self.routing
-                    .remove_network(routes, inner.tun_device.clone())
-                    .await;
-            }
-
-            network.state = None;
-
-            // tun device
-            if let Some(tun_state) = network.tun_state.as_ref() {
-                trace!("Remove network from TUN device by removing address");
-                cfg_if! {
-                    if #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))] {
-                        trace!(
-                            "No supported platform detected for manages TUN device addresses. Assuming we're running on a mobile platform where the network listener handles TUN address updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
-                        );
-                    } else {
-                        self.tun_device
-                            .remove_address(std::net::IpAddr::V4(tun_state.ip))
-                            .expect("Failed to add address");
-                    }
-                }
-                network.tun_state = None;
-            }
-
-            // access rules
-            self.update_tries(inner.clone(), networks).await;
-
-            #[cfg(feature = "dns")]
-            {
-                use crate::agent::dns::AgentDnsInterface;
-
-                trace!("Update DNS");
-                self.dns.update_all_hostnames(networks).await;
-            }
-        }
-    }
-
-    async fn setup_network(
-        &self,
-        inner: Arc<AgentInner>,
-        config_url: Url,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-        current: Option<LocalNodeState>,
-        desired: LocalNodeState,
-    ) {
-        if let Some(network) = networks.get_mut(&config_url) {
-            // tun device
-            trace!("Setup network by adding address to TUN device");
-            cfg_if! {
-                if #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))] {
-                    trace!(
-                        "No supported platform detected for manages TUN device addresses. Assuming we're running on a mobile platform where the network listener handles TUN address updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
-                    );
+            url if url.starts_with("file://") => {
+                // Handle file:// URLs properly, especially on Windows
+                let path_part = url.strip_prefix("file://").unwrap();
+                let path = if cfg!(target_os = "windows")
+                    && path_part.starts_with('/')
+                    && path_part.len() > 2
+                {
+                    // Remove the leading slash and ensure proper Windows path format
+                    // e.g., file:///C:/path becomes /C:/path, which needs to be C:/path
+                    &path_part[1..]
                 } else {
-                    inner
-                        .tun_device
-                        .add_address_v4(desired.ip, desired.subnet.prefix_len())
-                        .expect("Failed to add address");
-                }
+                    path_part
+                };
+                trace!("Reading file: {}", path);
+                fs::read_to_string(path)?
             }
-            network.tun_state = Some(TunState { ip: desired.ip });
-
-            self.update_routes_and_hostnames(inner.clone(), config_url, networks, current, desired)
-                .await;
-        }
+            _ => {
+                return Err(Error::ConfigParseError {
+                    reason: format!("Unsupported URL scheme: {url}"),
+                });
+            }
+        };
+        Ok(NetworkConfig::try_from(body.as_str())?)
     }
 
-    #[instrument(skip_all)]
-    pub(crate) async fn update_tries(
-        &self,
-        inner: Arc<AgentInner>,
-        networks: &MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
-        trace!("Rebuild tries");
-        let mut trie_tx: crate::agent::inner::TrieTx = IpnetTrie::new();
-        let mut trie_rx: crate::agent::inner::TrieRx = IpnetTrie::new();
+    async fn fetch_with_redirects(&self, url: &str) -> Result<String, Error> {
+        let mut current_url = url.to_string();
+        let mut redirect_count = 0;
+        const MAX_REDIRECTS: usize = 5;
 
-        for (config_url, network) in networks.iter() {
-            if let Some(access_rules) = network
-                .state
-                .as_ref()
-                .map(|state| state.access_rules.clone())
-            {
-                let (network_trie_tx, network_trie_rx) = access_rules.routing_tries();
-
-                trace!(
-                    network=?config_url,
-                    "Processing access rules for network"
-                );
-
-                // tx
-                for (dest, trie) in network_trie_tx.iter() {
-                    let mut dest_trie = IpnetTrie::new();
-                    trace!(dest_net=?dest, "Building TX trie for dest network");
-
-                    for (source, pk) in trie.iter() {
-                        let send_handle = self
-                            .node
-                            .send_handle(pk)
-                            .expect("Failed to create send handle");
-                        dest_trie.insert(source, send_handle);
-
-                        trace!(
-                            dest_net=?source,
-                            source_net=?dest,
-                            peer=?pk,
-                            "Added TX route: {} -> {} via peer {}",
-                            source,
-                            dest,
-                            pk
-                        );
-                    }
-                    trie_tx.insert(dest, dest_trie);
-                }
-
-                // rx
-                for (source, trie) in network_trie_rx.iter() {
-                    let mut source_trie = IpnetTrie::new();
-                    trace!(source_net=?source, "Building RX trie for source network");
-
-                    for (dest, pk) in trie.iter() {
-                        source_trie.insert(dest, *pk);
-
-                        trace!(
-                            source_net=?source,
-                            dest_net=?dest,
-                            peer=?pk,
-                            "Added RX route: {} -> {} from peer {} to TUN device",
-                            source,
-                            dest,
-                            pk
-                        );
-                    }
-                    trie_rx.insert(source, source_trie);
-                }
-            } else {
-                trace!(
-                    network=?network.config_url,
-                    "No access rules available for network"
-                );
+        loop {
+            if redirect_count >= MAX_REDIRECTS {
+                return Err(Error::ConfigParseError {
+                    reason: format!("Too many redirects (max {MAX_REDIRECTS}): {url}"),
+                });
             }
+
+            // parse URL and extract auth info if present
+            let parsed_url = url::Url::parse(&current_url)?;
+            trace!("Parsed URL: {}", parsed_url);
+            let mut request = Request::builder()
+                .uri(parsed_url.as_str())
+                .method("GET")
+                .header("Connection", "close")
+                .header("netsody-pk", self.id.pk.to_string());
+
+            // add basic auth header if username and password are present
+            let username = parsed_url.username();
+            let password = parsed_url.password();
+            if !username.is_empty() && password.is_some() {
+                trace!("Adding basic auth header: {}", username);
+                let auth = BASE64.encode(format!("{}:{}", username, password.unwrap()));
+                request = request.header("Authorization", format!("Basic {auth}"));
+            }
+
+            trace!("Building request");
+            let request = request.body(Empty::new())?;
+            trace!("Sending request");
+            let response = self.client.request(request).await?;
+            trace!("Received response");
+
+            let status = response.status();
+
+            // Handle redirects
+            if status.is_redirection()
+                && let Some(location) = response.headers().get("Location")
+                && let Ok(location_str) = location.to_str()
+            {
+                redirect_count += 1;
+                trace!(
+                    "Following redirect {}: {} -> {}",
+                    redirect_count, current_url, location_str
+                );
+
+                // Handle relative URLs
+                if location_str.starts_with("http://") || location_str.starts_with("https://") {
+                    current_url = location_str.to_string();
+                } else {
+                    // Resolve relative URL
+                    let base_url = url::Url::parse(&current_url)?;
+                    let redirect_url = base_url.join(location_str)?;
+                    current_url = redirect_url.to_string();
+                }
+                continue;
+            }
+
+            // Check for success
+            if !status.is_success() {
+                return Err(Error::ConfigParseError {
+                    reason: format!("HTTP request failed with status '{}'", status,),
+                });
+            }
+
+            let body_bytes = response.into_body().collect().await?.to_bytes();
+            trace!("Received body");
+            return Ok(String::from_utf8(body_bytes.to_vec())?);
         }
-
-        trace!("Tries rebuilt successfully.",);
-
-        inner.trie_tx.store(Arc::new(trie_tx));
-        inner.trie_rx.store(Arc::new(trie_rx));
     }
 }

@@ -1,3 +1,7 @@
+#[cfg(target_os = "macos")]
+mod macos;
+
+use crate::agent::AgentInner;
 use crate::network::Network;
 use cfg_if::cfg_if;
 use std::collections::HashMap;
@@ -8,6 +12,13 @@ use tun_rs::AsyncDevice;
 use url::Url;
 
 pub trait AgentDnsInterface {
+    async fn apply_desired_state(
+        &self,
+        _inner: Arc<AgentInner>,
+        config_url: &Url,
+        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
+    );
+
     #[allow(dead_code)]
     fn server_ip(&self) -> Option<Ipv4Addr> {
         None
@@ -16,20 +27,6 @@ pub trait AgentDnsInterface {
     #[allow(unused_variables)]
     fn is_server_ip(&self, ip: Ipv4Addr) -> bool {
         false
-    }
-
-    async fn shutdown(&self) {
-        // do nothing
-    }
-
-    #[allow(unused_variables)]
-    async fn update_network_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
-        // do nothing
-    }
-
-    #[allow(unused_variables)]
-    async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
-        // do nothing
     }
 
     #[allow(unused_variables)]
@@ -59,6 +56,9 @@ cfg_if! {
     else {
         // unsupported platform
         use crate::agent::PlatformDependent;
+        use crate::network::AppliedStatus;
+        use tracing::warn;
+
 
         pub struct AgentDns {}
 
@@ -68,6 +68,14 @@ cfg_if! {
             }
         }
 
-        impl AgentDnsInterface for AgentDns {}
+        impl AgentDnsInterface for AgentDns {
+            async fn apply_desired_state(&self, _inner: Arc<AgentInner>, _config_url: &Url, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
+                warn!("DNS is not supported on this platform. We can not update all networks.");
+                for (_, network) in networks.iter_mut() {
+                    network.current_state.hostnames =
+                        AppliedStatus::error("DNS not supported on this platform".to_string());
+                }
+            }
+        }
     }
 }
