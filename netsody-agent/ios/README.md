@@ -1,6 +1,6 @@
-# Building drasyl-agent for iOS
+# Building netsody-agent for iOS
 
-This document describes how to build the `drasyl-agent` for the iOS platform.
+This document describes how to build the `netsody-agent` for the iOS platform.
 
 ## Prerequisites
 
@@ -11,24 +11,24 @@ rustup target add aarch64-apple-ios
 rustup target add aarch64-apple-ios-sim
 ```
 
-## Building DrasylAgent.xcframework
+## Building NetsodyAgent.xcframework
 
-The following command builds the `DrasylAgent.xcframework` which provides a unified binary for both iOS device and simulator architectures. This framework can be directly integrated into Xcode projects.
+The following command builds the `NetsodyAgent.xcframework` which provides a unified binary for both iOS device and simulator architectures. This framework can be directly integrated into Xcode projects.
 
 ```bash
-./drasyl-agent/build-ios.sh
+./netsody-agent/build-ios.sh
 ```
 
 ### Build Options
 
 - **Debug build (default):**
   ```bash
-  ./drasyl-agent/build-ios.sh
+  ./netsody-agent/build-ios.sh
   ```
 
 - **Release build:**
   ```bash
-  ./drasyl-agent/build-ios.sh --release
+  ./netsody-agent/build-ios.sh --release
   ```
 
 ## Experimental tvOS Support
@@ -42,6 +42,6 @@ export DRASYL_SK="XXX"
 export DRASYL_POW="XXX"
 export DRASYL_NETWORK_URL="https://example.com/network.toml"
 
-./drasyl-agent/build-ios.sh --tvos
+./netsody-agent/build-ios.sh --tvos
 ```
 

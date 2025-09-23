@@ -24,8 +24,8 @@ pub enum Error {
     #[error("Failed to generate authentication token: {reason}")]
     TokenGenerationFailed { reason: String },
 
-    /// API status request failed to retrieve node status information
-    #[error("Failed to get node status: {reason}")]
+    /// API status request failed to retrieve agent status information
+    #[error("Failed to get agent status: {reason}")]
     StatusRequestFailed { reason: String },
 
     /// Failed to bind the REST API server to the specified address/port

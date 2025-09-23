@@ -77,8 +77,8 @@ pub extern "C" fn netsody_agent_init_logging() -> c_int {
 
     #[cfg(target_os = "tvos")]
     let subscriber = {
-        use tracing_subscriber::layer::SubscriberExt;
         use tracing_oslog::OsLogger;
+        use tracing_subscriber::layer::SubscriberExt;
 
         tracing_subscriber::registry()
             .with(tracing_subscriber::filter::LevelFilter::TRACE)
