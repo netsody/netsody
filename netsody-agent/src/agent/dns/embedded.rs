@@ -1,6 +1,8 @@
-use crate::agent::PlatformDependent;
 use crate::agent::dns::AgentDnsInterface;
-use crate::network::Network;
+#[cfg(target_os = "macos")]
+use crate::agent::dns::macos::{scutil_add, scutil_exists, scutil_remove};
+use crate::agent::{AgentInner, PlatformDependent};
+use crate::network::{AppliedStatus, Network};
 use arc_swap::ArcSwap;
 use etherparse::PacketBuilder;
 use hickory_proto::ProtoError;
@@ -12,26 +14,18 @@ use hickory_proto::xfer::Protocol;
 use hickory_resolver::config::*;
 use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageResponse, ZoneType};
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
-use hickory_server::store::forwarder::{ForwardAuthority, ForwardConfig};
 use hickory_server::store::in_memory::InMemoryAuthority;
-use ipnet::Ipv4Net;
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::SeqCst;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufWriter;
-use tokio::process::Command;
 use tokio::sync::MutexGuard;
 use tracing::{Level, debug, enabled, error, instrument, trace};
 use tun_rs::AsyncDevice;
 use url::Url;
-
-const SCUTIL_DNS_KEY: &str = "/Network/Service/Netsody/DNS";
 
 pub struct AgentDns {
     embedded_catalog: ArcSwap<Catalog>,
@@ -40,6 +34,7 @@ pub struct AgentDns {
 }
 
 impl AgentDns {
+    #[allow(unused_variables)]
     pub(crate) fn new(platform_dependent: Arc<PlatformDependent>) -> Self {
         #[cfg(target_os = "android")]
         trace!(
@@ -80,26 +75,31 @@ impl AgentDns {
         trace!("Building DNS catalog");
         let mut catalog = Catalog::new();
 
-        trace!("Using upstream servers: {:?}", upstream_servers);
+        #[cfg(target_os = "android")]
+        {
+            use hickory_server::store::forwarder::{ForwardAuthority, ForwardConfig};
 
-        // Add ForwardAuthority for root zone first (catches all queries not handled by specific zones)
-        // Only if upstream servers are configured
-        if !upstream_servers.is_empty() {
-            let root_name = Name::parse(".", None).unwrap();
-            let forward_config = ForwardConfig {
-                name_servers: upstream_servers.clone(),
-                options: Some(ResolverOpts::default()),
-            };
-            let forward_authority = ForwardAuthority::builder_tokio(forward_config)
-                .build()
-                .expect("Failed to create ForwardAuthority");
-            catalog.upsert(root_name.into(), vec![Arc::new(forward_authority)]);
-            trace!(
-                "Added ForwardAuthority for root zone with upstream DNS forwarding: {:?}",
-                upstream_servers
-            );
-        } else {
-            trace!("No upstream servers configured, skipping ForwardAuthority for root zone");
+            trace!("Using upstream servers: {:?}", upstream_servers);
+
+            // Add ForwardAuthority for root zone first (catches all queries not handled by specific zones)
+            // Only if upstream servers are configured
+            if !upstream_servers.is_empty() {
+                let root_name = Name::parse(".", None).unwrap();
+                let forward_config = ForwardConfig {
+                    name_servers: upstream_servers.clone(),
+                    options: Some(ResolverOpts::default()),
+                };
+                let forward_authority = ForwardAuthority::builder_tokio(forward_config)
+                    .build()
+                    .expect("Failed to create ForwardAuthority");
+                catalog.upsert(root_name.into(), vec![Arc::new(forward_authority)]);
+                trace!(
+                    "Added ForwardAuthority for root zone with upstream DNS forwarding: {:?}",
+                    upstream_servers
+                );
+            } else {
+                trace!("No upstream servers configured, skipping ForwardAuthority for root zone");
+            }
         }
 
         // Add local netsody.me zone
@@ -107,15 +107,14 @@ impl AgentDns {
         let mut authority = InMemoryAuthority::empty(origin.clone(), ZoneType::External, false);
 
         for network in networks.values() {
-            if let Some(hostnames) = network.state.as_ref().map(|state| state.hostnames.clone()) {
-                for (ip, hostname) in hostnames {
+            if let Some(hostnames) = &network.desired_state.hostnames.applied {
+                for (ip, hostname) in hostnames.0.iter() {
                     trace!("Adding DNS A record: {}.netsody.me -> {}", hostname, ip);
                     authority.upsert_mut(
                         Record::from_rdata(
-                            Name::parse(format!("{hostname}.netsody.me.").as_str(), None)
-                                .unwrap(),
+                            Name::parse(format!("{hostname}.netsody.me.").as_str(), None).unwrap(),
                             60,
-                            RData::A(A(ip)),
+                            RData::A(A(*ip)),
                         )
                         .set_dns_class(DNSClass::IN)
                         .clone(),
@@ -124,13 +123,135 @@ impl AgentDns {
                 }
             }
         }
-        catalog.upsert(authority.origin().clone().into(), vec![Arc::new(authority)]);
+        catalog.upsert(authority.origin().clone(), vec![Arc::new(authority)]);
 
         catalog
+    }
+
+    async fn update_all_networks(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
+        trace!("Update all hostnames");
+
+        // update DNS entries
+        self.embedded_catalog.store(Arc::new(
+            self.build_catalog(networks, &self.upstream_servers),
+        ));
+
+        // Update network states first
+        for (_, network) in networks.iter_mut() {
+            network.current_state.hostnames = network.desired_state.hostnames.clone();
+        }
+
+        // "assign" IP address to the DNS server if needed
+        let ip = networks.values().find_map(|network| {
+            if !network.disabled {
+                network.current_state.ip.applied
+            } else {
+                None
+            }
+        });
+
+        if let Some(ip) = ip {
+            // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
+            let broadcast = ip.broadcast();
+            // Decrement the broadcast address by 1 to get the DNS server IP
+            let dns_server = Ipv4Addr::from(u32::from(broadcast).saturating_sub(1));
+            trace!("DNS server IP calculated: {}", dns_server);
+
+            self.server_ip.store(dns_server.to_bits(), SeqCst);
+
+            #[cfg(target_os = "macos")]
+            {
+                // Check if any network needs DNS
+                let any_network_needs_dns = networks.values().any(|network| {
+                    !network.disabled && network.current_state.hostnames.applied.is_some()
+                });
+
+                // Check current DNS server state
+                let dns_server_exists = match scutil_exists().await {
+                    Ok(exists) => exists,
+                    Err(e) => {
+                        error!("Failed to check DNS server existence: {}", e);
+                        for (_, network) in networks.iter_mut() {
+                            network.current_state.hostnames =
+                                AppliedStatus::error(format!("Failed to check DNS server: {}", e));
+                        }
+                        return;
+                    }
+                };
+
+                if any_network_needs_dns && !dns_server_exists {
+                    // Need DNS server but it doesn't exist -> add it
+                    trace!("Adding DNS server because networks need DNS and server doesn't exist");
+                    let domains = vec!["netsody.me"];
+                    if let Err(e) = scutil_add(&dns_server, &domains).await {
+                        error!("Failed to add DNS server: {}", e);
+                        for (_, network) in networks.iter_mut() {
+                            network.current_state.hostnames =
+                                AppliedStatus::error(format!("Failed to add DNS server: {}", e));
+                        }
+                    }
+                } else if !any_network_needs_dns && dns_server_exists {
+                    // Don't need DNS server but it exists -> remove it
+                    trace!("Removing DNS server because no networks need DNS but server exists");
+                    if let Err(e) = scutil_remove().await {
+                        error!("Failed to remove DNS server: {}", e);
+                        for (_, network) in networks.iter_mut() {
+                            network.current_state.hostnames =
+                                AppliedStatus::error(format!("Failed to remove DNS server: {}", e));
+                        }
+                    }
+                }
+            }
+        } else {
+            // No IP available - set error on all networks that need DNS
+            for (_, network) in networks.iter_mut() {
+                if network.current_state.hostnames.applied.is_some() {
+                    network.current_state.hostnames = AppliedStatus::error(
+                        "Failed to add DNS server: No DNS server IP found".to_string(),
+                    );
+                }
+            }
+        }
     }
 }
 
 impl AgentDnsInterface for AgentDns {
+    async fn apply_desired_state(
+        &self,
+        _inner: Arc<AgentInner>,
+        config_url: &Url,
+        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
+    ) {
+        #[cfg(target_os = "macos")]
+        {
+            use tracing::warn;
+
+            // check if DNS server still exists
+            let server_exists = scutil_exists().await;
+            for (_, network) in networks.iter_mut() {
+                if network.current_state.hostnames.applied.is_some() && server_exists == Ok(false) {
+                    warn!("DNS server has been removed by externally.");
+                    network.current_state.hostnames = AppliedStatus::error(
+                        "DNS server has been removed by externally.".to_string(),
+                    );
+                }
+            }
+        }
+
+        // we do not support updating a single network. We have to update all networks.
+        if let Some(network) = networks.get_mut(config_url) {
+            trace!("Update network in DNS");
+
+            if network.current_state.hostnames != network.desired_state.hostnames {
+                trace!(
+                    "DNS mismatch: current={:?} desired={:?}",
+                    &network.current_state.hostnames, network.desired_state.hostnames
+                );
+                self.update_all_networks(networks).await;
+            }
+        }
+    }
+
     fn server_ip(&self) -> Option<Ipv4Addr> {
         Some(Ipv4Addr::from(self.server_ip.load(SeqCst)))
     }
@@ -145,59 +266,6 @@ impl AgentDnsInterface for AgentDns {
         }
         let server_ip = self.server_ip.load(SeqCst);
         server_ip != 0 && server_ip == ip.to_bits()
-    }
-
-    async fn shutdown(&self) {
-        trace!("Shutting down DNS");
-        #[cfg(target_os = "macos")]
-        {
-            if let Err(e) = scutil_remove().await {
-                error!("Failed to remove DNS configuration: {}", e);
-            }
-        }
-    }
-
-    async fn update_network_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
-        // we do not support updating hostnames for a single network
-        self.update_all_hostnames(networks).await;
-    }
-
-    async fn update_all_hostnames(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
-        trace!("Update all hostnames");
-
-        // update DNS entries
-        self.embedded_catalog.store(Arc::new(
-            self.build_catalog(networks, &self.upstream_servers),
-        ));
-
-        let mut i = 0;
-        for (_, network) in networks.iter() {
-            if !network.disabled
-                && let Some(state) = network.state.as_ref()
-                && i == 0
-            {
-                // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
-                let network = Ipv4Net::new(state.ip, state.subnet.prefix_len())
-                    .expect("Invalid IP/netmask combination");
-                let broadcast = network.broadcast();
-                // Decrement the broadcast address by 1 to get the DNS server IP
-                let dns_server = Ipv4Addr::from(u32::from(broadcast).saturating_sub(1));
-                trace!("DNS server IP calculated: {}", dns_server);
-
-                self.server_ip.store(dns_server.to_bits(), SeqCst);
-
-                #[cfg(target_os = "macos")]
-                {
-                    // Add DNS configuration with scutil
-                    let domains = vec!["netsody.me"];
-                    if let Err(e) = scutil_add(&dns_server, &domains).await {
-                        error!("Failed to add DNS configuration: {}", e);
-                    }
-                }
-
-                i += 1;
-            }
-        }
     }
 
     async fn on_packet(
@@ -441,124 +509,5 @@ impl ResponseHandler for ResponseHandle {
         self.dev.send(&packet).await?;
 
         Ok(info)
-    }
-}
-
-/// Adds DNS configuration using scutil (macOS).
-///
-/// # Arguments
-/// * `dns_ip` - The DNS server IP address
-/// * `domains` - List of domains to add as supplemental match domains
-///
-/// # Returns
-/// * `Ok(())` on success
-/// * `Err(String)` with error message on failure
-async fn scutil_add(dns_ip: &Ipv4Addr, domains: &[&str]) -> Result<(), String> {
-    trace!(
-        "Adding DNS configuration with scutil: IP={}, domains={:?}",
-        dns_ip, domains
-    );
-
-    let mut child = Command::new("scutil")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn scutil: {e}"))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or("Failed to open stdin for scutil".to_string())?;
-
-    let mut writer = BufWriter::new(&mut stdin);
-
-    // Build scutil script
-    let mut script = String::new();
-    script.push_str("d.init\n");
-    script.push_str(&format!("d.add ServerAddresses * {}\n", dns_ip));
-    script.push_str(&format!(
-        "d.add SupplementalMatchDomains * {}\n",
-        domains.join(" ")
-    ));
-    script.push_str("d.add SupplementalMatchDomainsNoSearch 0\n");
-    script.push_str(&format!("set State:{}\n", SCUTIL_DNS_KEY));
-    script.push_str("quit\n");
-
-    writer
-        .write_all(script.as_bytes())
-        .await
-        .map_err(|e| format!("Failed to write to scutil stdin: {e}"))?;
-    writer
-        .flush()
-        .await
-        .map_err(|e| format!("Failed to flush scutil stdin: {e}"))?;
-    drop(writer); // Close stdin so scutil can process input
-
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("Failed to wait for scutil: {e}"))?;
-
-    if output.status.success() {
-        trace!("scutil completed successfully.");
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "scutil failed with status {}: {}",
-            output.status, stderr
-        ))
-    }
-}
-
-/// Removes DNS configuration using scutil (macOS).
-///
-/// # Returns
-/// * `Ok(())` on success
-/// * `Err(String)` with error message on failure
-async fn scutil_remove() -> Result<(), String> {
-    trace!("Removing DNS configuration with scutil");
-
-    let mut child = Command::new("scutil")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn scutil: {e}"))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or("Failed to open stdin for scutil".to_string())?;
-
-    let mut writer = BufWriter::new(&mut stdin);
-
-    let script = format!("remove State:{}\nquit\n", SCUTIL_DNS_KEY);
-
-    writer
-        .write_all(script.as_bytes())
-        .await
-        .map_err(|e| format!("Failed to write to scutil stdin: {e}"))?;
-    writer
-        .flush()
-        .await
-        .map_err(|e| format!("Failed to flush scutil stdin: {e}"))?;
-    drop(writer); // important: close stdin so scutil can process input
-
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("Failed to wait for scutil: {e}"))?;
-
-    if output.status.success() {
-        trace!("scutil remove completed successfully.");
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "scutil remove failed with status {}: {}",
-            output.status, stderr
-        ))
     }
 }

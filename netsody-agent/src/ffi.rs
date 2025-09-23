@@ -1,4 +1,3 @@
-use crate::agent;
 use crate::agent::{Agent, AgentConfig, Error, PlatformDependent};
 use crate::network::Network;
 use crate::version_info::VersionInfo;
@@ -240,8 +239,9 @@ pub extern "C" fn netsody_agent_config_load_or_generate(
                     config_url: network_url.to_string(),
                     disabled: false,
                     name: None,
-                    state: None,
-                    tun_state: None,
+                    status: Default::default(),
+                    desired_state: Default::default(),
+                    current_state: Default::default(),
                 });
                 networks
             },
@@ -253,7 +253,10 @@ pub extern "C" fn netsody_agent_config_load_or_generate(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn netsody_agent_config_id_pk(config: &mut AgentConfigPtr, pk: *mut c_char) -> c_int {
+pub extern "C" fn netsody_agent_config_id_pk(
+    config: &mut AgentConfigPtr,
+    pk: *mut c_char,
+) -> c_int {
     if pk.is_null() {
         return ERR_IO;
     }
@@ -327,8 +330,9 @@ pub extern "C" fn netsody_agent_config_network_add(
             config_url: network_url_str.to_string(),
             disabled: false,
             name: None,
-            state: None,
-            tun_state: None,
+            current_state: Default::default(),
+            desired_state: Default::default(),
+            status: Default::default(),
         };
 
         // Add network to config
@@ -649,6 +653,7 @@ pub extern "C" fn netsody_agent_network_change_dns_server(
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[allow(unused_variables)]
 #[unsafe(no_mangle)]
 pub extern "C" fn netsody_agent_start(
     runtime: &mut RuntimePtr,
@@ -670,6 +675,7 @@ pub extern "C" fn netsody_agent_start(
         let agent_config: &AgentConfig = config.into();
 
         // Extract the TunDevice from the pointer
+        #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
         let tun_device: &Arc<TunDevice> = tun_device.into();
 
         match runtime.block_on(Agent::start(
@@ -680,7 +686,7 @@ pub extern "C" fn netsody_agent_start(
                 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
                 tun_device: tun_device.clone(),
                 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
-                network_listener: Box::new(move |change: agent::NetworkChange| {
+                network_listener: Box::new(move |change: crate::agent::NetworkChange| {
                     // Convert Rust NetworkChange to C NetworkChange
                     // Use CString to ensure proper null-termination and lifetime
                     let ips_str = change
@@ -794,7 +800,7 @@ pub extern "C" fn netsody_agent_tun_device_create(
     unsafe {
         let runtime: &Runtime = runtime.into();
 
-        match runtime.block_on(async { unsafe { TunDevice::from_fd(fd) } }) {
+        match runtime.block_on(async { TunDevice::from_fd(fd) }) {
             Ok(device) => {
                 let tun_device_ptr = TunDevicePtr::from(Arc::new(device));
                 *tun_device = Box::into_raw(Box::new(tun_device_ptr));

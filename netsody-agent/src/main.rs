@@ -395,7 +395,9 @@ fn show_status(
 
         match client.status().await {
             Ok(status) => {
-                println!("{status}");
+                // Ignore any I/O errors (including broken pipe when piping to head, tail, etc.)
+                use std::io::Write;
+                let _ = writeln!(std::io::stdout(), "{status}");
             }
             Err(e) => {
                 eprintln!("Failed to retrieve status: {e}");

@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU8, AtomicU64};
 
 // External crate imports
-use papaya::{HashMap as PapayaHashMap, HashMapRef, LocalGuard, OwnedGuard};
+use papaya::{HashMap as PapayaHashMap, HashMapRef, OwnedGuard};
 use tokio::net::UdpSocket;
 use tracing::trace;
 
@@ -335,9 +335,10 @@ impl NodePeer {
     ///
     /// # Returns
     /// Tuple of (path_key, path) for the best path, or `None` if no paths are available
+    #[cfg(feature = "prometheus")]
     pub(crate) fn best_path<'a>(
         &self,
-        guard: &'a LocalGuard<'a>,
+        guard: &'a papaya::LocalGuard<'a>,
     ) -> Option<(&PeerPathKey, &'a PeerPath)> {
         match self.best_path_key() {
             Some(path_key) => self.paths.get(path_key, guard).map(|path| (path_key, path)),
@@ -508,6 +509,7 @@ impl NodePeer {
     ///
     /// # Returns
     /// The median latency in microseconds, or `None` if no latency data is available
+    #[cfg(feature = "prometheus")]
     pub(crate) fn median_lat(&self) -> Option<u64> {
         let guard = self.paths.guard();
         self.best_path(&guard)

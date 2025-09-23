@@ -1,43 +1,33 @@
 use crate::agent::{AgentInner, is_netsody_control_packet};
+use crate::network::Network;
+use cfg_if::cfg_if;
 use etherparse::Ipv4HeaderSlice;
 use ipnet::IpNet;
 use p2p::util;
+use std::collections::HashMap;
+use std::io;
 use std::net::IpAddr;
 use std::sync::Arc;
+use tokio::sync::MutexGuard;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, enabled, error, trace, warn};
+use tun_rs::AsyncDevice as TunDevice;
+use url::Url;
 
-impl AgentInner {
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    pub(crate) fn create_tun_device(
-        config: &crate::agent::AgentConfig,
-    ) -> Result<Arc<tun_rs::AsyncDevice>, crate::agent::Error> {
-        // create tun device
-        // options
-        let mtu = config
-            .mtu
-            .unwrap_or(crate::agent::AgentConfig::default_mtu());
-
-        // create tun device
-        trace!("Create TUN device");
-        let mut dev_builder = tun_rs::DeviceBuilder::new().mtu(mtu);
-        if cfg!(any(target_os = "windows", target_os = "linux")) {
-            dev_builder = dev_builder.name("netsody");
-        } else if cfg!(target_os = "macos") {
-            dev_builder = dev_builder.name("utun112");
-        }
-        #[cfg(target_os = "linux")]
-        let tun_device = Arc::new(dev_builder.multi_queue(true).build_async()?);
-        #[cfg(not(target_os = "linux"))]
-        let tun_device = Arc::new(dev_builder.build_async()?);
-        trace!("TUN device created: {:?}", tun_device.name());
-
-        Ok(tun_device)
-    }
-
-    pub(crate) async fn tun_runner(
+pub trait AgentNetifInterface {
+    async fn apply_desired_state(
+        &self,
         inner: Arc<AgentInner>,
+        config_url: &Url,
+        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
+    );
+
+    async fn send(&self, buf: &[u8]) -> io::Result<usize>;
+
+    async fn tun_runner(
+        inner: Arc<AgentInner>,
+        tun_device: Arc<TunDevice>,
         cancellation_token: CancellationToken,
     ) -> Result<(), String> {
         let tun_tx = inner.tun_tx.clone();
@@ -48,7 +38,7 @@ impl AgentInner {
 
         let mut join_set = JoinSet::new();
 
-        let device = inner.tun_device.clone();
+        let device = tun_device.clone();
 
         // tun <-> Netsody packet processing
         #[allow(unused_variables)]
@@ -168,7 +158,7 @@ impl AgentInner {
                                                     }
                                                 }
                                                 else {
-                                                    trace!("No DNS query to DNS server. Payload: {}", bytes_to_hex(&buf));
+                                                    trace!("No DNS query to DNS server. Payload: {}", bytes_to_hex(buf));
                                                 }
                                             }
 
@@ -203,5 +193,44 @@ impl AgentInner {
 
         trace!("TUN runner done.");
         Ok(())
+    }
+}
+
+cfg_if! {
+    if #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))] {
+        mod desktop;
+        pub use desktop::AgentNetif;
+    }
+    else if #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))] {
+        mod mobile;
+        pub use mobile::AgentNetif;
+    }
+    else {
+        use tracing::warn;
+
+        // unsupported platform
+        pub struct AgentNetif {}
+
+        impl AgentNetif {
+            pub(crate) fn new() -> Self {
+                Self {}
+            }
+        }
+
+        impl AgentNetifInterface for AgentNetif {
+            #[allow(unused_variables)]
+            async fn apply_desired_state(
+                &self,
+                inner: Arc<AgentInner>,
+                config_url: &Url,
+                networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
+            ) {
+                warn!("NetIf is not supported on this platform. We can not update all networks.");
+                for (_, network) in networks.iter_mut() {
+                    network.current_state.ip =
+                        AppliedStatus::error("NetIf not supported on this platform".to_string());
+                }
+            }
+        }
     }
 }

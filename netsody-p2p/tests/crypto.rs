@@ -1,6 +1,6 @@
+use libsodium_sys as sodium;
 use netsody_p2p::crypto as new;
 use netsody_p2p::crypto::{Error, SessionKey, SigningPubKey, SigningSecKey};
-use libsodium_sys as sodium;
 use std::sync::Once;
 
 fn sodium_init_once() {

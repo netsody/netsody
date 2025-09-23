@@ -1,6 +1,6 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use netsody_p2p::crypto::{Error, sha256};
 use libsodium_sys as sodium;
+use netsody_p2p::crypto::{Error, sha256};
 
 fn sha256_libsodium(input: &[u8]) -> Result<[u8; 32], Error> {
     let mut hash = [0u8; 32];

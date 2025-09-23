@@ -1,11 +1,11 @@
 // benches/curve25519.rs
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use libsodium_sys as sodium;
 use netsody_p2p::crypto::{
     AgreementPubKey, AgreementSecKey, SessionKey, SigningPubKey, SigningSecKey,
     compute_kx_session_keys, convert_ed25519_pk_to_curve25519_pk,
     convert_ed25519_sk_to_curve25519_sk, generate_sign_keypair,
 };
-use libsodium_sys as sodium;
 
 fn sodium_init_once() {
     static ONCE: std::sync::Once = std::sync::Once::new();

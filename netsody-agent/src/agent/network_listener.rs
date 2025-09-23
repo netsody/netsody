@@ -21,13 +21,14 @@ impl AgentInner {
             .filter_map(|(url, network)| {
                 trace!(
                     "Processing network {}: routes={:?}",
-                    url,
-                    network.state.as_ref().map(|s| &s.routes)
+                    url, network.current_state.routes.applied
                 );
                 network
-                    .state
+                    .current_state
+                    .routes
+                    .applied
                     .as_ref()
-                    .map(|state| state.routes.iter().map(|(dest, _)| *dest))
+                    .map(|routes| routes.iter().map(|(dest, _)| *dest))
             })
             .flatten()
             .collect();
@@ -37,15 +38,10 @@ impl AgentInner {
             .iter()
             .filter_map(|(url, network)| {
                 trace!(
-                    "Processing network {}: ip={:?}, subnet={:?}",
-                    url,
-                    network.state.as_ref().map(|s| s.ip),
-                    network.state.as_ref().map(|s| s.subnet)
+                    "Processing network {}: ip={:?}",
+                    url, network.current_state.ip.applied
                 );
-                network
-                    .state
-                    .as_ref()
-                    .map(|state| Ipv4Net::new(state.ip, state.subnet.prefix_len()).unwrap())
+                network.current_state.ip.applied
             })
             .collect();
         trace!("Collected {} IPs: {:?}", all_ips.len(), all_ips);

@@ -181,7 +181,7 @@ impl NetworkConfig {
         Ok(EffectiveAccessRuleList(entries))
     }
 
-    pub(crate) fn hostnames(&self, my_pk: &PubKey) -> HashMap<Ipv4Addr, String> {
+    pub(crate) fn hostnames(&self, my_pk: &PubKey) -> HostnameList {
         let mut hostnames = HashMap::new();
         let mut entries: Vec<_> = self.nodes.values().collect();
         entries.sort_by(|a, b| a.ip.cmp(&b.ip));
@@ -190,7 +190,7 @@ impl NetworkConfig {
                 hostnames.insert(node.ip, node.hostname.clone());
             }
         }
-        hostnames
+        HostnameList(hostnames)
     }
 
     pub fn matching_policy(&self, source_pk: &PubKey, dest_pk: &PubKey) -> bool {
@@ -233,7 +233,6 @@ impl NetworkConfig {
                     let route = EffectiveRoute {
                         dest: *dest,
                         gw: node.ip,
-                        state: RouteState::Applied,
                     };
                     physical_route.insert(*dest, route);
                 } else {
@@ -663,50 +662,6 @@ impl Hash for NetworkPolicy {
 pub struct EffectiveRoute {
     pub(crate) dest: Ipv4Net,
     pub(crate) gw: Ipv4Addr,
-    state: RouteState,
-}
-
-impl EffectiveRoute {
-    pub(crate) fn as_pending_route(&self) -> Self {
-        Self {
-            dest: self.dest,
-            gw: self.gw,
-            state: RouteState::Pending,
-        }
-    }
-
-    pub(crate) fn as_applied_route(&self) -> Self {
-        Self {
-            dest: self.dest,
-            gw: self.gw,
-            state: RouteState::Applied,
-        }
-    }
-
-    pub(crate) fn as_removing_route(&self) -> Self {
-        Self {
-            dest: self.dest,
-            gw: self.gw,
-            state: RouteState::Removing,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, PartialOrd, Ord)]
-pub enum RouteState {
-    Pending,
-    Applied,
-    Removing,
-}
-
-impl fmt::Display for RouteState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            RouteState::Pending => write!(f, "PENDING"),
-            RouteState::Applied => write!(f, "APPLIED"),
-            RouteState::Removing => write!(f, "REMOVING"),
-        }
-    }
 }
 
 #[derive(PartialEq, Clone, Debug, Default, Serialize, Deserialize)]
@@ -732,19 +687,13 @@ impl EffectiveRoutingList {
 
 impl Display for EffectiveRoutingList {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{:<18} {:<15} {:<7}", "Destination", "Gateway", "State")?;
+        writeln!(f, "{:<18} {:<15}", "Destination", "Gateway")?;
 
         let mut entries: Vec<(&Ipv4Net, &EffectiveRoute)> = self.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
 
         for (dest, entry) in entries {
-            writeln!(
-                f,
-                "{:<18} {:<15} {:<7}",
-                dest.to_string(),
-                entry.gw.to_string(),
-                entry.state
-            )?;
+            writeln!(f, "{:<18} {:<15}", dest.to_string(), entry.gw.to_string(),)?;
         }
 
         Ok(())
@@ -766,6 +715,31 @@ fn is_valid_hostname(hostname: &str) -> bool {
     hostname
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+#[derive(PartialEq, Clone, Debug, Default, Serialize, Deserialize)]
+pub struct HostnameList(pub HashMap<Ipv4Addr, String>);
+
+impl HostnameList {
+    #[cfg(feature = "dns")]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Display for HostnameList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{:<15} Hostname", "IP")?;
+
+        let mut entries: Vec<_> = self.0.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+
+        for (ip_addr, hostname) in entries {
+            writeln!(f, "{:<15} {}.netsody.me", ip_addr, hostname)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
