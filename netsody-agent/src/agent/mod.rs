@@ -6,7 +6,7 @@ mod firewall;
 mod housekeeping;
 mod inner;
 mod netif;
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
 mod network_listener;
 mod node;
 mod router;
@@ -248,9 +248,9 @@ impl MessageSink for ChannelSink {
 }
 
 pub struct PlatformDependent {
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
     pub tun_device: Arc<tun_rs::AsyncDevice>,
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
     pub network_listener: NetworkListener,
     #[cfg(target_os = "android")]
     pub dns_servers: Vec<std::net::Ipv4Addr>,

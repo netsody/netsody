@@ -70,6 +70,16 @@ pub extern "C" fn netsody_agent_init_logging() -> c_int {
         subscriber.with(tracing_android::layer(env!("CARGO_PKG_NAME")).unwrap())
     };
 
+    #[cfg(target_os = "tvos")]
+    let subscriber = {
+        use tracing_oslog::OsLogger;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::filter::LevelFilter::TRACE)
+            .with(OsLogger::new(env!("CARGO_PKG_NAME"), "default"));
+    };
+
     match tracing::subscriber::set_global_default(subscriber) {
         Ok(_) => 0,
         Err(_) => ERR_IO,
@@ -683,7 +693,7 @@ pub extern "C" fn netsody_agent_start(
         let agent_config: &AgentConfig = config.into();
 
         // Extract the TunDevice from the pointer
-        #[cfg(any(target_os = "ios", target_os = "android"))]
+        #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
         let tun_device: &Arc<TunDevice> = tun_device.into();
 
         match runtime.block_on(Agent::start(
@@ -691,9 +701,9 @@ pub extern "C" fn netsody_agent_start(
             "".to_string(),
             "".to_string(),
             PlatformDependent {
-                #[cfg(any(target_os = "ios", target_os = "android"))]
+                #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
                 tun_device: tun_device.clone(),
-                #[cfg(any(target_os = "ios", target_os = "android"))]
+                #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
                 network_listener: Box::new(move |change: crate::agent::NetworkChange| {
                     // Convert Rust NetworkChange to C NetworkChange
                     // Use CString to ensure proper null-termination and lifetime

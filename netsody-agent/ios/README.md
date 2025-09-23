@@ -35,7 +35,13 @@ The following command builds the `NetsodyAgent.xcframework` which provides a uni
 
 Build for tvOS (requires nightly Rust):
 
+**Important:** On tvOS, the configuration cannot be stored in the filesystem due to platform restrictions. As a proof-of-concept hack, the configuration parameters must be provided as environment variables during the build process. These parameters are then embedded directly into the binary at compile time.
+
 ```bash
-cargo +nightly build -Z build-std=std,panic_abort --package netsody-agent --features ffi --target aarch64-apple-tvos --release
+export DRASYL_SK="XXX"
+export DRASYL_POW="XXX"
+export DRASYL_NETWORK_URL="https://example.com/network.toml"
+
+./netsody-agent/build-ios.sh --tvos
 ```
 

@@ -201,7 +201,7 @@ cfg_if! {
         mod desktop;
         pub use desktop::AgentNetif;
     }
-    else if #[cfg(any(target_os = "ios", target_os = "android"))] {
+    else if #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))] {
         mod mobile;
         pub use mobile::AgentNetif;
     }
