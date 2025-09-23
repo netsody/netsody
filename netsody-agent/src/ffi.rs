@@ -77,7 +77,7 @@ pub extern "C" fn netsody_agent_init_logging() -> c_int {
 
         tracing_subscriber::registry()
             .with(tracing_subscriber::filter::LevelFilter::TRACE)
-            .with(OsLogger::new(env!("CARGO_PKG_NAME"), "default"));
+            .with(OsLogger::new(env!("CARGO_PKG_NAME"), "default"))
     };
 
     match tracing::subscriber::set_global_default(subscriber) {
