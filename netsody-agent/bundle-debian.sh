@@ -40,6 +40,7 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
+Conflicts: drasyl
 Homepage: https://netsody.io
 Maintainer: Netsody Team <info@netsody.io>
 Description: Netsody provides secure, software-defined overlay networks, connecting all your devices.
