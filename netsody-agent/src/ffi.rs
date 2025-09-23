@@ -6,6 +6,7 @@ use std::os::raw::c_int;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use std::collections::HashMap;
+use cfg_if::cfg_if;
 use tokio::runtime::Runtime;
 use tracing::{Level, trace, warn};
 use tracing_subscriber::FmtSubscriber;
@@ -62,13 +63,27 @@ pub extern "C" fn netsody_agent_version() -> *const c_char {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn netsody_agent_init_logging() -> c_int {
-    // Default logging for other platforms
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_oslog::OsLogger;
+    // Set the global subscriber with TRACE level
+    let subscriber = FmtSubscriber::builder()
+        .with_ansi(false)
+        .with_max_level(Level::TRACE) // or Level::DEBUG, etc.
+        .finish();
 
-    let subscriber = tracing_subscriber::registry()
-        .with(tracing_subscriber::filter::LevelFilter::TRACE)
-        .with(OsLogger::new(env!("CARGO_PKG_NAME"), "default"));
+    #[cfg(target_os = "android")]
+    let subscriber = {
+        use tracing_subscriber::layer::SubscriberExt;
+        subscriber.with(tracing_android::layer(env!("CARGO_PKG_NAME")).unwrap())
+    };
+
+    #[cfg(target_os = "tvos")]
+    let subscriber = {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_oslog::OsLogger;
+
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::filter::LevelFilter::TRACE)
+            .with(OsLogger::new(env!("CARGO_PKG_NAME"), "default"));
+    };
 
     match tracing::subscriber::set_global_default(subscriber) {
         Ok(_) => 0,

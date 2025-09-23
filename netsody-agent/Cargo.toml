@@ -39,7 +39,6 @@ axum-extra = { version = "0.10.1", features = ["typed-header"] }
 chrono = { version = "0.4" }
 humantime = "2.3.0"
 cfg-if = "1.0.3"
-tracing-oslog = "=0.3.0"
 
 [target."cfg(target_os = \"windows\")".dependencies]
 net-route = "0.4.6"
@@ -67,6 +66,7 @@ hickory-proto = "0.25.2"
 hickory-server = { version = "0.25.2", features = ["resolver"] }
 hickory-resolver = "0.25.2"
 async-trait = "0.1.88"
+tracing-oslog = "0.3.0"
 
 [target."cfg(target_os = \"android\")".dependencies]
 tracing-android = "0.2.0"
