@@ -37,7 +37,7 @@ impl AgentNetifInterface for AgentNetif {
         let mut cancellation_token = self.cancellation_token.lock().await;
         if cancellation_token.is_none() {
             trace!("We need to create TUN device runner");
-            let token = CancellationToken::new();
+            let token = inner.cancellation_token.child_token();
             *cancellation_token = Some(token.clone());
 
             trace!("Start TUN device runner");

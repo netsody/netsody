@@ -61,7 +61,7 @@ impl AgentNetifInterface for AgentNetif {
                 trace!("TUN device created");
                 match new_tun_device {
                     Ok(new_tun_device) => {
-                        let token = CancellationToken::new();
+                        let token = inner.cancellation_token.child_token();
                         self.tun_device
                             .store(Some(Arc::new((new_tun_device.clone(), token.clone()))));
 
