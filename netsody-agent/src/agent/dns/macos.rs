@@ -75,13 +75,14 @@ pub(crate) async fn scutil_add(dns_ip: &Ipv4Addr, domains: &[&str]) -> Result<()
     }
 }
 
-/// Removes DNS configuration using scutil (macOS).
+/// Gets the DNS server IP address from the current configuration (macOS).
 ///
 /// # Returns
-/// * `Ok(())` on success
+/// * `Ok(Some(ip))` if DNS server exists and IP could be parsed
+/// * `Ok(None)` if DNS server doesn't exist
 /// * `Err(String)` with error message on failure
-pub(crate) async fn scutil_exists() -> Result<bool, String> {
-    trace!("Checking if DNS configuration exists with scutil");
+pub(crate) async fn scutil_get_dns_ip() -> Result<Option<Ipv4Addr>, String> {
+    trace!("Checking if DNS configuration exists with scutil and getting server IP");
 
     let mut child = Command::new("scutil")
         .stdin(Stdio::piped())
@@ -119,10 +120,59 @@ pub(crate) async fn scutil_exists() -> Result<bool, String> {
     // Check if the key exists by examining the output content
     // scutil returns "No such key" when the key doesn't exist
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let key_exists =
-        output.status.success() && !stdout_str.is_empty() && !stdout_str.contains("No such key");
 
-    Ok(key_exists)
+    if !output.status.success() || stdout_str.is_empty() || stdout_str.contains("No such key") {
+        trace!("DNS configuration does not exist");
+        return Ok(None);
+    }
+
+    // Parse the server IP address from the output
+    // The output format can be either:
+    // Format 1: ServerAddresses : * 192.168.1.1
+    // Format 2: ServerAddresses : <array> { 0 : 10.13.255.254 }
+
+    for line in stdout_str.lines() {
+        if line.contains("ServerAddresses") {
+            // Try format 1: ServerAddresses : * IP
+            if line.contains("*") {
+                if let Some(ip_start) = line.find("*") {
+                    let ip_part = &line[ip_start + 1..].trim();
+                    if let Ok(ip) = ip_part.parse::<Ipv4Addr>() {
+                        trace!("Found DNS server IP (format 1): {}", ip);
+                        return Ok(Some(ip));
+                    }
+                }
+            }
+            // Try format 2: ServerAddresses : <array> { 0 : IP }
+            else if line.contains("<array>") {
+                // Look for the next line that contains an IP address
+                let lines: Vec<&str> = stdout_str.lines().collect();
+                if let Some(current_line_idx) = lines.iter().position(|&l| l == line) {
+                    // Check the next few lines for IP address
+                    for i in 1..=3 {
+                        if let Some(next_line) = lines.get(current_line_idx + i) {
+                            let trimmed = next_line.trim();
+                            // Look for pattern like "0 : 10.13.255.254"
+                            if let Some(colon_pos) = trimmed.find(":") {
+                                let ip_part = &trimmed[colon_pos + 1..].trim();
+                                if let Ok(ip) = ip_part.parse::<Ipv4Addr>() {
+                                    trace!("Found DNS server IP (format 2): {}", ip);
+                                    return Ok(Some(ip));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If we reach here, the key exists but we couldn't parse the IP
+    trace!(
+        "DNS configuration exists but could not parse server IP from output: {}",
+        stdout_str
+    );
+    Ok(None)
 }
 
 pub(crate) async fn scutil_remove() -> Result<(), String> {
