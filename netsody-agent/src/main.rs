@@ -92,6 +92,9 @@ enum Commands {
         /// Path to authentication token file
         #[arg(long, value_name = "file", default_value = "auth.token")]
         token: PathBuf,
+        /// Include secrets in the output (default: secrets are masked)
+        #[arg(long)]
+        include_secrets: bool,
     },
     /// Shows the version of the Netsody agent
     Version,
@@ -178,7 +181,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         Commands::Run { config, token } => run_agent(config, token, None),
         #[cfg(target_os = "windows")]
         Commands::RunService { config, token } => run_agent_win(config, token),
-        Commands::Status { token } => show_status(token),
+        Commands::Status {
+            token,
+            include_secrets,
+        } => show_status(token, include_secrets),
         Commands::Version => show_version(),
         Commands::Add { token, url } => add_network(token, &url),
         Commands::Remove { token, url } => remove_network(token, &url),
@@ -386,6 +392,7 @@ fn show_version() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'stati
 
 fn show_status(
     token_path: PathBuf,
+    include_secrets: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let rt = Runtime::new().unwrap();
 
@@ -397,7 +404,8 @@ fn show_status(
             Ok(status) => {
                 // Ignore any I/O errors (including broken pipe when piping to head, tail, etc.)
                 use std::io::Write;
-                let _ = writeln!(std::io::stdout(), "{status}");
+                let status_text = status.to_string_with_secrets(include_secrets);
+                let _ = writeln!(std::io::stdout(), "{}", status_text);
             }
             Err(e) => {
                 eprintln!("Failed to retrieve status: {e}");

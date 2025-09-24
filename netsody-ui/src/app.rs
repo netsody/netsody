@@ -122,6 +122,17 @@ impl App {
                                             if let MenuItemKind::MenuItem(item) = kind {
                                                 let id = item.id();
                                                 match id {
+                                                    id if id.0.starts_with("network_status ") => {
+                                                        let tabs = if cfg!(target_os = "linux") {
+                                                            "\t\t"
+                                                        } else {
+                                                            "\t"
+                                                        };
+                                                        item.set_text(format!(
+                                                            "Status:{tabs}  {0}",
+                                                            network.status_text()
+                                                        ));
+                                                    }
                                                     id if id.0.starts_with("network_ip ") => {
                                                         let tabs = if cfg!(target_os = "linux") {
                                                             "\t\t\t"
@@ -227,6 +238,22 @@ impl App {
                 // separator
                 trace!("Adding separator");
                 if let Err(e) = submenu.append(&PredefinedMenuItem::separator()) {
+                    panic!("{e:?}");
+                }
+
+                // Status
+                let tabs = if cfg!(target_os = "linux") {
+                    "\t\t"
+                } else {
+                    "\t"
+                };
+                let item = MenuItem::with_id(
+                    format!("network_status {config_url_str}"),
+                    format!("Status:{tabs}  {0}", network.status_text()),
+                    true,
+                    None,
+                );
+                if let Err(e) = submenu.append(&item) {
                     panic!("{e:?}");
                 }
 
@@ -440,6 +467,17 @@ impl App {
         }
 
         let item = MenuItem::with_id("version_agent", "Agent:", true, None);
+        if let Err(e) = about.append(&item) {
+            panic!("{e:?}");
+        }
+
+        // copy agent status (masked by default)
+        let item = MenuItem::with_id(
+            "copy_agent_status",
+            "Copy Agent Status to Clipboard",
+            true,
+            None,
+        );
         if let Err(e) = about.append(&item) {
             panic!("{e:?}");
         }
@@ -944,6 +982,28 @@ impl ApplicationHandler<UserEvent> for App {
                             trace!("Copied network URL to clipboard: {}", url);
                         }
                     }
+                    id if id.0.starts_with("network_status ") => {
+                        let url = id.0.split_once(' ').unwrap().1;
+                        trace!("Copy network status for network: {}", url);
+
+                        if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
+                            if let Some(network) = status.networks.get(&Url::parse(url).unwrap()) {
+                                let network_status_string = network.to_string();
+
+                                if let Err(e) = self.clipboard.set_text(network_status_string) {
+                                    warn!("Failed to copy network status to clipboard: {}", e);
+                                } else {
+                                    trace!("Copied network status to clipboard: {}", url);
+                                }
+                            } else {
+                                trace!("Network not found in status");
+                            }
+                        } else {
+                            trace!("No status available");
+                        }
+                    }
                     id if id.0.starts_with("network_ip ") => {
                         let url = id.0.split_once(' ').unwrap().1;
                         trace!("Copy network IP for network: {}", url);
@@ -964,6 +1024,23 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                         } else {
                             trace!("No status available");
+                        }
+                    }
+                    id if id == MenuId::new("copy_agent_status") => {
+                        trace!("Copy Agent Status item clicked");
+
+                        if let Some(Ok(status)) =
+                            self.status.lock().expect("Mutex poisoned").as_ref()
+                        {
+                            let status_text = status.to_string_with_secrets(false);
+
+                            if let Err(e) = self.clipboard.set_text(status_text) {
+                                warn!("Failed to copy agent status to clipboard: {}", e);
+                            } else {
+                                trace!("Copied agent status to clipboard");
+                            }
+                        } else {
+                            trace!("No status available to copy");
                         }
                     }
                     id if id == MenuId::new("website") => {

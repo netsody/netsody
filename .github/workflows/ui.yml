@@ -69,7 +69,7 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu-')
 
       - name: Build netsody-ui
-        run: cargo build --verbose --package netsody-ui --release
+        run: cargo build --verbose --package netsody-ui --features dns --release
 
       - name: Bundle Netsody UI.app
         run: ./netsody-ui/bundle-macos.sh --release

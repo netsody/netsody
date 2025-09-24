@@ -31,3 +31,6 @@ objc2-core-foundation = { version = "0.3.0", default-features = false, features 
 
 [target."cfg(target_os = \"linux\")".dependencies]
 gtk = "0.18"
+
+[features]
+dns = ["agent/dns"]

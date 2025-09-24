@@ -121,6 +121,7 @@ impl AgentInner {
                                 let desired_effective_routing_list = config
                                     .effective_routing_list(&inner.id.pk)
                                     .expect("Failed to get effective routing list");
+                                #[cfg(feature = "dns")]
                                 let desired_hostnames = config.hostnames(&inner.id.pk);
                                 let desired_forwarding = config.is_gateway(&inner.id.pk);
                                 AgentState {

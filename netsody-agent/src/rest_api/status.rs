@@ -19,6 +19,7 @@ use p2p::peer::{NodePeer, Peer, PeerPathInner, PeerPathKey, PowStatus, SessionKe
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
@@ -97,8 +98,16 @@ pub struct Status {
     pub networks: HashMap<Url, NetworkStatus>,
 }
 
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Status {
+    /// Returns a string representation of the status with optional secret masking
+    pub fn to_string_with_secrets(&self, include_secrets: bool) -> String {
+        let mut output = String::new();
+        self.fmt(&mut output, include_secrets).unwrap();
+        output
+    }
+
+    /// Formats the status with optional secret masking
+    fn fmt(&self, f: &mut String, include_secrets: bool) -> std::fmt::Result {
         // version info
         let info = &self.version_info;
         writeln!(f, "Info:")?;
@@ -111,7 +120,11 @@ impl fmt::Display for Status {
         // opts
         writeln!(f, "Options:")?;
         writeln!(f, "  Identity:")?;
-        writeln!(f, "    Secret Key: {}", self.opts.id.sk)?;
+        if include_secrets {
+            writeln!(f, "    Secret Key: {}", self.opts.id.sk)?;
+        } else {
+            writeln!(f, "    Secret Key: ****")?;
+        }
         writeln!(f, "    Public Key: {}", self.opts.id.pk)?;
         writeln!(f, "    PoW: {}", self.opts.id.pow)?;
         writeln!(f, "  UDP:")?;
@@ -174,22 +187,27 @@ impl fmt::Display for Status {
                     .as_ref()
                     .unwrap_or(&"None".to_string())
             )?;
-            writeln!(
-                f,
-                "    User: {}",
-                self.opts
-                    .prometheus_user
-                    .as_ref()
-                    .unwrap_or(&"None".to_string())
-            )?;
-            writeln!(
-                f,
-                "    Password: {}",
-                self.opts
-                    .prometheus_pass
-                    .as_ref()
-                    .unwrap_or(&"None".to_string())
-            )?;
+            if include_secrets {
+                writeln!(
+                    f,
+                    "    User: {}",
+                    self.opts
+                        .prometheus_user
+                        .as_ref()
+                        .unwrap_or(&"None".to_string())
+                )?;
+                writeln!(
+                    f,
+                    "    Password: {}",
+                    self.opts
+                        .prometheus_pass
+                        .as_ref()
+                        .unwrap_or(&"None".to_string())
+                )?;
+            } else {
+                writeln!(f, "    User: ****")?;
+                writeln!(f, "    Password: ****")?;
+            }
         }
         writeln!(f, "  TUN MTU: {}", self.mtu)?;
         writeln!(f)?;
@@ -201,7 +219,7 @@ impl fmt::Display for Status {
         super_peers.sort_by(|a, b| a.0.cmp(b.0));
         for (pk, super_peer) in super_peers {
             writeln!(f, "  {pk}:")?;
-            for line in super_peer.to_string().lines() {
+            for line in super_peer.to_string_with_secrets(include_secrets).lines() {
                 writeln!(f, "    {line}")?;
             }
         }
@@ -210,7 +228,7 @@ impl fmt::Display for Status {
         node_peers.sort_by(|a, b| a.0.cmp(b.0));
         for (pk, node_peer) in node_peers {
             writeln!(f, "  {pk}:")?;
-            for line in node_peer.to_string().lines() {
+            for line in node_peer.to_string_with_secrets(include_secrets).lines() {
                 writeln!(f, "    {line}")?;
             }
         }
@@ -221,8 +239,11 @@ impl fmt::Display for Status {
         let mut networks: Vec<_> = self.networks.iter().collect();
         networks.sort_by(|a, b| a.0.cmp(b.0));
         for (config_url, network) in networks {
-            // writeln!(f, "  {}:", mask_url(config_url))?;
-            writeln!(f, "  {config_url}:")?;
+            if include_secrets {
+                writeln!(f, "  {config_url}:")?;
+            } else {
+                writeln!(f, "  {}:", mask_url(config_url))?; // Masked URL
+            }
             for line in network.to_string().lines() {
                 writeln!(f, "    {line}")?;
             }
@@ -270,8 +291,16 @@ impl SuperPeerStatus {
     }
 }
 
-impl fmt::Display for SuperPeerStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl SuperPeerStatus {
+    /// Returns a string representation with optional secret masking
+    pub fn to_string_with_secrets(&self, include_secrets: bool) -> String {
+        let mut output = String::new();
+        self.fmt(&mut output, include_secrets).unwrap();
+        output
+    }
+
+    /// Formats the status with optional secret masking
+    fn fmt(&self, f: &mut String, _include_secrets: bool) -> std::fmt::Result {
         writeln!(f, "Address: {}", self.addr)?;
         writeln!(f, "TCP:")?;
         writeln!(f, "  Port: {}", self.tcp_port)?;
@@ -368,8 +397,16 @@ impl NodePeerStatus {
     }
 }
 
-impl fmt::Display for NodePeerStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl NodePeerStatus {
+    /// Returns a string representation with optional secret masking
+    pub fn to_string_with_secrets(&self, include_secrets: bool) -> String {
+        let mut output = String::new();
+        self.fmt(&mut output, include_secrets).unwrap();
+        output
+    }
+
+    /// Formats the status with optional secret masking
+    fn fmt(&self, f: &mut String, _include_secrets: bool) -> std::fmt::Result {
         writeln!(f, "PoW State: {:?}", self.pow)?;
         // match &self.session_keys {
         //     Some(keys) => {
@@ -467,6 +504,22 @@ impl NetworkStatus {
             status: network.status.clone(),
             desired_state: network.desired_state.clone(),
             current_state: network.current_state.clone(),
+        }
+    }
+}
+
+impl NetworkStatus {
+    /// Returns a user-friendly string representation of the network status
+    pub fn status_text(&self) -> String {
+        match &self.status {
+            AgentStateStatus::Initializing => "Initializing".to_string(),
+            AgentStateStatus::Disabled => "Disabled".to_string(),
+            AgentStateStatus::Ok => "Ok".to_string(),
+            AgentStateStatus::Pending => "Pending".to_string(),
+            AgentStateStatus::RetrieveConfigError(error) => {
+                format!("Config Error - {}", error)
+            }
+            AgentStateStatus::NotAMemberError => "Error - Not a Member".to_string(),
         }
     }
 }
