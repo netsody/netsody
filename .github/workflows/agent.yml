@@ -73,7 +73,7 @@ jobs:
         if: success() && matrix.job_name == 'linux-arm64'
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build netsody-agent
         run: cargo build --verbose --package netsody-agent --features dns --release
