@@ -82,6 +82,8 @@ impl AgentInner {
     ) {
         let mut save_config = false;
         if let Some(network) = networks.get_mut(&config_url) {
+            let mut new_status = None;
+
             // retrieve network config to get (new) desired state
             match timeout(
                 Duration::from_millis(CONFIG_RETRIEVE_TIMEOUT),
@@ -110,7 +112,7 @@ impl AgentInner {
                     // create the desired state
                     network.desired_state = if network.disabled {
                         trace!("Network is disabled. We need to teardown everything.");
-                        network.status = AgentStateStatus::Disabled;
+                        new_status = Some(AgentStateStatus::Disabled);
                         AgentState::default()
                     } else {
                         match config.ip(&inner.id.pk) {
@@ -140,7 +142,7 @@ impl AgentInner {
                             }
                             None => {
                                 trace!("I'm not member of this network.");
-                                network.status = AgentStateStatus::NotAMemberError;
+                                new_status = Some(AgentStateStatus::NotAMemberError);
                                 AgentState::default()
                             }
                         }
@@ -148,17 +150,17 @@ impl AgentInner {
                 }
                 Ok(Err(e)) => {
                     warn!("Failed to retrieve network config: {}", e);
-                    network.status = AgentStateStatus::RetrieveConfigError(format!("{}", e));
+                    new_status = Some(AgentStateStatus::RetrieveConfigError(format!("{}", e)));
                 }
                 Err(_) => {
                     warn!(
                         "Timeout of {} ms exceeded while attempting to retrieve network config",
                         CONFIG_RETRIEVE_TIMEOUT
                     );
-                    network.status = AgentStateStatus::RetrieveConfigError(format!(
+                    new_status = Some(AgentStateStatus::RetrieveConfigError(format!(
                         "Timeout of {} ms exceeded while attempting to retrieve network config",
                         CONFIG_RETRIEVE_TIMEOUT
-                    ));
+                    )));
                 }
             }
 
@@ -167,7 +169,9 @@ impl AgentInner {
                 .await;
 
             if let Some(network) = networks.get_mut(&config_url) {
-                if network.current_state == network.desired_state {
+                if let Some(new_status) = new_status {
+                    network.status = new_status;
+                } else if network.current_state == network.desired_state {
                     network.status = AgentStateStatus::Ok;
                 } else {
                     network.status = AgentStateStatus::Pending;
