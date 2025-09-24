@@ -1,6 +1,6 @@
 use crate::agent::dns::AgentDnsInterface;
 #[cfg(target_os = "macos")]
-use crate::agent::dns::macos::{scutil_add, scutil_exists, scutil_remove};
+use crate::agent::dns::macos::{scutil_add, scutil_get_dns_ip, scutil_remove};
 use crate::agent::{AgentInner, PlatformDependent};
 use crate::network::{AppliedStatus, Network};
 use arc_swap::ArcSwap;
@@ -131,6 +131,107 @@ impl AgentDns {
     async fn update_all_networks(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
         trace!("Update all hostnames");
 
+        #[cfg(not(target_os = "macos"))]
+        let mut current_ip = if self.server_ip.load(SeqCst) != 0 {
+            Some(Ipv4Addr::from(self.server_ip.load(SeqCst)))
+        } else {
+            None
+        };
+        // For macOS: Get actual current DNS server IP from scutil
+        #[cfg(target_os = "macos")]
+        let mut current_ip = match scutil_get_dns_ip().await {
+            Ok(Some(ip)) => Some(ip),
+            Ok(None) => None,
+            Err(e) => {
+                error!("Failed to check DNS server existence: {}", e);
+                for (_, network) in networks.iter_mut() {
+                    network.current_state.hostnames =
+                        AppliedStatus::error(format!("Failed to check DNS server: {}", e));
+                }
+                self.embedded_catalog.store(Default::default());
+                self.server_ip.store(0, SeqCst);
+                return;
+            }
+        };
+
+        // Collect the DNS server IPs for all enabled networks
+        let network_dns_ips: Vec<Ipv4Addr> = networks
+            .values()
+            .filter(|network| !network.disabled)
+            .filter_map(|network| network.current_state.ip.applied)
+            .map(|network_ip| {
+                let broadcast = network_ip.broadcast();
+                // DNS server IP is the broadcast address minus 1
+                Ipv4Addr::from(u32::from(broadcast).saturating_sub(1))
+            })
+            .collect();
+
+        // Check if we need to remove the existing DNS server
+        // This is the case when it exists but is not in the expected DNS IPs
+        let needs_dns_removal = if let Some(existing_ip) = current_ip {
+            !network_dns_ips.contains(&existing_ip)
+        } else {
+            false
+        };
+
+        // Handle DNS server removal platform-specifically
+        if needs_dns_removal {
+            #[cfg(target_os = "macos")]
+            {
+                // On macOS: Remove the DNS server using scutil
+                trace!(
+                    "Removing DNS server because current IP is not in expected IPs: existing={:?}, expected={:?}",
+                    current_ip, network_dns_ips
+                );
+                if let Err(e) = scutil_remove().await {
+                    error!("Failed to remove DNS server: {}", e);
+                    for (_, network) in networks.iter_mut() {
+                        network.current_state.hostnames =
+                            AppliedStatus::error(format!("Failed to remove DNS server: {}", e));
+                    }
+                    return;
+                }
+            }
+
+            // On all platforms: Clear the server IP
+            trace!(
+                "Clearing DNS server IP because current IP is not in expected IPs: existing={:?}, expected={:?}",
+                current_ip, network_dns_ips
+            );
+            self.embedded_catalog.store(Default::default());
+            self.server_ip.store(0, SeqCst);
+            current_ip = None;
+        }
+
+        // Check if we need to add the DNS server
+        // This is the case when current_ip is None and we have network DNS IPs available
+        if current_ip.is_none()
+            && !network_dns_ips.is_empty()
+            && let Some(&dns_server) = network_dns_ips.first()
+        {
+            trace!(
+                "Adding DNS server because current IP is None: new_ip={}",
+                dns_server
+            );
+
+            #[cfg(target_os = "macos")]
+            {
+                // On macOS: Add the DNS server using scutil
+                let domains = vec!["netsody.me"];
+                if let Err(e) = scutil_add(&dns_server, &domains).await {
+                    error!("Failed to add DNS server: {}", e);
+                    for (_, network) in networks.iter_mut() {
+                        network.current_state.hostnames =
+                            AppliedStatus::error(format!("Failed to add DNS server: {}", e));
+                    }
+                    return;
+                }
+            }
+
+            // On all platforms: Store the new IP
+            self.server_ip.store(dns_server.to_bits(), SeqCst);
+        }
+
         // update DNS entries
         self.embedded_catalog.store(Arc::new(
             self.build_catalog(networks, &self.upstream_servers),
@@ -139,78 +240,6 @@ impl AgentDns {
         // Update network states first
         for (_, network) in networks.iter_mut() {
             network.current_state.hostnames = network.desired_state.hostnames.clone();
-        }
-
-        // "assign" IP address to the DNS server if needed
-        let ip = networks.values().find_map(|network| {
-            if !network.disabled {
-                network.current_state.ip.applied
-            } else {
-                None
-            }
-        });
-
-        if let Some(ip) = ip {
-            // Calculate DNS server IP: it's the IP address in the current subnet BEFORE the broadcast address
-            let broadcast = ip.broadcast();
-            // Decrement the broadcast address by 1 to get the DNS server IP
-            let dns_server = Ipv4Addr::from(u32::from(broadcast).saturating_sub(1));
-            trace!("DNS server IP calculated: {}", dns_server);
-
-            self.server_ip.store(dns_server.to_bits(), SeqCst);
-
-            #[cfg(target_os = "macos")]
-            {
-                // Check if any network needs DNS
-                let any_network_needs_dns = networks.values().any(|network| {
-                    !network.disabled && network.current_state.hostnames.applied.is_some()
-                });
-
-                // Check current DNS server state
-                let dns_server_exists = match scutil_exists().await {
-                    Ok(exists) => exists,
-                    Err(e) => {
-                        error!("Failed to check DNS server existence: {}", e);
-                        for (_, network) in networks.iter_mut() {
-                            network.current_state.hostnames =
-                                AppliedStatus::error(format!("Failed to check DNS server: {}", e));
-                        }
-                        return;
-                    }
-                };
-
-                if any_network_needs_dns && !dns_server_exists {
-                    // Need DNS server but it doesn't exist -> add it
-                    trace!("Adding DNS server because networks need DNS and server doesn't exist");
-                    let domains = vec!["netsody.me"];
-                    if let Err(e) = scutil_add(&dns_server, &domains).await {
-                        error!("Failed to add DNS server: {}", e);
-                        for (_, network) in networks.iter_mut() {
-                            network.current_state.hostnames =
-                                AppliedStatus::error(format!("Failed to add DNS server: {}", e));
-                        }
-                    }
-                } else if !any_network_needs_dns && dns_server_exists {
-                    // Don't need DNS server but it exists -> remove it
-                    trace!("Removing DNS server because no networks need DNS but server exists");
-                    if let Err(e) = scutil_remove().await {
-                        error!("Failed to remove DNS server: {}", e);
-                        for (_, network) in networks.iter_mut() {
-                            network.current_state.hostnames =
-                                AppliedStatus::error(format!("Failed to remove DNS server: {}", e));
-                        }
-                    }
-                }
-            }
-        } else {
-            // No IP available - set error on all networks that need DNS
-            for (_, network) in networks.iter_mut() {
-                if network.current_state.hostnames.applied.is_some() {
-                    network.current_state.hostnames = AppliedStatus::error(
-                        "Failed to add DNS server: No DNS server IP found".to_string(),
-                    );
-                }
-            }
         }
     }
 }
@@ -227,9 +256,9 @@ impl AgentDnsInterface for AgentDns {
             use tracing::warn;
 
             // check if DNS server still exists
-            let server_exists = scutil_exists().await;
+            let server_exists = scutil_get_dns_ip().await;
             for (_, network) in networks.iter_mut() {
-                if network.current_state.hostnames.applied.is_some() && server_exists == Ok(false) {
+                if network.current_state.hostnames.applied.is_some() && server_exists == Ok(None) {
                     warn!("DNS server has been removed by externally.");
                     network.current_state.hostnames = AppliedStatus::error(
                         "DNS server has been removed by externally.".to_string(),
