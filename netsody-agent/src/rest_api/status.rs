@@ -547,30 +547,44 @@ impl fmt::Display for NetworkStatus {
 
         // access rules
         let write_access_rules = |f: &mut std::fmt::Formatter,
-                                  access_rules_opt: &Option<EffectiveAccessRuleList>,
+                                  status: &AppliedStatus<EffectiveAccessRuleList>,
                                   indent: &str|
          -> Result<(), std::fmt::Error> {
-            match access_rules_opt {
+            match &status.applied {
                 Some(access_rules) if !access_rules.is_empty() => {
                     for line in access_rules.to_string().lines() {
                         writeln!(f, "{indent}{line}")?;
                     }
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{indent}Error: {}", error)?;
+                    }
+                }
+                Some(_) => {
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{indent}Empty (Error: {})", error)?;
+                    } else {
+                        writeln!(f, "{indent}Empty")?;
+                    }
                 }
                 _ => {
-                    writeln!(f, "{indent}Empty")?;
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{indent}None (Error: {})", error)?;
+                    } else {
+                        writeln!(f, "{indent}None")?;
+                    }
                 }
             }
             Ok(())
         };
         if self.current_state.access_rules == self.desired_state.access_rules {
             writeln!(f, "Access Rules:")?;
-            write_access_rules(f, &self.current_state.access_rules.applied, "  ")?;
+            write_access_rules(f, &self.current_state.access_rules, "  ")?;
         } else {
             writeln!(f, "Access Rules:")?;
             writeln!(f, "  Current:")?;
-            write_access_rules(f, &self.current_state.access_rules.applied, "    ")?;
+            write_access_rules(f, &self.current_state.access_rules, "    ")?;
             writeln!(f, "  Desired:")?;
-            write_access_rules(f, &self.desired_state.access_rules.applied, "    ")?;
+            write_access_rules(f, &self.desired_state.access_rules, "    ")?;
         }
 
         // routes
@@ -638,17 +652,31 @@ impl fmt::Display for NetworkStatus {
 
             // hostnames
             let write_hostnames = |f: &mut std::fmt::Formatter,
-                                   hostnames_opt: &Option<HostnameList>,
+                                   status: &AppliedStatus<HostnameList>,
                                    indent: &str|
              -> Result<(), std::fmt::Error> {
-                match hostnames_opt {
+                match &status.applied {
                     Some(hostnames) if !hostnames.is_empty() => {
                         for line in hostnames.to_string().lines() {
                             writeln!(f, "{indent}{line}")?;
                         }
+                        if let Some(error) = &status.error {
+                            writeln!(f, "{indent}Error: {}", error)?;
+                        }
+                    }
+                    Some(_) => {
+                        if let Some(error) = &status.error {
+                            writeln!(f, "{indent}Empty (Error: {})", error)?;
+                        } else {
+                            writeln!(f, "{indent}Empty")?;
+                        }
                     }
                     _ => {
-                        writeln!(f, "{indent}Empty")?;
+                        if let Some(error) = &status.error {
+                            writeln!(f, "{indent}None (Error: {})", error)?;
+                        } else {
+                            writeln!(f, "{indent}None")?;
+                        }
                     }
                 }
                 Ok(())
@@ -656,13 +684,13 @@ impl fmt::Display for NetworkStatus {
 
             if self.current_state.hostnames == self.desired_state.hostnames {
                 writeln!(f, "Hostnames:")?;
-                write_hostnames(f, &self.current_state.hostnames.applied, "  ")?;
+                write_hostnames(f, &self.current_state.hostnames, "  ")?;
             } else {
                 writeln!(f, "Hostnames:")?;
                 writeln!(f, "  Current:")?;
-                write_hostnames(f, &self.current_state.hostnames.applied, "    ")?;
+                write_hostnames(f, &self.current_state.hostnames, "    ")?;
                 writeln!(f, "  Desired:")?;
-                write_hostnames(f, &self.desired_state.hostnames.applied, "    ")?;
+                write_hostnames(f, &self.desired_state.hostnames, "    ")?;
             }
         }
 

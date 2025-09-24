@@ -132,7 +132,7 @@ impl AgentRouterInterface for AgentRouter {
                     }
                 } else if network.desired_state.routes.applied.is_some() {
                     network.current_state.routes =
-                        AppliedStatus::error("TUN device does not exist1.".to_string());
+                        AppliedStatus::error("TUN device does not exist.".to_string());
                     return;
                 }
             }
@@ -158,10 +158,14 @@ impl AgentRouterInterface for AgentRouter {
                     );
 
                     trace!("Applied routes {}", &network.current_state.routes);
-                    network.current_state.routes = applied_routes;
+                    if network.desired_state.routes.applied.is_none() {
+                        network.current_state.routes = network.desired_state.routes.clone();
+                    } else {
+                        network.current_state.routes = applied_routes;
+                    }
                 } else if network.desired_state.routes.applied.is_some() {
                     network.current_state.routes =
-                        AppliedStatus::error("TUN device does not exist2.".to_string());
+                        AppliedStatus::error("TUN device does not exist.".to_string());
                 } else if network.desired_state.routes.applied.is_none() {
                     network.current_state.routes = network.desired_state.routes.clone();
                 }
