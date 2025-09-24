@@ -92,7 +92,7 @@ enum Commands {
         /// Path to authentication token file
         #[arg(long, value_name = "file", default_value = "auth.token")]
         token: PathBuf,
-        /// Include secrets in the output (default: secrets are masked)
+        /// Include secrets in the output [default: secrets are masked]
         #[arg(long)]
         include_secrets: bool,
     },
