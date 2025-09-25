@@ -140,7 +140,11 @@ impl AgentDns {
         // For macOS: Get actual current DNS server IP from scutil
         #[cfg(target_os = "macos")]
         let mut current_ip = match scutil_get_dns_ip().await {
-            Ok(Some(ip)) => Some(ip),
+            Ok(Some(ip)) => {
+                // ensure that stored IP is the same as the one returned by scutil
+                self.server_ip.store(ip.to_bits(), SeqCst);
+                Some(ip)
+            }
             Ok(None) => None,
             Err(e) => {
                 error!("Failed to check DNS server existence: {}", e);
