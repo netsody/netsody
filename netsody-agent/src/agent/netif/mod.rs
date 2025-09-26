@@ -139,7 +139,6 @@ pub trait AgentNetifInterface {
                                                 use crate::agent::dns::AgentDnsInterface;
                                                 use etherparse::ip_number::UDP;
                                                 use etherparse::UdpHeaderSlice;
-                                                use p2p::util::bytes_to_hex;
 
                                                 // filter DNS messages
                                                 trace!("Check for DNS query to DNS server");
@@ -157,9 +156,10 @@ pub trait AgentNetifInterface {
                                                         }
                                                     }
                                                 }
-                                                else {
-                                                    trace!("No DNS query to DNS server. Payload: {}", bytes_to_hex(buf));
-                                                }
+                                                // else {
+                                                //     use p2p::util::bytes_to_hex;
+                                                //     trace!("No DNS query to DNS server. Payload: {}", bytes_to_hex(buf));
+                                                // }
                                             }
 
                                             warn!(
