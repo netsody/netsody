@@ -55,42 +55,51 @@ impl AgentNetifInterface for AgentNetif {
 
         if any_network_needs_iface {
             // ensure tun device is there
-            if self.tun_device.load().is_none() {
-                trace!("We need to create a TUN device");
-                let new_tun_device = AgentNetif::create_tun_device(inner.mtu);
-                trace!("TUN device created");
-                match new_tun_device {
-                    Ok(new_tun_device) => {
-                        let token = inner.cancellation_token.child_token();
-                        self.tun_device
-                            .store(Some(Arc::new((new_tun_device.clone(), token.clone()))));
+            let tun_device = match self.tun_device.load().as_ref() {
+                Some(device_pair) => device_pair.0.clone(),
+                None => {
+                    trace!("We need to create a TUN device");
+                    let new_tun_device = AgentNetif::create_tun_device(inner.mtu);
+                    trace!("TUN device created");
+                    match new_tun_device {
+                        Ok(new_tun_device) => {
+                            let token = inner.cancellation_token.child_token();
+                            self.tun_device
+                                .store(Some(Arc::new((new_tun_device.clone(), token.clone()))));
 
-                        trace!("Start TUN device runner");
-                        let inner_clone = inner.clone();
-                        tokio::spawn(async move {
-                            let result =
-                                AgentNetif::tun_runner(inner_clone.clone(), new_tun_device, token)
-                                    .await;
+                            trace!("Start TUN device runner");
+                            let inner_clone = inner.clone();
+                            let tun_device_for_runner = new_tun_device.clone();
+                            tokio::spawn(async move {
+                                let result = AgentNetif::tun_runner(
+                                    inner_clone.clone(),
+                                    tun_device_for_runner,
+                                    token,
+                                )
+                                .await;
 
-                            if let Err(e) = result {
-                                error!("TUN runner failed: {}", e);
-                                inner_clone.cancellation_token.cancel();
-                            } else {
-                                trace!("TUN runner finished");
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        error!("Failed to create TUN device: {}", e);
-                        for (_, network) in networks.iter_mut() {
-                            network.current_state.ip =
-                                AppliedStatus::error(format!("Failed to create TUN device: {}", e));
+                                if let Err(e) = result {
+                                    error!("TUN runner failed: {}", e);
+                                    inner_clone.cancellation_token.cancel();
+                                } else {
+                                    trace!("TUN runner finished");
+                                }
+                            });
+                            new_tun_device
                         }
-                        return;
+                        Err(e) => {
+                            error!("Failed to create TUN device: {}", e);
+                            for (_, network) in networks.iter_mut() {
+                                network.current_state.ip = AppliedStatus::error(format!(
+                                    "Failed to create TUN device: {}",
+                                    e
+                                ));
+                            }
+                            return;
+                        }
                     }
                 }
-            }
-            let tun_device = self.tun_device.load().as_ref().unwrap().0.clone();
+            };
 
             if let Some(network) = networks.get_mut(config_url) {
                 // check if TUN device has wanted address
