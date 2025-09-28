@@ -3,7 +3,7 @@ mod client;
 mod error;
 mod network;
 mod server;
-mod status;
+pub(crate) mod status;
 
 pub use auth::*;
 pub use client::*;

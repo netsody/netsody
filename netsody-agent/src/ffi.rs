@@ -70,7 +70,7 @@ pub extern "C" fn netsody_agent_init_logging() -> c_int {
         subscriber.with(tracing_android::layer(env!("CARGO_PKG_NAME")).unwrap())
     };
 
-    #[cfg(target_os = "tvos")]
+    #[cfg(any(target_os = "ios", target_os = "tvos"))]
     let subscriber = {
         use tracing_oslog::OsLogger;
         use tracing_subscriber::layer::SubscriberExt;
@@ -839,6 +839,49 @@ pub extern "C" fn netsody_agent_tun_device_free(tun_device: *mut TunDevicePtr) {
         unsafe {
             let tun_device_ptr = Box::from_raw(tun_device);
             drop(tun_device_ptr);
+        }
+    }
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn netsody_agent_status(
+    runtime: &mut RuntimePtr,
+    agent: &mut AgentPtr,
+) -> *mut c_char {
+    trace!("FFI: Starting agent status request");
+
+    let runtime: &Runtime = runtime.into();
+    let agent: &Agent = agent.into();
+
+    trace!("FFI: Converted runtime and agent pointers");
+
+    // Generate status
+    let status_result: Result<String, String> = runtime.block_on(async {
+        let status = crate::rest_api::status::Status::from_agent(agent).await;
+        trace!("Status generated");
+
+        // Convert to string without secrets
+        let status_string = status.to_string_with_secrets(false);
+        trace!("Status converted to string without secrets");
+        Ok(status_string)
+    });
+
+    match status_result {
+        Ok(status_string) => {
+            trace!("FFI: Status request completed successfully");
+            let c_string = CString::new(status_string).unwrap_or_else(|_| {
+                CString::new("Status generation failed").expect("Failed to create error string")
+            });
+            c_string.into_raw()
+        }
+        Err(error_msg) => {
+            trace!("FFI: Status request failed: {}", error_msg);
+            let error_string = format!("Error: {}", error_msg);
+            let c_string = CString::new(error_string).unwrap_or_else(|_| {
+                CString::new("Unknown error occurred").expect("Failed to create error string")
+            });
+            c_string.into_raw()
         }
     }
 }

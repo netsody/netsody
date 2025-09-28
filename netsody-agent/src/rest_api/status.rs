@@ -31,7 +31,34 @@ use url::Url;
 impl RestApiServer {
     pub(crate) async fn status(State(agent): State<Arc<Agent>>, _: AuthToken) -> Json<Status> {
         trace!("Status request received");
+        let status = Status::from_agent(&agent).await;
+        trace!("Status request completed");
+        Json(status)
+    }
+}
 
+impl RestApiClient {
+    pub async fn status(&self) -> Result<Status, Error> {
+        self.get("/status").await
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Status {
+    pub version_info: VersionInfo,
+    // netsody-p2p
+    pub opts: NodeOpts,
+    default_route: PubKey,
+    super_peers: HashMap<PubKey, SuperPeerStatus>,
+    node_peers: HashMap<PubKey, NodePeerStatus>,
+    // netsody-agent
+    pub mtu: u16,
+    pub networks: HashMap<Url, NetworkStatus>,
+}
+
+impl Status {
+    /// Create a Status object from an Agent
+    pub async fn from_agent(agent: &crate::agent::Agent) -> Self {
         // opts
         let opts = agent.node().opts().clone();
 
@@ -64,7 +91,7 @@ impl RestApiServer {
         }
         trace!("Networks retrieved");
 
-        let status = Status {
+        Self {
             version_info: VersionInfo::new(),
             opts,
             default_route,
@@ -72,33 +99,9 @@ impl RestApiServer {
             node_peers,
             mtu,
             networks,
-        };
-        trace!("Status request completed");
-
-        Json(status)
+        }
     }
-}
 
-impl RestApiClient {
-    pub async fn status(&self) -> Result<Status, Error> {
-        self.get("/status").await
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Status {
-    pub version_info: VersionInfo,
-    // netsody-p2p
-    pub opts: NodeOpts,
-    default_route: PubKey,
-    super_peers: HashMap<PubKey, SuperPeerStatus>,
-    node_peers: HashMap<PubKey, NodePeerStatus>,
-    // netsody-agent
-    pub mtu: u16,
-    pub networks: HashMap<Url, NetworkStatus>,
-}
-
-impl Status {
     /// Returns a string representation of the status with optional secret masking
     pub fn to_string_with_secrets(&self, include_secrets: bool) -> String {
         let mut output = String::new();
