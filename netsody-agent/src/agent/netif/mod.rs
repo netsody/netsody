@@ -93,6 +93,36 @@ pub trait AgentNetifInterface {
                                             continue;
                                         }
 
+                                        // Check for loopback connections (source == destination)
+                                        if ip_hdr.source_addr() == ip_hdr.destination_addr() {
+                                            trace!(
+                                                src=?ip_hdr.source_addr(),
+                                                dst=?ip_hdr.destination_addr(),
+                                                "Loopback packet detected: {} -> {}, sending directly back to TUN device",
+                                                ip_hdr.source_addr(),
+                                                ip_hdr.destination_addr()
+                                            );
+
+                                            // For loopback, send the packet directly back to the TUN device
+                                            if let Err(e) = dev_clone.send(buf).await {
+                                                warn!(
+                                                    src=?ip_hdr.source_addr(),
+                                                    dst=?ip_hdr.destination_addr(),
+                                                    error=?e,
+                                                    "Failed to send loopback packet back to TUN device: {}", e
+                                                );
+                                            } else {
+                                                trace!(
+                                                    src=?ip_hdr.source_addr(),
+                                                    dst=?ip_hdr.destination_addr(),
+                                                    "Successfully sent loopback packet back to TUN device: {} -> {}",
+                                                    ip_hdr.source_addr(),
+                                                    ip_hdr.destination_addr()
+                                                );
+                                            }
+                                            continue;
+                                        }
+
                                         let dest = IpNet::from(IpAddr::V4(ip_hdr.destination_addr()));
                                         if let Some((dest_trie_entry_source, dest_trie)) = inner_clone.trie_tx.load().longest_match(&dest) {
                                             trace!(
