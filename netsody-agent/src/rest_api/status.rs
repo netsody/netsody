@@ -345,7 +345,9 @@ impl SuperPeerStatus {
                 .map_or("".to_string(), |p| p.to_string())
         )?;
         writeln!(f, "  Paths:")?;
-        for (key, path) in &self.udp_paths {
+        let mut sorted_paths: Vec<_> = self.udp_paths.iter().collect();
+        sorted_paths.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+        for (key, path) in sorted_paths {
             writeln!(f, "    {key}:")?;
             for line in format_path(path).lines() {
                 writeln!(f, "      {line}")?;
@@ -468,7 +470,9 @@ impl NodePeerStatus {
         )?;
         if !self.paths.is_empty() {
             writeln!(f, "Paths:")?;
-            for (key, path) in &self.paths {
+            let mut sorted_paths: Vec<_> = self.paths.iter().collect();
+            sorted_paths.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+            for (key, path) in sorted_paths {
                 writeln!(f, "  {key}:")?;
                 for line in format_path(path).lines() {
                     writeln!(f, "    {line}")?;
