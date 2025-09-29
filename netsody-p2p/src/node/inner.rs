@@ -28,7 +28,7 @@ pub struct NodeInner {
     pub(crate) network_id: NetworkId,
     coarse_timer: AtomicU64,
     pub(crate) peers_list: PeersList,
-    pub(crate) udp_bindings: ArcSwap<Vec<Arc<UdpBinding>>>,
+    pub udp_bindings: ArcSwap<Vec<Arc<UdpBinding>>>,
     pub(crate) agreement_sk: Option<AgreementSecKey>,
     pub(crate) agreement_pk: Option<AgreementPubKey>,
     pub(crate) send_handles: SendHandlesList,

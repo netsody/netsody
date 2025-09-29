@@ -159,7 +159,7 @@ pub use udp::*;
 /// }
 /// ```
 pub struct Node {
-    inner: Arc<NodeInner>,
+    pub inner: Arc<NodeInner>,
 }
 
 impl Node {

@@ -843,6 +843,29 @@ pub extern "C" fn netsody_agent_tun_device_free(tun_device: *mut TunDevicePtr) {
     }
 }
 
+#[cfg(target_os = "ios")]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn netsody_agent_cancel_udp_bindings(agent: &mut AgentPtr) -> c_int {
+    trace!("FFI: Starting UDP bindings cancellation");
+
+    let agent: &Agent = agent.into();
+
+    // Cancel all UDP bindings
+    trace!("FFI: Canceling all UDP bindings");
+    let udp_bindings = agent.inner.node.inner.udp_bindings.load();
+    trace!("FFI: Found {} UDP bindings", udp_bindings.len());
+
+    for udp_binding in udp_bindings.iter() {
+        trace!("FFI: Canceling UDP binding at {}", udp_binding.local_addr);
+        udp_binding.cancel_binding();
+    }
+
+    trace!("FFI: All UDP bindings canceled");
+    trace!("FFI: Operation successful");
+    0
+}
+
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn netsody_agent_status(
