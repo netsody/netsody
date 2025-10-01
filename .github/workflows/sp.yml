@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build netsody-sp
         run: cargo build --verbose --package netsody-sp --features prometheus --release
