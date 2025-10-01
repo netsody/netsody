@@ -309,7 +309,12 @@ impl SuperPeerStatus {
         writeln!(f, "  Port: {}", self.tcp_port)?;
         match &self.tcp_path {
             Some(path) => {
-                writeln!(f, "  Connection: Established")?;
+                // ACKs or HELLOs only occur after TCP connection has been established
+                if path.last_ack_time > 0 || path.unanswered_hello_since.is_some() {
+                    writeln!(f, "  Connection: Established")?;
+                } else {
+                    writeln!(f, "  Connection: Establishing")?;
+                }
                 for line in format_path(path).lines() {
                     writeln!(f, "  {line}")?;
                 }
