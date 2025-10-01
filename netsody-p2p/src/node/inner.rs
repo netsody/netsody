@@ -386,24 +386,17 @@ impl NodeInner {
         }
 
         if let Some(Peer::NodePeer(node_peer)) = self.peers_list.peers.pin().get(&unite.address) {
+            // Clear all existing UDP paths for this peer since UNITE indicates
+            // the peer likely switched networks and old direct connections may no longer work
+            trace!(peer = %unite.address, "Clearing all existing UDP paths due to UNITE message");
+            node_peer.clear_paths();
+
             let unite_endpoints: EndpointsList = unite.endpoints.into();
             let unite_endpoints: HashSet<Endpoint> = unite_endpoints.0;
-            let unite_endpoints = unite_endpoints
-                .into_iter()
-                .map(Endpoint::into)
-                .collect::<HashSet<_>>();
+            let unite_endpoints: HashSet<SocketAddr> =
+                unite_endpoints.into_iter().map(Endpoint::into).collect();
 
-            let existing_addrs: HashSet<SocketAddr> = node_peer
-                .paths()
-                .keys()
-                .map(|key| Into::<SocketAddr>::into(*key))
-                .collect();
-            let new_addrs: HashSet<SocketAddr> = unite_endpoints
-                .difference(&existing_addrs)
-                .copied()
-                .collect();
-
-            for new_addr in &new_addrs {
+            for new_addr in &unite_endpoints {
                 for udp_binding in self.udp_bindings().iter() {
                     // skip all endpoints in unite_endpoints whose ip addr is not in the same ip family as socket_ip
                     let local_addr = udp_binding.local_addr;
@@ -414,43 +407,39 @@ impl NodeInner {
 
                     let new_path_key = PeerPathKey((local_addr, *new_addr));
 
-                    if !node_peer.paths().contains_key(&new_path_key) {
-                        #[cfg(feature = "prometheus")]
-                        {
-                            use crate::prometheus::{
-                                PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-                            };
-                            PROMETHEUS_MESSAGES
-                                .with_label_values(&[
-                                    PROMETHEUS_LABEL_HELLO,
-                                    &unite.address.to_string(),
-                                    PROMETHEUS_LABEL_TX,
-                                ])
-                                .inc();
-                        }
-
-                        trace!(
-                            "Try to reach peer via new endpoint retrieved from UNITE: {new_addr}"
-                        );
-                        let path = PeerPath::new();
-                        let time = self.current_time();
-                        let hello = HelloNodePeerMessage::build(
-                            &self.network_id,
-                            &self.opts.id.pk,
-                            &self.opts.id.pow,
-                            node_peer.tx_key().as_ref(),
-                            &unite.address,
-                            time,
-                            node_peer.rx_short_id(),
-                        )?;
-
-                        // queue HELLO and sent it later, otherwise entry lock is held across an async call
-                        send_queue.push((hello, *new_addr, udp_binding.socket.clone()));
-
-                        path.hello_tx(time);
-
-                        node_peer.paths().insert(new_path_key, path);
+                    #[cfg(feature = "prometheus")]
+                    {
+                        use crate::prometheus::{
+                            PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
+                        };
+                        PROMETHEUS_MESSAGES
+                            .with_label_values(&[
+                                PROMETHEUS_LABEL_HELLO,
+                                &unite.address.to_string(),
+                                PROMETHEUS_LABEL_TX,
+                            ])
+                            .inc();
                     }
+
+                    trace!("Try to reach peer via new endpoint retrieved from UNITE: {new_addr}");
+                    let path = PeerPath::new();
+                    let time = self.current_time();
+                    let hello = HelloNodePeerMessage::build(
+                        &self.network_id,
+                        &self.opts.id.pk,
+                        &self.opts.id.pow,
+                        node_peer.tx_key().as_ref(),
+                        &unite.address,
+                        time,
+                        node_peer.rx_short_id(),
+                    )?;
+
+                    // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                    send_queue.push((hello, *new_addr, udp_binding.socket.clone()));
+
+                    path.hello_tx(time);
+
+                    node_peer.paths().insert(new_path_key, path);
                 }
             }
         }
