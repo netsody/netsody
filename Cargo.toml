@@ -14,7 +14,7 @@ tracing-subscriber = { version = "0.3.20", default-features = false, features = 
 tokio = { version = "1.47.1", features = ["rt-multi-thread", "net", "time", "macros", "sync", "process"] }
 tokio-util = "0.7.16"
 ahash = "0.8.12"
-thiserror = "2.0.16"
+thiserror = "2.0.17"
 serde = { version = "1.0", features = ["derive"] }
 derive_builder = "0.20.2"
 papaya = "0.2.3"
