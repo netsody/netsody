@@ -54,6 +54,8 @@ pub struct NodePeer {
     best_path_store: AtomicPtr<PeerPathKey>,
     /// Map of all known paths to this peer.
     pub paths: PapayaHashMap<PeerPathKey, PeerPath>,
+    /// Map of relayed paths through super peers (super peer pubkey -> path).
+    pub relayed_paths: PapayaHashMap<PubKey, PeerPath>,
     /// Short ID for receiving messages from this peer.
     pub rx_short_id: AtomicI32,
     /// Short ID for sending messages to this peer.
@@ -187,17 +189,44 @@ impl NodePeer {
     /// * `src` - Source address of the ACK
     /// * `hello_time` - Timestamp of the original HELLO message
     /// * `udp_socket` - UDP socket that received the ACK
+    /// * `relayed_ack` - Whether this ACK was relayed through a super peer
+    /// * `peers_list` - Reference to peers list to find super peers
     pub(crate) fn ack_rx(
         &self,
         time: u64,
         src: SocketAddr,
         hello_time: u64,
         udp_socket: Arc<UdpSocket>,
+        relayed_ack: bool,
+        peers_list: &crate::peer::PeersList,
     ) {
-        let key = Into::<PeerPathKey>::into((udp_socket.local_addr().unwrap(), src));
-        if let Some(path) = self.paths.pin().get(&key) {
-            path.ack_rx(time, src, hello_time);
-            self.update_best_path();
+        if relayed_ack {
+            // Find the super peer whose path matches the SRC address
+            let peers_guard = peers_list.peers.pin();
+            for (sp_pk, peer) in &peers_guard {
+                if let crate::peer::Peer::SuperPeer(super_peer) = peer {
+                    let udp_paths_guard = super_peer.udp_paths.guard();
+                    if super_peer
+                        .udp_paths
+                        .iter(&udp_paths_guard)
+                        .any(|(path_key, _)| path_key.remote_addr() == src)
+                    {
+                        // Update relayed path for this super peer
+                        if let Some(relayed_path) = self.relayed_paths.pin().get(sp_pk) {
+                            relayed_path.ack_rx(time, src, hello_time);
+                            tracing::trace!(%src, super_peer = %sp_pk, "Updated relayed path ACK from super peer");
+                        }
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Normal direct ACK
+            let key = Into::<PeerPathKey>::into((udp_socket.local_addr().unwrap(), src));
+            if let Some(path) = self.paths.pin().get(&key) {
+                path.ack_rx(time, src, hello_time);
+                self.update_best_path();
+            }
         }
     }
 

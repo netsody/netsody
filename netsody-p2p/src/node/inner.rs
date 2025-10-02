@@ -210,6 +210,7 @@ impl NodeInner {
                                     long_header,
                                     rx_key.as_ref(),
                                 )?;
+                                // FIXME: könnte auch via tcp empfangen worden sein
                                 self.on_node_peer_hello(
                                     src,
                                     response_buf,
@@ -322,10 +323,14 @@ impl NodeInner {
             udp_binding.clone().unwrap().socket.clone(),
         ));
 
-        // HELLO from unknown endpoint? peer might be behind symmetric NAT
+        // HELLO from unknown endpoint? Check if it's relayed or from symmetric NAT
         let key = (udp_binding.clone().unwrap().local_addr, src).into();
+        let relayed_hello = long_header.hop_count > 0;
         let hello_from_unknown_endpoint = !node_peer.paths().contains_key(&key);
-        if hello_from_unknown_endpoint {
+
+        if relayed_hello {
+            trace!(%src, hop_count = long_header.hop_count, "Received relayed HELLO from super peer, not creating new path");
+        } else if hello_from_unknown_endpoint {
             let candidate = PeerPath::new();
             candidate.hello_tx(time);
             node_peer.paths().insert(key, candidate);
@@ -528,8 +533,17 @@ impl NodeInner {
             return Err(Error::AckTooOld(message_age));
         }
 
+        let relayed_ack = long_header.hop_count > 0;
+
         // update peer information
-        node_peer.ack_rx(time, src, hello_time, udp_socket);
+        node_peer.ack_rx(
+            time,
+            src,
+            hello_time,
+            udp_socket,
+            relayed_ack,
+            &self.peers_list,
+        );
 
         Ok(())
     }
