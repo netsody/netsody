@@ -56,6 +56,8 @@ pub struct NodePeer {
     pub paths: PapayaHashMap<PeerPathKey, PeerPath>,
     /// Map of relayed paths through super peers (super peer pubkey -> path).
     pub relayed_paths: PapayaHashMap<PubKey, PeerPath>,
+    /// Atomic pointer to the best super peer's public key.
+    best_sp_store: AtomicPtr<PubKey>,
     /// Short ID for receiving messages from this peer.
     pub rx_short_id: AtomicI32,
     /// Short ID for sending messages to this peer.
@@ -77,6 +79,7 @@ impl NodePeer {
     /// * `my_agreement_sk` - Our agreement secret key for key exchange
     /// * `my_agreement_pk` - Our agreement public key for key exchange
     /// * `time` - Current timestamp
+    /// * `default_route` - Default super peer to use as fallback
     ///
     /// # Returns
     /// A new NodePeer instance or an error if creation fails
@@ -84,6 +87,7 @@ impl NodePeer {
     /// # Errors
     /// * [`Error::AgreementPkNotPresent`] - If agreement keys are missing when encryption is enabled
     /// * [`Error::Crypto`] - If cryptographic operations fail
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         pow: Option<&Pow>,
         pk: &PubKey,
@@ -92,6 +96,7 @@ impl NodePeer {
         my_agreement_sk: Option<AgreementSecKey>,
         my_agreement_pk: Option<AgreementPubKey>,
         time: u64,
+        default_route: &PubKey,
     ) -> Result<Self, Error> {
         let pow = if let Some(pow) = pow {
             // PoW given, we can validate it
@@ -130,6 +135,7 @@ impl NodePeer {
             session_keys,
             created_at: time,
             rx_short_id: AtomicI32::new(i32::from_be_bytes(short_id)),
+            best_sp_store: AtomicPtr::new(default_route as *const PubKey as *mut PubKey),
             ..Default::default()
         })
     }
@@ -252,6 +258,34 @@ impl NodePeer {
         self.best_path_store.store(best_path_ptr, SeqCst);
     }
 
+    /// Update the best relay based on current relayed path quality.
+    ///
+    /// This method finds the super peer with the lowest median latency among
+    /// reachable relayed paths and updates the internal best relay pointer accordingly.
+    ///
+    /// # Arguments
+    /// * `time` - Current timestamp
+    /// * `hello_timeout` - Timeout period in seconds
+    /// * `default_route` - Default super peer to use as fallback
+    pub(crate) fn update_best_relay(&self, time: u64, hello_timeout: u64, default_route: &PubKey) {
+        let best_sp_ptr = if let Some(best_sp_pk) = self
+            .relayed_paths
+            .pin()
+            .iter()
+            .filter(|(_, path)| path.is_reachable(time, hello_timeout))
+            .filter_map(|(sp_pk, path)| path.median_lat().map(|lat| (sp_pk, lat)))
+            .min_by_key(|&(_, lat)| lat)
+            .map(|(sp_pk, _)| sp_pk)
+        {
+            trace!(sp_pk = %best_sp_pk, "(New) best relay");
+            best_sp_pk as *const PubKey as *mut PubKey
+        } else {
+            trace!("No best relay, using default route");
+            default_route as *const PubKey as *mut PubKey
+        };
+        self.best_sp_store.store(best_sp_ptr, SeqCst);
+    }
+
     /// Get the transmission session key for this peer.
     ///
     /// # Returns
@@ -355,6 +389,15 @@ impl NodePeer {
         } else {
             Some(unsafe { &*ptr })
         }
+    }
+
+    /// Get the public key of the best super peer for this node peer.
+    ///
+    /// # Returns
+    /// Reference to the best super peer's public key
+    pub fn best_sp(&self) -> &PubKey {
+        let ptr = self.best_sp_store.load(SeqCst);
+        unsafe { &*ptr }
     }
 
     /// Get the best path to this peer.

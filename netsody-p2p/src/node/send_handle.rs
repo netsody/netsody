@@ -173,6 +173,7 @@ impl SendHandle {
                 inner.agreement_sk,
                 inner.agreement_pk,
                 inner.cached_time(),
+                inner.peers_list.default_route(),
             )?;
             inner
                 .peers_list

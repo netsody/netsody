@@ -241,10 +241,10 @@ impl NodeInner {
         let peers = self.peers_list.peers.pin();
 
         let default_route = self.peers_list.default_route();
-        let Peer::SuperPeer(super_peer) = peers.get(default_route).unwrap() else {
+        let Peer::SuperPeer(default_sp) = peers.get(default_route).unwrap() else {
             unreachable!()
         };
-        let sp_tcp_stream = super_peer.tcp_connection().as_ref().and_then(|tcp| {
+        let sp_tcp_stream = default_sp.tcp_connection().as_ref().and_then(|tcp| {
             tcp.stream_store
                 .load()
                 .as_ref()
@@ -258,28 +258,11 @@ impl NodeInner {
             let peer = peers.get(&peer_key);
 
             if let Some(Peer::NodePeer(node_peer)) = peer {
-                // Find the best super peer for this specific node peer
-                let best_super_peer = if !node_peer.relayed_paths.pin().is_empty() {
-                    // Use the super peer with the best relayed path
-                    node_peer
-                        .relayed_paths
-                        .pin()
-                        .iter()
-                        .filter(|(_, path)| path.is_reachable(self.cached_time(), self.opts.hello_timeout))
-                        .min_by_key(|(_, path)| path.median_lat().unwrap_or(u64::MAX))
-                        .and_then(|(sp_pk, _)| peers.get(sp_pk))
-                        .and_then(|peer| match peer {
-                            Peer::SuperPeer(sp) => Some(sp),
-                            _ => None,
-                        })
-                        .unwrap_or(super_peer) // Fallback to default route
-                } else {
-                    // Fallback to default route
-                    super_peer
+                let best_sp = node_peer.best_sp();
+                let Peer::SuperPeer(super_peer) = peers.get(best_sp).unwrap() else {
+                    unreachable!()
                 };
-
-                handle
-                    .update_state(node_peer.new_send_handle_state(inner.clone(), best_super_peer));
+                handle.update_state(node_peer.new_send_handle_state(inner.clone(), super_peer));
             } else {
                 handle.update_state(SendHandleState {
                     best_addr: Default::default(),
@@ -288,7 +271,7 @@ impl NodeInner {
                     tx_key: Default::default(),
                     short_id: Default::default(),
                     sp_tcp_stream: sp_tcp_stream.clone(),
-                    sp_udp_sockets: SendHandleState::sp_socket(super_peer, &inner.udp_bindings()),
+                    sp_udp_sockets: SendHandleState::sp_socket(default_sp, &inner.udp_bindings()),
                 });
             }
         });
@@ -324,6 +307,8 @@ impl NodeInner {
         peer_key: PubKey,
         node_peer: &NodePeer,
     ) -> Result<(), Error> {
+        let default_route = self.peers_list.default_route();
+
         // ensure peer has unique short id
         if node_peer.rx_short_id() == SHORT_ID_NONE {
             let guard = self.peers_list.rx_short_ids.guard();
@@ -503,6 +488,9 @@ impl NodeInner {
             node_peer.clear_paths();
             node_peer.clear_app_tx_rx();
         }
+
+        // Update best relay after potential changed default route or creation or clearing of relay paths
+        node_peer.update_best_relay(time, self.opts.hello_timeout, default_route);
 
         if !node_peer.is_reachable(time, self.opts.hello_timeout) {
             trace!("Node is not directly reachable.");

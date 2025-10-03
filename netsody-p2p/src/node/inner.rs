@@ -136,6 +136,7 @@ impl NodeInner {
                         self.agreement_sk,
                         self.agreement_pk,
                         self.cached_time(),
+                        self.peers_list.default_route(),
                     )?;
                     self.peers_list
                         .rx_short_ids

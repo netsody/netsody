@@ -372,7 +372,8 @@ pub(crate) struct NodePeerStatus {
     app_rx: u64,
     best_path: Option<PeerPathKey>,
     paths: HashMap<PeerPathKey, PeerPathInner>,
-    relayed_paths: HashMap<PubKey, PeerPathInner>,
+    relay_paths: HashMap<PubKey, PeerPathInner>,
+    best_relay: PubKey,
     tx_short_id: Option<ShortId>,
     rx_short_id: ShortId,
     // generated
@@ -388,7 +389,7 @@ impl NodePeerStatus {
             .map(|(path_key, path)| (*path_key, path.inner_store.load().as_ref().clone()))
             .collect();
 
-        let relayed_paths = node_peer
+        let relay_paths = node_peer
             .relayed_paths
             .pin()
             .iter()
@@ -408,7 +409,8 @@ impl NodePeerStatus {
             app_rx: node_peer.app_rx.load(SeqCst),
             best_path: node_peer.best_path_key().cloned(),
             paths,
-            relayed_paths,
+            relay_paths,
+            best_relay: *node_peer.best_sp(),
             rx_short_id: node_peer.rx_short_id(),
             tx_short_id: node_peer.tx_short_id(),
             reachable: node_peer.is_reachable(now, HELLO_TIMEOUT_DEFAULT),
@@ -495,18 +497,19 @@ impl NodePeerStatus {
         } else {
             writeln!(f, "Paths: None")?;
         }
-        if !self.relayed_paths.is_empty() {
-            writeln!(f, "Relayed Paths:")?;
-            let mut sorted_relayed_paths: Vec<_> = self.relayed_paths.iter().collect();
-            sorted_relayed_paths.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
-            for (sp_pk, path) in sorted_relayed_paths {
+        writeln!(f, "Best Relay: {}", self.best_relay)?;
+        if !self.relay_paths.is_empty() {
+            writeln!(f, "Relay Paths:")?;
+            let mut sorted_relay_paths: Vec<_> = self.relay_paths.iter().collect();
+            sorted_relay_paths.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+            for (sp_pk, path) in sorted_relay_paths {
                 writeln!(f, "  Super Peer {sp_pk}:")?;
                 for line in format_path(path).lines() {
                     writeln!(f, "    {line}")?;
                 }
             }
         } else {
-            writeln!(f, "Relayed Paths: None")?;
+            writeln!(f, "Relay Paths: None")?;
         }
         writeln!(
             f,
