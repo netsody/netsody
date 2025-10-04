@@ -57,6 +57,12 @@ struct LastHello {
 pub struct Peer {
     valid_pow: bool,
     session_keys: Option<SessionKeys>,
+    /// Tracks the last received TCP and UDP HELLO messages.
+    /// 
+    /// This is necessary to handle scenarios where we receive HELLOs via both
+    /// UDP and TCP simultaneously. In such cases, we prefer TCP connections
+    /// as they indicate that the node peer is not receiving ACKs via UDP,
+    /// suggesting it needs to fall back to TCP communication.
     last_tcp_hello_ptr: ArcSwapOption<LastHello>,
     last_udp_hello_ptr: ArcSwapOption<LastHello>,
 }
