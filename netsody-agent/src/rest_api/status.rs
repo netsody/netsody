@@ -344,12 +344,12 @@ impl SuperPeerStatus {
         writeln!(f, "UDP:")?;
         writeln!(
             f,
-            "  Best Direct Path: {}",
+            "  Best Path: {}",
             self.best_udp_path
                 .as_ref()
                 .map_or("None".to_string(), |p| p.to_string())
         )?;
-        writeln!(f, "  Direct Paths:")?;
+        writeln!(f, "  Paths:")?;
         let mut sorted_paths: Vec<_> = self.udp_paths.iter().collect();
         sorted_paths.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
         for (key, path) in sorted_paths {

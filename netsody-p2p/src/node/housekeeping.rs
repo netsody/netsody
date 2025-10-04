@@ -288,8 +288,10 @@ impl NodeInner {
             let time = self.current_time();
             match peer {
                 Peer::SuperPeer(super_peer) => {
-                    self.super_peer_housekeeping(inner, &endpoints, *peer_key, super_peer, time)
-                        .await?;
+                    self.super_peer_housekeeping(
+                        inner, &endpoints, *peer_key, super_peer, time, my_addrs,
+                    )
+                    .await?;
                 }
                 Peer::NodePeer(node_peer) => {
                     self.node_peer_housekeeping(time, *peer_key, node_peer)
@@ -514,6 +516,7 @@ impl NodeInner {
         peer_key: PubKey,
         super_peer: &SuperPeer,
         time: u64,
+        my_addrs: &[IpAddr],
     ) -> Result<(), Error> {
         // tcp connection required?
         if super_peer.establish_tcp_connection(time, self.opts.hello_timeout, self.opts.enforce_tcp)
@@ -550,8 +553,32 @@ impl NodeInner {
                 .any(|b| b.local_addr.eq(&key.local_addr()))
         });
 
+        // FIXME: we should only remove stale endpoints here, if remove addr no longer is in resolved and local address is not longer ours
         // remove stale endpoints
-        super_peer.remove_stale_udp_paths(time, self.opts.hello_timeout);
+        super_peer.remove_stale_udp_paths(time, self.opts.hello_timeout, my_addrs);
+
+        // TCP connection not longer required as a udp path has become reachable?
+        if !self.opts.enforce_tcp
+            && let Some(tcp_path) = super_peer.tcp_connection().as_ref()
+        {
+            // Check if we have at least one reachable UDP path before canceling TCP
+            let has_reachable_udp = super_peer
+                .udp_paths
+                .pin()
+                .values()
+                .any(|path| path.is_reachable(time, self.opts.hello_timeout));
+
+            if has_reachable_udp {
+                trace!(
+                    "TCP connection not longer required as a reachable UDP path has become available."
+                );
+                tcp_path.cancel_connection();
+            } else {
+                trace!(
+                    "TCP connection still required as no reachable UDP path has become available."
+                );
+            }
+        }
 
         match SuperPeer::lookup_host(super_peer.addr()).await {
             Ok(resolved_addrs) => super_peer.update_resolved_addrs(resolved_addrs),
