@@ -424,12 +424,17 @@ impl NodeInner {
                     }
 
                     // Try TCP first
-                    let mut tcp_success = false;
-                    if let Some(tcp_connection) = super_peer.tcp_connection().as_ref()
-                        && tcp_connection.has_stream()
-                        && let Some(stream) = tcp_connection.stream_store.load().as_ref()
-                    {
-                        if let Err(e) = self.send_super_peer_tcp(stream, hello.clone(), sp_pk).await
+                    if let Some(stream) = super_peer.tcp_connection().as_ref().and_then(|tcp| {
+                        tcp.stream_store
+                            .load()
+                            .as_ref()
+                            .map(std::clone::Clone::clone)
+                            .as_ref()
+                            .cloned()
+                    }) {
+                        if let Err(e) = self
+                            .send_super_peer_tcp(&stream, hello.clone(), sp_pk)
+                            .await
                         {
                             trace!(
                                 "Failed to send relayed HELLO via super peer TCP {}: {}",
@@ -440,43 +445,41 @@ impl NodeInner {
                                 "Sent relayed HELLO to node peer via super peer TCP {}",
                                 sp_pk
                             );
-                            tcp_success = true;
+                            continue;
                         }
                     } else {
                         trace!("No TCP connection/stream available to super peer {}", sp_pk);
                     }
 
                     // Fall forward to UDP if TCP failed
-                    if !tcp_success {
-                        let (local_addr, remote_addr) = {
-                            let udp_paths_guard = super_peer.udp_paths.guard();
-                            if let Some((path_key, _path)) =
-                                super_peer.best_udp_path(&udp_paths_guard)
-                            {
-                                (path_key.local_addr(), path_key.remote_addr())
-                            } else {
-                                warn!("No UDP path available to super peer {}", sp_pk);
-                                continue;
-                            }
-                        };
-
-                        if let Some(udp_socket) = self.udp_socket_for(&local_addr) {
-                            if let Err(e) = udp_socket.send_to(&hello, remote_addr).await {
-                                warn!(
-                                    "Failed to send relayed HELLO via super peer {} UDP local_addr={}: {}",
-                                    sp_pk,
-                                    local_addr, e
-                                );
-                            } else {
-                                trace!(
-                                    "Sent relayed HELLO to node peer via super peer {} UDP local_addr={}",
-                                    sp_pk,
-                                    local_addr
-                                );
-                            }
+                    let (local_addr, remote_addr) = {
+                        let udp_paths_guard = super_peer.udp_paths.guard();
+                        if let Some((path_key, _path)) = super_peer.best_udp_path(&udp_paths_guard)
+                        {
+                            (path_key.local_addr(), path_key.remote_addr())
                         } else {
-                            warn!("No UDP socket found for path local_addr={} for super peer {}", local_addr, sp_pk);
+                            warn!("No UDP path available to super peer {}", sp_pk);
+                            continue;
                         }
+                    };
+
+                    if let Some(udp_socket) = self.udp_socket_for(&local_addr) {
+                        if let Err(e) = udp_socket.send_to(&hello, remote_addr).await {
+                            warn!(
+                                "Failed to send relayed HELLO via super peer {} UDP local_addr={}: {}",
+                                sp_pk, local_addr, e
+                            );
+                        } else {
+                            trace!(
+                                "Sent relayed HELLO to node peer via super peer {} UDP local_addr={}",
+                                sp_pk, local_addr
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "No UDP socket found for path local_addr={} for super peer {}",
+                            local_addr, sp_pk
+                        );
                     }
                 }
             } else {

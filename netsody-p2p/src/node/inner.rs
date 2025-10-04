@@ -19,6 +19,9 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicPtr, AtomicU64};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
+use tokio::net::tcp::OwnedWriteHalf;
+use tokio::sync::Mutex;
+use tokio_util::codec::{FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, trace, warn};
 
@@ -123,6 +126,12 @@ impl NodeInner {
         // recipient
         if long_header.recipient == self.opts.id.pk {
             let mut send_queue: Vec<(Vec<u8>, SocketAddr, Arc<UdpSocket>)> = Vec::new();
+            // FIXME: eigener typ für Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>> ?
+            let mut tcp_send_queue: Vec<(
+                Vec<u8>,
+                PubKey,
+                Arc<Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>>>,
+            )> = Vec::new();
             {
                 let peers = self.peers_list.peers.pin();
                 let peer = if let Some(peer) = peers.get(&long_header.sender) {
@@ -233,6 +242,8 @@ impl NodeInner {
                                     &mut send_queue,
                                     node_peer,
                                     hello,
+                                    tcp_remote_peer,
+                                    &mut tcp_send_queue,
                                 )?;
                             }
                             MessageType::UNITE => {
@@ -254,6 +265,15 @@ impl NodeInner {
                 trace!("Sent msg to udp://{dst}.");
             }
 
+            // process tcp send queue
+            for (msg, dst, stream) in tcp_send_queue {
+                if let Err(e) = self.send_super_peer_tcp(&stream, msg, &dst).await {
+                    trace!("Failed to send msg to {} via TCP: {}", dst, e);
+                } else {
+                    trace!("Sent msg to {} via TCP", dst);
+                }
+            }
+
             Ok(())
         } else {
             Err(Error::MessageInvalidRecipient)
@@ -271,6 +291,12 @@ impl NodeInner {
         send_queue: &mut Vec<(Vec<u8>, SocketAddr, Arc<UdpSocket>)>,
         node_peer: &NodePeer,
         hello: &HelloNodePeerMessage,
+        tcp_remote_peer: Option<PubKey>,
+        tcp_send_queue: &mut Vec<(
+            Vec<u8>,
+            PubKey,
+            Arc<Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>>>,
+        )>,
     ) -> Result<(), Error> {
         log_hello_node_peer_message(long_header, hello);
 
@@ -333,6 +359,47 @@ impl NodeInner {
 
         if relayed_hello {
             trace!(%src, hop_count = long_header.hop_count, "Received relayed HELLO from super peer, not creating new path");
+
+            if let Some(udp_binding) = udp_binding {
+                // UDP
+                // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                // TODO: avoid to_vec clone!
+                send_queue.push((
+                    response_buf[..ack_len].to_vec(),
+                    src,
+                    udp_binding.clone().socket.clone(),
+                ));
+            } else if let Some(tcp_remote_peer) = tcp_remote_peer {
+                // handle HELLO received via TCP. get super peer using tcp_remote_peer and then get connection and send out HELLO
+                let peers = self.peers_list.peers.pin();
+                let Peer::SuperPeer(super_peer) = peers.get(&tcp_remote_peer).unwrap() else {
+                    unreachable!()
+                };
+
+                if let Some(stream) = super_peer.tcp_connection().as_ref().and_then(|tcp| {
+                    tcp.stream_store
+                        .load()
+                        .as_ref()
+                        .map(std::clone::Clone::clone)
+                        .as_ref()
+                        .cloned()
+                }) {
+                    // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                    // TODO: avoid to_vec clone!
+                    tcp_send_queue.push((
+                        response_buf[..ack_len].to_vec(),
+                        tcp_remote_peer,
+                        stream,
+                    ));
+                } else {
+                    trace!(
+                        "No TCP connection/stream available to super peer {}",
+                        tcp_remote_peer
+                    );
+                }
+            } else {
+                warn!("Got relayed HELLO, but neither via UDP nor TCP. Should not happen.");
+            }
         } else if let Some(udp_binding) = udp_binding {
             // queue HELLO and sent it later, otherwise entry lock is held across an async call
             // TODO: avoid to_vec clone!
