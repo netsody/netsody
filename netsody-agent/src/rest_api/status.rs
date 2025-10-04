@@ -305,6 +305,17 @@ impl SuperPeerStatus {
     /// Formats the status with optional secret masking
     fn fmt(&self, f: &mut String, _include_secrets: bool) -> std::fmt::Result {
         writeln!(f, "Address: {}", self.addr)?;
+        match &self.resolved_addrs {
+            Some(resolved_addrs) => {
+                writeln!(f, "Resolved Addresses:")?;
+                for addr in resolved_addrs {
+                    writeln!(f, "  {addr}")?;
+                }
+            }
+            None => {
+                writeln!(f, "Resolved Addresses: None")?;
+            }
+        }
         writeln!(f, "TCP:")?;
         writeln!(f, "  Port: {}", self.tcp_port)?;
         match &self.tcp_path {
@@ -330,26 +341,15 @@ impl SuperPeerStatus {
         //     }
         //     None => writeln!(f, "Session Keys: Not present")?,
         // }
-        match &self.resolved_addrs {
-            Some(resolved_addrs) => {
-                writeln!(f, "Resolved Addresses:")?;
-                for addr in resolved_addrs {
-                    writeln!(f, "  {addr}")?;
-                }
-            }
-            None => {
-                writeln!(f, "Resolved Addresses: None")?;
-            }
-        }
         writeln!(f, "UDP:")?;
         writeln!(
             f,
-            "  Best Path: {}",
+            "  Best Direct Path: {}",
             self.best_udp_path
                 .as_ref()
-                .map_or("".to_string(), |p| p.to_string())
+                .map_or("None".to_string(), |p| p.to_string())
         )?;
-        writeln!(f, "  Paths:")?;
+        writeln!(f, "  Direct Paths:")?;
         let mut sorted_paths: Vec<_> = self.udp_paths.iter().collect();
         sorted_paths.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
         for (key, path) in sorted_paths {
@@ -479,13 +479,13 @@ impl NodePeerStatus {
         }
         writeln!(
             f,
-            "Best Path: {}",
+            "Best Direct Path: {}",
             self.best_path
                 .as_ref()
                 .map_or("None".to_string(), |p| p.to_string())
         )?;
         if !self.paths.is_empty() {
-            writeln!(f, "Paths:")?;
+            writeln!(f, "Direct Paths:")?;
             let mut sorted_paths: Vec<_> = self.paths.iter().collect();
             sorted_paths.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
             for (key, path) in sorted_paths {
@@ -495,9 +495,9 @@ impl NodePeerStatus {
                 }
             }
         } else {
-            writeln!(f, "Paths: None")?;
+            writeln!(f, "Direct Paths: None")?;
         }
-        writeln!(f, "Best Relay: {}", self.best_relay)?;
+        writeln!(f, "Best Relay Path: {}", self.best_relay)?;
         if !self.relay_paths.is_empty() {
             writeln!(f, "Relay Paths:")?;
             let mut sorted_relay_paths: Vec<_> = self.relay_paths.iter().collect();

@@ -329,53 +329,58 @@ impl NodeInner {
             hello_time,
         )?;
 
-        // queue HELLO and sent it later, otherwise entry lock is held across an async call
-        // TODO: avoid to_vec clone!
-        send_queue.push((
-            response_buf[..ack_len].to_vec(),
-            src,
-            udp_binding.clone().unwrap().socket.clone(),
-        ));
-
-        // HELLO from unknown endpoint? Check if it's relayed or from symmetric NAT
-        let key = (udp_binding.clone().unwrap().local_addr, src).into();
         let relayed_hello = long_header.hop_count > 0;
-        let hello_from_unknown_endpoint = !node_peer.paths().contains_key(&key);
 
         if relayed_hello {
             trace!(%src, hop_count = long_header.hop_count, "Received relayed HELLO from super peer, not creating new path");
-        } else if hello_from_unknown_endpoint {
-            let candidate = PeerPath::new();
-            candidate.hello_tx(time);
-            node_peer.paths().insert(key, candidate);
+        } else if let Some(udp_binding) = udp_binding {
+            // queue HELLO and sent it later, otherwise entry lock is held across an async call
+            // TODO: avoid to_vec clone!
+            send_queue.push((
+                response_buf[..ack_len].to_vec(),
+                src,
+                udp_binding.clone().socket.clone(),
+            ));
 
-            #[cfg(feature = "prometheus")]
-            {
-                use crate::prometheus::{
-                    PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-                };
-                PROMETHEUS_MESSAGES
-                    .with_label_values(&[
-                        PROMETHEUS_LABEL_HELLO,
-                        &long_header.sender.to_string(),
-                        PROMETHEUS_LABEL_TX,
-                    ])
-                    .inc();
+            // HELLO from unknown endpoint? Check if it's relayed or from symmetric NAT
+            let key = (udp_binding.clone().local_addr, src).into();
+            let hello_from_unknown_endpoint = !node_peer.paths().contains_key(&key);
+
+            if hello_from_unknown_endpoint {
+                let candidate = PeerPath::new();
+                candidate.hello_tx(time);
+                node_peer.paths().insert(key, candidate);
+
+                #[cfg(feature = "prometheus")]
+                {
+                    use crate::prometheus::{
+                        PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
+                    };
+                    PROMETHEUS_MESSAGES
+                        .with_label_values(&[
+                            PROMETHEUS_LABEL_HELLO,
+                            &long_header.sender.to_string(),
+                            PROMETHEUS_LABEL_TX,
+                        ])
+                        .inc();
+                }
+
+                trace!(%src, "Try to reach peer via new endpoint observed from received HELLO");
+
+                let time = self.current_time();
+                let hello = HelloNodePeerMessage::build(
+                    &self.network_id,
+                    &self.opts.id.pk,
+                    &self.opts.id.pow,
+                    node_peer.tx_key().as_ref(),
+                    &long_header.sender,
+                    time,
+                    node_peer.rx_short_id(),
+                )?;
+                send_queue.push((hello, src, udp_binding.clone().socket.clone()));
             }
-
-            trace!(%src, "Try to reach peer via new endpoint observed from received HELLO");
-
-            let time = self.current_time();
-            let hello = HelloNodePeerMessage::build(
-                &self.network_id,
-                &self.opts.id.pk,
-                &self.opts.id.pow,
-                node_peer.tx_key().as_ref(),
-                &long_header.sender,
-                time,
-                node_peer.rx_short_id(),
-            )?;
-            send_queue.push((hello, src, udp_binding.clone().unwrap().socket.clone()));
+        } else {
+            warn!("Got unrelayed HELLO from unknown peer. Should not happen.");
         }
 
         Ok(())

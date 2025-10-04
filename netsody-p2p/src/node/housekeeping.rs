@@ -424,6 +424,10 @@ impl NodeInner {
                     }
 
                     // Try TCP first
+                    trace!(
+                        "Send relayed HELLO to node peer via super peer TCP {}",
+                        sp_pk
+                    );
                     let mut tcp_success = false;
                     if let Some(tcp_connection) = super_peer.tcp_connection().as_ref()
                         && tcp_connection.has_stream()
