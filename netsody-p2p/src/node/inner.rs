@@ -67,12 +67,25 @@ impl NodeInner {
         }
     }
 
+    /// Processes incoming network packets (both UDP and TCP)
+    ///
+    /// # Arguments
+    /// * `src` - Source address of the packet
+    /// * `buf` - Packet buffer containing the message data
+    /// * `response_buf` - Buffer for writing response data
+    /// * `udp_binding` - UDP binding if this packet was received via UDP
+    /// * `tcp_remote_peer` - PubKey of the TCP socket's remote peer (the super peer) if this packet was received via TCP connection
+    ///
+    /// # Returns
+    /// * `Ok(())` if the packet was processed successfully
+    /// * `Err(Error)` if there was an error processing the packet
     pub(crate) async fn on_packet(
         &self,
         src: SocketAddr,
         buf: &mut [u8],
         response_buf: &mut [u8],
         udp_binding: Option<Arc<UdpBinding>>,
+        tcp_remote_peer: Option<PubKey>,
     ) -> Result<(), Error> {
         {
             // short header shortcut
@@ -195,7 +208,8 @@ impl NodeInner {
                                     node_peer,
                                     long_header,
                                     ack,
-                                    udp_binding.clone().unwrap().socket.clone(),
+                                    udp_binding.map(|udp_binding| udp_binding.socket.clone()),
+                                    tcp_remote_peer,
                                 )?;
                             }
                             MessageType::APP => {
@@ -211,7 +225,6 @@ impl NodeInner {
                                     long_header,
                                     rx_key.as_ref(),
                                 )?;
-                                // FIXME: könnte auch via tcp empfangen worden sein
                                 self.on_node_peer_hello(
                                     src,
                                     response_buf,
@@ -501,7 +514,8 @@ impl NodeInner {
         node_peer: &NodePeer,
         long_header: &LongHeader,
         ack: &AckMessage,
-        udp_socket: Arc<UdpSocket>,
+        udp_socket: Option<Arc<UdpSocket>>,
+        tcp_remote_peer: Option<PubKey>,
     ) -> Result<(), Error> {
         log_ack_message(long_header, ack);
 
@@ -534,17 +548,36 @@ impl NodeInner {
             return Err(Error::AckTooOld(message_age));
         }
 
-        let relayed_ack = long_header.hop_count > 0;
+        // Determine the relay peer for relayed ACKs
+        let relay_peer = if long_header.hop_count > 0 {
+            if let Some(tcp_remote_peer) = tcp_remote_peer {
+                // TCP relayed ACK - we know the super peer
+                Some(tcp_remote_peer)
+            } else {
+                // UDP relayed ACK - find the super peer whose path matches the SRC address
+                let peers_guard = self.peers_list.peers.pin();
+                let mut found_relay_peer = None;
+                for (sp_pk, peer) in &peers_guard {
+                    if let crate::peer::Peer::SuperPeer(super_peer) = peer {
+                        let udp_paths_guard = super_peer.udp_paths.guard();
+                        if super_peer
+                            .udp_paths
+                            .iter(&udp_paths_guard)
+                            .any(|(path_key, _)| path_key.remote_addr() == src)
+                        {
+                            found_relay_peer = Some(*sp_pk);
+                            break;
+                        }
+                    }
+                }
+                found_relay_peer
+            }
+        } else {
+            None // Not a relayed ACK
+        };
 
         // update peer information
-        node_peer.ack_rx(
-            time,
-            src,
-            hello_time,
-            udp_socket,
-            relayed_ack,
-            &self.peers_list,
-        );
+        node_peer.ack_rx(time, src, hello_time, udp_socket, relay_peer);
 
         Ok(())
     }

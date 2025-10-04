@@ -390,7 +390,7 @@ impl NodePeerStatus {
             .collect();
 
         let relay_paths = node_peer
-            .relayed_paths
+            .relay_paths
             .pin()
             .iter()
             .map(|(sp_pk, path)| (*sp_pk, path.inner_store.load().as_ref().clone()))

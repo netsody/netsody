@@ -418,9 +418,8 @@ impl NodeInner {
 
                     {
                         // Get or create relayed path for this super peer
-                        let relayed_paths_guard = node_peer.relayed_paths.pin();
-                        let relayed_path =
-                            relayed_paths_guard.get_or_insert(*sp_pk, PeerPath::new());
+                        let relay_paths_guard = node_peer.relay_paths.pin();
+                        let relayed_path = relay_paths_guard.get_or_insert(*sp_pk, PeerPath::new());
                         relayed_path.hello_tx(time);
                     }
 
@@ -481,7 +480,7 @@ impl NodeInner {
             } else {
                 // We have a direct connection, clear all relayed paths
                 trace!("Reachable direct paths available, cleared relayed paths.");
-                node_peer.relayed_paths.pin().clear();
+                node_peer.relay_paths.pin().clear();
             }
         } else {
             trace!("No app traffic");

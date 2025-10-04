@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU8, AtomicU64};
 // External crate imports
 use papaya::{HashMap as PapayaHashMap, HashMapRef, OwnedGuard};
 use tokio::net::UdpSocket;
-use tracing::trace;
+use tracing::{trace, warn};
 
 // Crate-internal imports
 use crate::crypto::{
@@ -54,8 +54,8 @@ pub struct NodePeer {
     best_path_store: AtomicPtr<PeerPathKey>,
     /// Map of all known paths to this peer.
     pub paths: PapayaHashMap<PeerPathKey, PeerPath>,
-    /// Map of relayed paths through super peers (super peer pubkey -> path).
-    pub relayed_paths: PapayaHashMap<PubKey, PeerPath>,
+    /// Map of relay paths through super peers (super peer pubkey -> path).
+    pub relay_paths: PapayaHashMap<PubKey, PeerPath>,
     /// Atomic pointer to the best super peer's public key.
     best_sp_store: AtomicPtr<PubKey>,
     /// Short ID for receiving messages from this peer.
@@ -195,44 +195,33 @@ impl NodePeer {
     /// * `src` - Source address of the ACK
     /// * `hello_time` - Timestamp of the original HELLO message
     /// * `udp_socket` - UDP socket that received the ACK
-    /// * `relayed_ack` - Whether this ACK was relayed through a super peer
-    /// * `peers_list` - Reference to peers list to find super peers
+    /// * `relay_peer` - PubKey of the relay peer if this ACK was received via a relay path (TCP or UDP), None for direct ACKs
     pub(crate) fn ack_rx(
         &self,
         time: u64,
         src: SocketAddr,
         hello_time: u64,
-        udp_socket: Arc<UdpSocket>,
-        relayed_ack: bool,
-        peers_list: &crate::peer::PeersList,
+        udp_socket: Option<Arc<UdpSocket>>,
+        relay_peer: Option<PubKey>,
     ) {
-        if relayed_ack {
-            // Find the super peer whose path matches the SRC address
-            let peers_guard = peers_list.peers.pin();
-            for (sp_pk, peer) in &peers_guard {
-                if let crate::peer::Peer::SuperPeer(super_peer) = peer {
-                    let udp_paths_guard = super_peer.udp_paths.guard();
-                    if super_peer
-                        .udp_paths
-                        .iter(&udp_paths_guard)
-                        .any(|(path_key, _)| path_key.remote_addr() == src)
-                    {
-                        // Update relayed path for this super peer
-                        if let Some(relayed_path) = self.relayed_paths.pin().get(sp_pk) {
-                            relayed_path.ack_rx(time, src, hello_time);
-                            tracing::trace!(%src, super_peer = %sp_pk, "Updated relayed path ACK from super peer");
-                        }
-                        break;
-                    }
-                }
+        if let Some(relay_peer) = relay_peer {
+            // Relayed ACK - we know exactly which super peer sent this ACK (TCP or UDP)
+            if let Some(relay_path) = self.relay_paths.pin().get(&relay_peer) {
+                relay_path.ack_rx(time, src, hello_time);
+                trace!(%src, super_peer = %relay_peer, "Updated relayed path ACK from super peer");
+            } else {
+                warn!(%src, "Received relayed ACK from non-super peer {}", relay_peer);
             }
-        } else {
+        } else if let Some(udp_socket) = udp_socket {
             // Normal direct ACK
             let key = Into::<PeerPathKey>::into((udp_socket.local_addr().unwrap(), src));
             if let Some(path) = self.paths.pin().get(&key) {
                 path.ack_rx(time, src, hello_time);
                 self.update_best_path();
             }
+        } else {
+            // UDP ACK without socket - this should not happen anymore as relay_peer is now determined in on_node_peer_ack
+            warn!(%src, "Received UDP ACK without socket and without relay_peer - this should not happen");
         }
     }
 
@@ -269,7 +258,7 @@ impl NodePeer {
     /// * `default_route` - Default super peer to use as fallback
     pub(crate) fn update_best_relay(&self, time: u64, hello_timeout: u64, default_route: &PubKey) {
         let best_sp_ptr = if let Some(best_sp_pk) = self
-            .relayed_paths
+            .relay_paths
             .pin()
             .iter()
             .filter(|(_, path)| path.is_reachable(time, hello_timeout))
