@@ -314,7 +314,7 @@ impl SendHandle {
                         .send_super_peer_tcp(stream, app, default_route)
                         .await?;
                 } else {
-                    // Fallback to UDP
+                    // Fall forward to UDP
                     let mut result = false;
                     for (sp_resolved_addr, sp_udp_socket) in sp_udp_sockets {
                         if let Err(e) = sp_udp_socket.send_to(&app, sp_resolved_addr).await {

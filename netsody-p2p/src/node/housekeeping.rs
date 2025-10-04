@@ -262,6 +262,10 @@ impl NodeInner {
                 let Peer::SuperPeer(super_peer) = peers.get(best_sp).unwrap() else {
                     unreachable!()
                 };
+                trace!(
+                    "Update send handle for peer {:?} with best super peer {:?}",
+                    peer_key, best_sp
+                );
                 handle.update_state(node_peer.new_send_handle_state(inner.clone(), super_peer));
             } else {
                 handle.update_state(SendHandleState {

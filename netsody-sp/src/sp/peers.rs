@@ -57,7 +57,8 @@ struct LastHello {
 pub struct Peer {
     valid_pow: bool,
     session_keys: Option<SessionKeys>,
-    last_hello_ptr: ArcSwapOption<LastHello>,
+    last_tcp_hello_ptr: ArcSwapOption<LastHello>,
+    last_udp_hello_ptr: ArcSwapOption<LastHello>,
 }
 
 impl Peer {
@@ -72,12 +73,24 @@ impl Peer {
         prot: TransportProt,
         endpoints: &[u8],
     ) {
-        self.last_hello_ptr.store(Some(Arc::new(LastHello {
-            time,
-            src,
-            prot,
-            endpoints: endpoints.into(),
-        })));
+        match prot {
+            TransportProt::TCP => {
+                self.last_tcp_hello_ptr.store(Some(Arc::new(LastHello {
+                    time,
+                    src,
+                    prot,
+                    endpoints: endpoints.into(),
+                })));
+            }
+            TransportProt::UDP => {
+                self.last_udp_hello_ptr.store(Some(Arc::new(LastHello {
+                    time,
+                    src,
+                    prot,
+                    endpoints: endpoints.into(),
+                })));
+            }
+        }
     }
 
     pub(crate) fn is_stale(&self, time: u64, hello_timeout: u64) -> bool {
@@ -108,7 +121,12 @@ impl Peer {
     }
 
     fn last_hello(&self) -> arc_swap::Guard<Option<Arc<LastHello>>> {
-        self.last_hello_ptr.load()
+        let tcp_hello = self.last_tcp_hello_ptr.load();
+        if tcp_hello.is_some() {
+            tcp_hello
+        } else {
+            self.last_udp_hello_ptr.load()
+        }
     }
 
     pub(crate) fn endpoint(&self) -> Option<(TransportProt, SocketAddr)> {
@@ -134,6 +152,16 @@ impl Peer {
             }
             None => HashSet::new(),
         }
+    }
+
+    /// Clear the last TCP hello message if it matches the given source address
+    pub(crate) fn clear_tcp_hello_if_matches(&self, src: SocketAddr) -> bool {
+        if let Some(last_tcp_hello) = self.last_tcp_hello_ptr.load().as_ref()
+            && last_tcp_hello.src == src {
+                self.last_tcp_hello_ptr.store(None);
+                return true;
+            }
+        false
     }
 }
 
@@ -217,7 +245,8 @@ impl PeersList {
                 } else {
                     None
                 },
-                last_hello_ptr: Default::default(),
+                last_tcp_hello_ptr: Default::default(),
+                last_udp_hello_ptr: Default::default(),
             };
             Ok(self.peers.get_or_insert(*pk, peer, guard))
         }

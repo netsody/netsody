@@ -164,5 +164,17 @@ impl SuperPeerInner {
                 }
             }
         }
+
+        // connection closed, delete corresponding last tcp HELLOs
+        // iterate over all peers in inner.peers_list.peers.pin() and clear last_tcp hello where src matches
+        let peers_guard = inner.peers_list.peers.guard();
+        for (pub_key, peer) in inner.peers_list.peers.iter(&peers_guard) {
+            if peer.clear_tcp_hello_if_matches(src) {
+                trace!(
+                    "Cleared last_tcp_hello for peer {} due to closed TCP connection from {}",
+                    pub_key, src
+                );
+            }
+        }
     }
 }
