@@ -6,7 +6,7 @@ use crate::message::{
     LongHeader, MessageType, SHORT_HEADER_ID_LEN, SHORT_ID_NONE, ShortHeader, ShortId,
     UniteMessage, log_ack_message, log_app_message, log_hello_node_peer_message, log_unite_message,
 };
-use crate::node::{COMPRESSION, Error, NodeOpts, SendHandlesList, UdpBinding};
+use crate::node::{COMPRESSION, Error, NodeOpts, SendHandlesList, TcpWriter, UdpBinding};
 use crate::peer::{NodePeer, Peer, PeerPath, PeerPathKey, PeersList, SuperPeer};
 use ahash::RandomState;
 use arc_swap::{ArcSwap, Guard};
@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicPtr, AtomicU64};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, trace, warn};
 
@@ -67,12 +68,25 @@ impl NodeInner {
         }
     }
 
+    /// Processes incoming network packets (both UDP and TCP)
+    ///
+    /// # Arguments
+    /// * `src` - Source address of the packet
+    /// * `buf` - Packet buffer containing the message data
+    /// * `response_buf` - Buffer for writing response data
+    /// * `udp_binding` - UDP binding if this packet was received via UDP
+    /// * `tcp_remote_peer` - PubKey of the TCP socket's remote peer (the super peer) if this packet was received via TCP connection
+    ///
+    /// # Returns
+    /// * `Ok(())` if the packet was processed successfully
+    /// * `Err(Error)` if there was an error processing the packet
     pub(crate) async fn on_packet(
         &self,
         src: SocketAddr,
         buf: &mut [u8],
         response_buf: &mut [u8],
         udp_binding: Option<Arc<UdpBinding>>,
+        tcp_remote_peer: Option<PubKey>,
     ) -> Result<(), Error> {
         {
             // short header shortcut
@@ -110,6 +124,7 @@ impl NodeInner {
         // recipient
         if long_header.recipient == self.opts.id.pk {
             let mut send_queue: Vec<(Vec<u8>, SocketAddr, Arc<UdpSocket>)> = Vec::new();
+            let mut tcp_send_queue: Vec<(Vec<u8>, PubKey, Arc<Mutex<TcpWriter>>)> = Vec::new();
             {
                 let peers = self.peers_list.peers.pin();
                 let peer = if let Some(peer) = peers.get(&long_header.sender) {
@@ -136,6 +151,7 @@ impl NodeInner {
                         self.agreement_sk,
                         self.agreement_pk,
                         self.cached_time(),
+                        self.peers_list.default_route(),
                     )?;
                     self.peers_list
                         .rx_short_ids
@@ -194,7 +210,8 @@ impl NodeInner {
                                     node_peer,
                                     long_header,
                                     ack,
-                                    udp_binding.clone().unwrap().socket.clone(),
+                                    udp_binding.map(|udp_binding| udp_binding.socket.clone()),
+                                    tcp_remote_peer,
                                 )?;
                             }
                             MessageType::APP => {
@@ -218,6 +235,8 @@ impl NodeInner {
                                     &mut send_queue,
                                     node_peer,
                                     hello,
+                                    tcp_remote_peer,
+                                    &mut tcp_send_queue,
                                 )?;
                             }
                             MessageType::UNITE => {
@@ -239,6 +258,15 @@ impl NodeInner {
                 trace!("Sent msg to udp://{dst}.");
             }
 
+            // process tcp send queue
+            for (msg, dst, stream) in tcp_send_queue {
+                if let Err(e) = self.send_super_peer_tcp(&stream, msg, &dst).await {
+                    trace!("Failed to send msg to {} via TCP: {}", dst, e);
+                } else {
+                    trace!("Sent msg to {} via TCP", dst);
+                }
+            }
+
             Ok(())
         } else {
             Err(Error::MessageInvalidRecipient)
@@ -256,6 +284,8 @@ impl NodeInner {
         send_queue: &mut Vec<(Vec<u8>, SocketAddr, Arc<UdpSocket>)>,
         node_peer: &NodePeer,
         hello: &HelloNodePeerMessage,
+        tcp_remote_peer: Option<PubKey>,
+        tcp_send_queue: &mut Vec<(Vec<u8>, PubKey, Arc<Mutex<TcpWriter>>)>,
     ) -> Result<(), Error> {
         log_hello_node_peer_message(long_header, hello);
 
@@ -314,49 +344,99 @@ impl NodeInner {
             hello_time,
         )?;
 
-        // queue HELLO and sent it later, otherwise entry lock is held across an async call
-        // TODO: avoid to_vec clone!
-        send_queue.push((
-            response_buf[..ack_len].to_vec(),
-            src,
-            udp_binding.clone().unwrap().socket.clone(),
-        ));
+        let relayed_hello = long_header.hop_count > 0;
 
-        // HELLO from unknown endpoint? peer might be behind symmetric NAT
-        let key = (udp_binding.clone().unwrap().local_addr, src).into();
-        let hello_from_unknown_endpoint = !node_peer.paths().contains_key(&key);
-        if hello_from_unknown_endpoint {
-            let candidate = PeerPath::new();
-            candidate.hello_tx(time);
-            node_peer.paths().insert(key, candidate);
+        if relayed_hello {
+            trace!(%src, hop_count = long_header.hop_count, "Received relayed HELLO from super peer, not creating new path");
 
-            #[cfg(feature = "prometheus")]
-            {
-                use crate::prometheus::{
-                    PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
+            if let Some(udp_binding) = udp_binding {
+                // UDP
+                // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                // TODO: avoid to_vec clone!
+                send_queue.push((
+                    response_buf[..ack_len].to_vec(),
+                    src,
+                    udp_binding.clone().socket.clone(),
+                ));
+            } else if let Some(tcp_remote_peer) = tcp_remote_peer {
+                // handle HELLO received via TCP. get super peer using tcp_remote_peer and then get connection and send out HELLO
+                let peers = self.peers_list.peers.pin();
+                let Peer::SuperPeer(super_peer) = peers.get(&tcp_remote_peer).unwrap() else {
+                    unreachable!()
                 };
-                PROMETHEUS_MESSAGES
-                    .with_label_values(&[
-                        PROMETHEUS_LABEL_HELLO,
-                        &long_header.sender.to_string(),
-                        PROMETHEUS_LABEL_TX,
-                    ])
-                    .inc();
+
+                if let Some(stream) = super_peer.tcp_connection().as_ref().and_then(|tcp| {
+                    tcp.stream_store
+                        .load()
+                        .as_ref()
+                        .map(std::clone::Clone::clone)
+                        .as_ref()
+                        .cloned()
+                }) {
+                    // queue HELLO and sent it later, otherwise entry lock is held across an async call
+                    // TODO: avoid to_vec clone!
+                    tcp_send_queue.push((
+                        response_buf[..ack_len].to_vec(),
+                        tcp_remote_peer,
+                        stream,
+                    ));
+                } else {
+                    trace!(
+                        "No TCP connection/stream available to super peer {}",
+                        tcp_remote_peer
+                    );
+                }
+            } else {
+                warn!("Got relayed HELLO, but neither via UDP nor TCP. Should not happen.");
             }
+        } else if let Some(udp_binding) = udp_binding {
+            // queue HELLO and sent it later, otherwise entry lock is held across an async call
+            // TODO: avoid to_vec clone!
+            send_queue.push((
+                response_buf[..ack_len].to_vec(),
+                src,
+                udp_binding.clone().socket.clone(),
+            ));
 
-            trace!(%src, "Try to reach peer via new endpoint observed from received HELLO");
+            // HELLO from unknown endpoint? Check if it's relayed or from symmetric NAT
+            let key = (udp_binding.clone().local_addr, src).into();
+            let hello_from_unknown_endpoint = !node_peer.paths().contains_key(&key);
 
-            let time = self.current_time();
-            let hello = HelloNodePeerMessage::build(
-                &self.network_id,
-                &self.opts.id.pk,
-                &self.opts.id.pow,
-                node_peer.tx_key().as_ref(),
-                &long_header.sender,
-                time,
-                node_peer.rx_short_id(),
-            )?;
-            send_queue.push((hello, src, udp_binding.clone().unwrap().socket.clone()));
+            if hello_from_unknown_endpoint {
+                let candidate = PeerPath::new();
+                candidate.hello_tx(time);
+                node_peer.paths().insert(key, candidate);
+
+                #[cfg(feature = "prometheus")]
+                {
+                    use crate::prometheus::{
+                        PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
+                    };
+                    PROMETHEUS_MESSAGES
+                        .with_label_values(&[
+                            PROMETHEUS_LABEL_HELLO,
+                            &long_header.sender.to_string(),
+                            PROMETHEUS_LABEL_TX,
+                        ])
+                        .inc();
+                }
+
+                trace!(%src, "Try to reach peer via new endpoint observed from received HELLO");
+
+                let time = self.current_time();
+                let hello = HelloNodePeerMessage::build(
+                    &self.network_id,
+                    &self.opts.id.pk,
+                    &self.opts.id.pow,
+                    node_peer.tx_key().as_ref(),
+                    &long_header.sender,
+                    time,
+                    node_peer.rx_short_id(),
+                )?;
+                send_queue.push((hello, src, udp_binding.clone().socket.clone()));
+            }
+        } else {
+            warn!("Got unrelayed HELLO from unknown peer. Should not happen.");
         }
 
         Ok(())
@@ -476,7 +556,7 @@ impl NodeInner {
         let ack_time = ack.time.into();
         let local_addr = udp_binding.map(|binding| binding.local_addr);
 
-        super_peer.ack_rx(local_addr, src, time, ack_time, self.opts.enforce_tcp);
+        super_peer.ack_rx(local_addr, src, time, ack_time, self.opts.hello_timeout);
     }
 
     pub fn cached_time(&self) -> u64 {
@@ -495,7 +575,8 @@ impl NodeInner {
         node_peer: &NodePeer,
         long_header: &LongHeader,
         ack: &AckMessage,
-        udp_socket: Arc<UdpSocket>,
+        udp_socket: Option<Arc<UdpSocket>>,
+        tcp_remote_peer: Option<PubKey>,
     ) -> Result<(), Error> {
         log_ack_message(long_header, ack);
 
@@ -528,8 +609,36 @@ impl NodeInner {
             return Err(Error::AckTooOld(message_age));
         }
 
+        // Determine the relay peer for relayed ACKs
+        let relay_peer = if long_header.hop_count > 0 {
+            if let Some(tcp_remote_peer) = tcp_remote_peer {
+                // TCP relayed ACK - we know the super peer
+                Some(tcp_remote_peer)
+            } else {
+                // UDP relayed ACK - find the super peer whose path matches the SRC address
+                let peers_guard = self.peers_list.peers.pin();
+                let mut found_relay_peer = None;
+                for (sp_pk, peer) in &peers_guard {
+                    if let crate::peer::Peer::SuperPeer(super_peer) = peer {
+                        let udp_paths_guard = super_peer.udp_paths.guard();
+                        if super_peer
+                            .udp_paths
+                            .iter(&udp_paths_guard)
+                            .any(|(path_key, _)| path_key.remote_addr() == src)
+                        {
+                            found_relay_peer = Some(*sp_pk);
+                            break;
+                        }
+                    }
+                }
+                found_relay_peer
+            }
+        } else {
+            None // Not a relayed ACK
+        };
+
         // update peer information
-        node_peer.ack_rx(time, src, hello_time, udp_socket);
+        node_peer.ack_rx(time, src, hello_time, udp_socket, relay_peer);
 
         Ok(())
     }

@@ -18,6 +18,8 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, instrument, trace, warn};
 
+pub(crate) type TcpWriter = FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>;
+
 impl NodeInner {
     fn tcp_codec() -> LengthDelimitedCodec {
         LengthDelimitedCodec::builder()
@@ -27,7 +29,7 @@ impl NodeInner {
 
     pub(crate) async fn send_super_peer_tcp(
         &self,
-        stream: &Arc<Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>>>,
+        stream: &Arc<Mutex<TcpWriter>>,
         msg: Vec<u8>,
         peer_key: &PubKey,
     ) -> Result<TransportProt, Error> {
@@ -178,7 +180,7 @@ impl NodeInner {
                         Some(Ok(bytes)) => {
                             // process segment
                             if let Err(e) = tcp_inner
-                                .on_tcp_segment(peer_addr, &mut bytes.to_vec(), &mut response_buf)
+                                .on_tcp_segment(peer_addr, &mut bytes.to_vec(), &mut response_buf, peer_key)
                                 .await
                             {
                                 error!("Error processing segment: {e}");
@@ -204,22 +206,23 @@ impl NodeInner {
         }
     }
 
-    #[instrument(fields(src = %src), skip_all)]
+    #[instrument(fields(src = %src, remote_peer = %remote_peer), skip_all)]
     pub async fn on_tcp_segment(
         &self,
         src: SocketAddr,
         buf: &mut [u8],
         response_buf: &mut [u8],
+        remote_peer: PubKey,
     ) -> Result<(), Error> {
-        self.on_packet(src, buf, response_buf, None).await
+        self.on_packet(src, buf, response_buf, None, Some(remote_peer))
+            .await
     }
 }
 
 #[derive(Debug, Default)]
 pub struct TcpConnection {
     cancellation_token: Arc<CancellationToken>,
-    pub(crate) stream_store:
-        ArcSwapOption<Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>>>,
+    pub(crate) stream_store: ArcSwapOption<Mutex<TcpWriter>>,
     pub path: PeerPath,
 }
 
@@ -247,7 +250,7 @@ impl TcpConnection {
         self.path.ack_rx(time, src, hello_time);
     }
 
-    pub(crate) fn set_stream(&self, stream: FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>) {
+    pub(crate) fn set_stream(&self, stream: TcpWriter) {
         self.stream_store.store(Some(Arc::new(Mutex::new(stream))));
     }
 
