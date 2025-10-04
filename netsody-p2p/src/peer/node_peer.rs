@@ -208,7 +208,7 @@ impl NodePeer {
             // Relayed ACK - we know exactly which super peer sent this ACK (TCP or UDP)
             if let Some(relay_path) = self.relay_paths.pin().get(&relay_peer) {
                 relay_path.ack_rx(time, src, hello_time);
-                trace!(%src, super_peer = %relay_peer, "Updated relayed path ACK from super peer");
+                trace!(%src, super_peer = %relay_peer, "Updated relay path ACK from super peer");
             } else {
                 warn!(%src, "Received relayed ACK from non-super peer {}", relay_peer);
             }
@@ -247,10 +247,10 @@ impl NodePeer {
         self.best_path_store.store(best_path_ptr, SeqCst);
     }
 
-    /// Update the best relay based on current relayed path quality.
+    /// Update the best relay based on current relay path quality.
     ///
     /// This method finds the super peer with the lowest median latency among
-    /// reachable relayed paths and updates the internal best relay pointer accordingly.
+    /// reachable relay paths and updates the internal best relay pointer accordingly.
     ///
     /// # Arguments
     /// * `time` - Current timestamp

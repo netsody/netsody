@@ -393,10 +393,10 @@ impl NodeInner {
                 }
             }
 
-            // If we have app traffic but no reachable path to the peer, try to establish a relayed path through super peers
+            // If we have app traffic but no reachable path to the peer, try to establish a relay path through super peers
             if !node_peer.is_reachable(time, self.opts.hello_timeout) {
                 trace!(
-                    "No reachable path to peer, attempting to establish relayed path through super peers"
+                    "No reachable path to peer, attempting to establish relay path through super peers"
                 );
 
                 // Send HelloNodePeerMessage through each super peer
@@ -417,17 +417,13 @@ impl NodeInner {
                     )?;
 
                     {
-                        // Get or create relayed path for this super peer
+                        // Get or create relay path for this super peer
                         let relay_paths_guard = node_peer.relay_paths.pin();
                         let relayed_path = relay_paths_guard.get_or_insert(*sp_pk, PeerPath::new());
                         relayed_path.hello_tx(time);
                     }
 
                     // Try TCP first
-                    trace!(
-                        "Send relayed HELLO to node peer via super peer TCP {}",
-                        sp_pk
-                    );
                     let mut tcp_success = false;
                     if let Some(tcp_connection) = super_peer.tcp_connection().as_ref()
                         && tcp_connection.has_stream()
@@ -467,23 +463,25 @@ impl NodeInner {
                         if let Some(udp_socket) = self.udp_socket_for(&local_addr) {
                             if let Err(e) = udp_socket.send_to(&hello, remote_addr).await {
                                 warn!(
-                                    "Failed to send relayed HELLO via super peer UDP {}: {}",
+                                    "Failed to send relayed HELLO via super peer {} UDP local_addr={}: {}",
+                                    sp_pk,
                                     local_addr, e
                                 );
                             } else {
                                 trace!(
-                                    "Sent relayed HELLO to node peer via super peer UDP {}",
+                                    "Sent relayed HELLO to node peer via super peer {} UDP local_addr={}",
+                                    sp_pk,
                                     local_addr
                                 );
                             }
                         } else {
-                            warn!("No UDP socket found for path {}", local_addr);
+                            warn!("No UDP socket found for path local_addr={} for super peer {}", local_addr, sp_pk);
                         }
                     }
                 }
             } else {
-                // We have a direct connection, clear all relayed paths
-                trace!("Reachable direct paths available, cleared relayed paths.");
+                // We have a direct connection, clear all relay paths
+                trace!("Reachable direct paths available, cleared relay paths.");
                 node_peer.relay_paths.pin().clear();
             }
         } else {
