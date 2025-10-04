@@ -12,10 +12,13 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, trace, warn};
 
+type TcpWriter = FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>;
+type TcpReader = FramedRead<OwnedReadHalf, LengthDelimitedCodec>;
+
 pub struct TcpConnection {
     inner: Arc<SuperPeerInner>,
     src: SocketAddr,
-    pub(crate) writer: Arc<Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>>>,
+    pub(crate) writer: Arc<Mutex<TcpWriter>>,
     last_activity: AtomicU64,
 }
 
@@ -120,7 +123,7 @@ impl SuperPeerInner {
 
     async fn tcp_reader(
         cancellation_token: CancellationToken,
-        mut reader: FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
+        mut reader: TcpReader,
         tcp_connection: TcpConnectionGuard,
     ) {
         let inner = tcp_connection.inner.clone();

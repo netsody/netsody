@@ -6,7 +6,7 @@ use crate::message::{
     LongHeader, MessageType, SHORT_HEADER_ID_LEN, SHORT_ID_NONE, ShortHeader, ShortId,
     UniteMessage, log_ack_message, log_app_message, log_hello_node_peer_message, log_unite_message,
 };
-use crate::node::{COMPRESSION, Error, NodeOpts, SendHandlesList, UdpBinding};
+use crate::node::{COMPRESSION, Error, NodeOpts, SendHandlesList, TcpWriter, UdpBinding};
 use crate::peer::{NodePeer, Peer, PeerPath, PeerPathKey, PeersList, SuperPeer};
 use ahash::RandomState;
 use arc_swap::{ArcSwap, Guard};
@@ -19,9 +19,7 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicPtr, AtomicU64};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
-use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::Mutex;
-use tokio_util::codec::{FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, trace, warn};
 
@@ -126,12 +124,7 @@ impl NodeInner {
         // recipient
         if long_header.recipient == self.opts.id.pk {
             let mut send_queue: Vec<(Vec<u8>, SocketAddr, Arc<UdpSocket>)> = Vec::new();
-            // FIXME: eigener typ für Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>> ?
-            let mut tcp_send_queue: Vec<(
-                Vec<u8>,
-                PubKey,
-                Arc<Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>>>,
-            )> = Vec::new();
+            let mut tcp_send_queue: Vec<(Vec<u8>, PubKey, Arc<Mutex<TcpWriter>>)> = Vec::new();
             {
                 let peers = self.peers_list.peers.pin();
                 let peer = if let Some(peer) = peers.get(&long_header.sender) {
@@ -292,11 +285,7 @@ impl NodeInner {
         node_peer: &NodePeer,
         hello: &HelloNodePeerMessage,
         tcp_remote_peer: Option<PubKey>,
-        tcp_send_queue: &mut Vec<(
-            Vec<u8>,
-            PubKey,
-            Arc<Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>>>,
-        )>,
+        tcp_send_queue: &mut Vec<(Vec<u8>, PubKey, Arc<Mutex<TcpWriter>>)>,
     ) -> Result<(), Error> {
         log_hello_node_peer_message(long_header, hello);
 

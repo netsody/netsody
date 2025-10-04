@@ -3,7 +3,7 @@ use crate::identity::PubKey;
 use crate::message::{AppMessage, ShortHeader, ShortId};
 use crate::node::inner::NodeInner;
 use crate::node::udp::UdpBinding;
-use crate::node::{COMPRESSION, Error};
+use crate::node::{COMPRESSION, Error, TcpWriter};
 use crate::peer::{NodePeer, Peer, SuperPeer};
 use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 use lz4_flex::compress_prepend_size;
@@ -13,9 +13,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Weak};
 use tokio::net::UdpSocket;
-use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::Mutex;
-use tokio_util::codec::{FramedWrite, LengthDelimitedCodec};
 use tracing::{debug, instrument, trace, warn};
 
 #[derive(Default)]
@@ -72,7 +70,7 @@ pub(crate) struct SendHandleState {
     pub(crate) app_tx: Arc<AtomicU64>,
     pub(crate) tx_key: Option<SessionKey>,
     pub(crate) short_id: Option<ShortId>,
-    pub(crate) sp_tcp_stream: Option<Arc<Mutex<FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>>>>,
+    pub(crate) sp_tcp_stream: Option<Arc<Mutex<TcpWriter>>>,
     pub(crate) sp_udp_sockets: Vec<(SocketAddr, Arc<UdpSocket>)>,
 }
 

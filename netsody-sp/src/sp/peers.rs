@@ -58,7 +58,7 @@ pub struct Peer {
     valid_pow: bool,
     session_keys: Option<SessionKeys>,
     /// Tracks the last received TCP and UDP HELLO messages.
-    /// 
+    ///
     /// This is necessary to handle scenarios where we receive HELLOs via both
     /// UDP and TCP simultaneously. In such cases, we prefer TCP connections
     /// as they indicate that the node peer is not receiving ACKs via UDP,
@@ -163,10 +163,11 @@ impl Peer {
     /// Clear the last TCP hello message if it matches the given source address
     pub(crate) fn clear_tcp_hello_if_matches(&self, src: SocketAddr) -> bool {
         if let Some(last_tcp_hello) = self.last_tcp_hello_ptr.load().as_ref()
-            && last_tcp_hello.src == src {
-                self.last_tcp_hello_ptr.store(None);
-                return true;
-            }
+            && last_tcp_hello.src == src
+        {
+            self.last_tcp_hello_ptr.store(None);
+            return true;
+        }
         false
     }
 }
