@@ -422,12 +422,12 @@ impl SuperPeer {
         }
     }
 
-    /// Remove stale UDP paths that haven't received responses within the timeout period.
+    /// Remove invalid UDP paths that are either stale or use outdated addresses.
     ///
     /// # Arguments
     /// * `time` - Current timestamp
     /// * `hello_timeout` - Timeout period in seconds
-    pub(crate) fn remove_stale_udp_paths(
+    pub(crate) fn remove_invalid_udp_paths(
         &self,
         time: u64,
         hello_timeout: u64,
@@ -438,7 +438,7 @@ impl SuperPeer {
         let guard = self.udp_paths.guard();
         self.udp_paths.retain(
             |key, candidate| {
-                // A link is valid as long as it is not stale and using a valid local and remote address
+                // A link is valid as long as it is not stale and using a existing local and remote address
                 let valid = !candidate.stale(time, hello_timeout)
                     || (resolved_addrs
                         .as_ref()

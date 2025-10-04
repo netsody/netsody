@@ -557,9 +557,8 @@ impl NodeInner {
                 .any(|b| b.local_addr.eq(&key.local_addr()))
         });
 
-        // FIXME: we should only remove stale endpoints here, if remove addr no longer is in resolved and local address is not longer ours
-        // remove stale endpoints
-        super_peer.remove_stale_udp_paths(time, self.opts.hello_timeout, my_addrs);
+        // remove invalid endpoints
+        super_peer.remove_invalid_udp_paths(time, self.opts.hello_timeout, my_addrs);
 
         // TCP connection not longer required as a udp path has become reachable?
         if !self.opts.enforce_tcp
