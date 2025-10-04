@@ -45,9 +45,9 @@ lazy_static! {
     /// These servers help with peer discovery and message relaying.
     pub static ref SUPER_PEERS_DEFAULT: Vec<SuperPeerUrl> = vec![
         // SuperPeerUrl::from_str("udp://sp-fkb1.drasyl.org:22527?publicKey=c0900bcfabc493d062ecd293265f571edb70b85313ba4cdda96c9f77163ba62d&networkId=1&tcpPort=8443").unwrap(),
-        // SuperPeerUrl::from_str("udp://sp-eu-central-1.netsody.io:22527?publicKey=5b4578909bf0ad3565bb5faf843a9f68b325dd87451f6cb747e49d82f6ce5f4c&networkId=1&tcpPort=443").unwrap(),
+        SuperPeerUrl::from_str("udp://sp-eu-central-1.netsody.io:22527?publicKey=5b4578909bf0ad3565bb5faf843a9f68b325dd87451f6cb747e49d82f6ce5f4c&networkId=1&tcpPort=443").unwrap(),
         SuperPeerUrl::from_str("udp://sp-na-east-1.netsody.io:22527?publicKey=bf3572dba7ebb6c5ccd037f3a978707b5d7c5a9b9b01b56b4b9bf059af56a4e0&networkId=1&tcpPort=443").unwrap(),
-        // SuperPeerUrl::from_str("udp://sp-ap-south-1.netsody.io:22527?publicKey=ab7a1654d463f9986530bed00569cc895697827b802153b8ef1598579713045f&networkId=1&tcpPort=443").unwrap(),
+        SuperPeerUrl::from_str("udp://sp-ap-south-1.netsody.io:22527?publicKey=ab7a1654d463f9986530bed00569cc895697827b802153b8ef1598579713045f&networkId=1&tcpPort=443").unwrap(),
     ];
 }
 
