@@ -798,6 +798,27 @@ fn format_path(path: &PeerPathInner) -> String {
     }
     result.push('\n');
 
+    // Median latency
+    if !path.lats.is_empty() {
+        let mut sorted_lats: Vec<u64> = path.lats.iter().copied().collect();
+        sorted_lats.sort_unstable();
+
+        let mid = sorted_lats.len() / 2;
+        let median_lat = if sorted_lats.len() % 2 == 0 {
+            (sorted_lats[mid - 1] + sorted_lats[mid]) / 2
+        } else {
+            sorted_lats[mid]
+        };
+
+        result.push_str(&format!(
+            "  Median Latency: {:.3} ms",
+            median_lat as f64 / 1000.0
+        ));
+    } else {
+        result.push_str("  Median Latency: None");
+    }
+    result.push('\n');
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
