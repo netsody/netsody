@@ -289,18 +289,12 @@ impl NodeInner {
     ) -> Result<(), Error> {
         log_hello_node_peer_message(long_header, hello);
 
+        let relayed_hello = long_header.hop_count > 0;
+
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::{
-                PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_RX, PROMETHEUS_MESSAGES,
-            };
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_HELLO,
-                    &long_header.sender.to_string(),
-                    PROMETHEUS_LABEL_RX,
-                ])
-                .inc();
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::HELLO, &long_header.sender, true, relayed_hello);
         }
 
         // time
@@ -320,16 +314,8 @@ impl NodeInner {
 
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::{
-                PROMETHEUS_LABEL_ACK, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-            };
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_ACK,
-                    &long_header.sender.to_string(),
-                    PROMETHEUS_LABEL_TX,
-                ])
-                .inc();
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::ACK, &long_header.sender, false, false);
         }
 
         // reply with ACK
@@ -343,8 +329,6 @@ impl NodeInner {
             &long_header.sender,
             hello_time,
         )?;
-
-        let relayed_hello = long_header.hop_count > 0;
 
         if relayed_hello {
             trace!(%src, hop_count = long_header.hop_count, "Received relayed HELLO from super peer, not creating new path");
@@ -409,16 +393,8 @@ impl NodeInner {
 
                 #[cfg(feature = "prometheus")]
                 {
-                    use crate::prometheus::{
-                        PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-                    };
-                    PROMETHEUS_MESSAGES
-                        .with_label_values(&[
-                            PROMETHEUS_LABEL_HELLO,
-                            &long_header.sender.to_string(),
-                            PROMETHEUS_LABEL_TX,
-                        ])
-                        .inc();
+                    use crate::prometheus::record_message_metric;
+                    record_message_metric(MessageType::HELLO, &long_header.sender, false, false);
                 }
 
                 trace!(%src, "Try to reach peer via new endpoint observed from received HELLO");
@@ -453,16 +429,8 @@ impl NodeInner {
 
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::{
-                PROMETHEUS_LABEL_RX, PROMETHEUS_LABEL_UNITE, PROMETHEUS_MESSAGES,
-            };
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_UNITE,
-                    &long_header.sender.to_string(),
-                    PROMETHEUS_LABEL_RX,
-                ])
-                .inc();
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::UNITE, &long_header.sender, true, false);
         }
 
         if let Some(Peer::NodePeer(node_peer)) = self.peers_list.peers.pin().get(&unite.address) {
@@ -489,16 +457,8 @@ impl NodeInner {
 
                     #[cfg(feature = "prometheus")]
                     {
-                        use crate::prometheus::{
-                            PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-                        };
-                        PROMETHEUS_MESSAGES
-                            .with_label_values(&[
-                                PROMETHEUS_LABEL_HELLO,
-                                &unite.address.to_string(),
-                                PROMETHEUS_LABEL_TX,
-                            ])
-                            .inc();
+                        use crate::prometheus::record_message_metric;
+                        record_message_metric(MessageType::HELLO, &unite.address, false, false);
                     }
 
                     trace!("Try to reach peer via new endpoint retrieved from UNITE: {new_addr}");
@@ -539,16 +499,8 @@ impl NodeInner {
 
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::{
-                PROMETHEUS_LABEL_ACK, PROMETHEUS_LABEL_RX, PROMETHEUS_MESSAGES,
-            };
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_ACK,
-                    &long_header.sender.to_string(),
-                    PROMETHEUS_LABEL_RX,
-                ])
-                .inc();
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::ACK, &long_header.sender, true, false);
         }
 
         // update peer information
@@ -580,18 +532,12 @@ impl NodeInner {
     ) -> Result<(), Error> {
         log_ack_message(long_header, ack);
 
+        let relayed_ack = long_header.hop_count > 0;
+
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::{
-                PROMETHEUS_LABEL_ACK, PROMETHEUS_LABEL_RX, PROMETHEUS_MESSAGES,
-            };
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_ACK,
-                    &long_header.sender.to_string(),
-                    PROMETHEUS_LABEL_RX,
-                ])
-                .inc();
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::ACK, &long_header.sender, true, relayed_ack);
         }
 
         // time
@@ -610,7 +556,7 @@ impl NodeInner {
         }
 
         // Determine the relay peer for relayed ACKs
-        let relay_peer = if long_header.hop_count > 0 {
+        let relay_peer = if relayed_ack {
             if let Some(tcp_remote_peer) = tcp_remote_peer {
                 // TCP relayed ACK - we know the super peer
                 Some(tcp_remote_peer)

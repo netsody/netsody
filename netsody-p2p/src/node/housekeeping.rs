@@ -358,16 +358,9 @@ impl NodeInner {
             for (path_key, path) in &node_peer.paths() {
                 #[cfg(feature = "prometheus")]
                 {
-                    use crate::prometheus::{
-                        PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-                    };
-                    PROMETHEUS_MESSAGES
-                        .with_label_values(&[
-                            PROMETHEUS_LABEL_HELLO,
-                            &peer_key.to_string(),
-                            PROMETHEUS_LABEL_TX,
-                        ])
-                        .inc();
+                    use crate::message::MessageType;
+                    use crate::prometheus::record_message_metric;
+                    record_message_metric(MessageType::HELLO, &peer_key, false, false);
                 }
 
                 trace!("Contact peer via endpoint to test reachability/maintain link: {path_key}");
@@ -601,16 +594,9 @@ impl NodeInner {
 
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::{
-                PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-            };
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_HELLO,
-                    &peer_key.to_string(),
-                    PROMETHEUS_LABEL_TX,
-                ])
-                .inc();
+            use crate::message::MessageType;
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::HELLO, &peer_key, false, false);
         }
 
         // send HELLO

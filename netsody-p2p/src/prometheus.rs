@@ -1,4 +1,5 @@
 use crate::identity::PubKey;
+use crate::message::MessageType;
 use crate::node::NodeInner;
 use crate::peer::Peer;
 use lazy_static::lazy_static;
@@ -39,6 +40,7 @@ lazy_static! {
             "type", // ack, app, hello, unite
             "peer",
             "direction", // rx, tx
+            "relay", // direct, relayed
     ]).unwrap();
     pub static ref PROMETHEUS_BYTES: CounterVec =
         register_counter_vec!("netsody_bytes", "Number of bytes transmitted.", &[
@@ -201,10 +203,56 @@ impl NodeInner {
 
     pub(crate) fn on_app_prometheus(peer: &PubKey, bytes_len: usize, path: String) {
         PROMETHEUS_MESSAGES
-            .with_label_values(&[PROMETHEUS_LABEL_APP, &peer.to_string(), PROMETHEUS_LABEL_RX])
+            .with_label_values(&[
+                PROMETHEUS_LABEL_APP,
+                &peer.to_string(),
+                PROMETHEUS_LABEL_RX,
+                PROMETHEUS_LABEL_DIRECT,
+            ])
             .inc();
         PROMETHEUS_BYTES
             .with_label_values(&[peer.to_string(), PROMETHEUS_LABEL_RX.to_string(), path])
             .inc_by(bytes_len as f64);
     }
+}
+
+/// Record a message metric with proper labeling for type, peer, direction, and relay status.
+///
+/// # Arguments
+/// * `message_type` - The type of message (APP, HELLO, ACK, UNITE)
+/// * `peer` - The peer's public key
+/// * `is_received` - true for received (rx), false for sent (tx)
+/// * `is_relayed` - true if the message was relayed through a super peer, false if direct
+pub fn record_message_metric(
+    message_type: MessageType,
+    peer: &PubKey,
+    is_received: bool,
+    is_relayed: bool,
+) {
+    let message_label = match message_type {
+        MessageType::APP => PROMETHEUS_LABEL_APP,
+        MessageType::HELLO => PROMETHEUS_LABEL_HELLO,
+        MessageType::ACK => PROMETHEUS_LABEL_ACK,
+        MessageType::UNITE => PROMETHEUS_LABEL_UNITE,
+        _ => {
+            error!("Unknown message type: {:?}", message_type);
+            return;
+        }
+    };
+
+    let direction = if is_received {
+        PROMETHEUS_LABEL_RX
+    } else {
+        PROMETHEUS_LABEL_TX
+    };
+
+    let relay = if is_relayed {
+        PROMETHEUS_LABEL_RELAYED
+    } else {
+        PROMETHEUS_LABEL_DIRECT
+    };
+
+    PROMETHEUS_MESSAGES
+        .with_label_values(&[message_label, &peer.to_string(), direction, relay])
+        .inc();
 }

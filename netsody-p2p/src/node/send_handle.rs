@@ -228,16 +228,9 @@ impl SendHandle {
 
             #[cfg(feature = "prometheus")]
             {
-                use crate::prometheus::{
-                    PROMETHEUS_LABEL_APP, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-                };
-                PROMETHEUS_MESSAGES
-                    .with_label_values(&[
-                        PROMETHEUS_LABEL_APP,
-                        &self.recipient.to_string(),
-                        PROMETHEUS_LABEL_TX,
-                    ])
-                    .inc();
+                use crate::message::MessageType;
+                use crate::prometheus::record_message_metric;
+                record_message_metric(MessageType::APP, &self.recipient, false, false);
             }
 
             // TODO: Consider using a buffer pool to avoid repeated allocations.

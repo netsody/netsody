@@ -157,22 +157,8 @@ impl SuperPeerInner {
 
             #[cfg(feature = "prometheus")]
             {
-                use crate::prometheus::*;
-                if let Some(message_label) = match message_type {
-                    MessageType::APP => Some(PROMETHEUS_LABEL_APP),
-                    MessageType::HELLO => Some(PROMETHEUS_LABEL_HELLO),
-                    MessageType::ACK => Some(PROMETHEUS_LABEL_ACK),
-                    _ => None,
-                } {
-                    // FIXME: we need to distinguish between relayed and unrelayed messages
-                    PROMETHEUS_MESSAGES
-                        .with_label_values(&[
-                            message_label,
-                            &long_header.sender.to_string(),
-                            PROMETHEUS_LABEL_RX,
-                        ])
-                        .inc();
-                }
+                use crate::prometheus::record_message_metric;
+                record_message_metric(message_type, &long_header.sender, true, true);
             }
 
             // sender wants to forward to themselves :)
@@ -214,29 +200,12 @@ impl SuperPeerInner {
             if let Some((recipient_key, prot, dst, buf)) = result {
                 #[cfg(feature = "prometheus")]
                 {
-                    use crate::prometheus::*;
-                    if let Some(message_label) = match message_type {
-                        MessageType::APP => Some(PROMETHEUS_LABEL_APP),
-                        MessageType::HELLO => Some(PROMETHEUS_LABEL_HELLO),
-                        MessageType::ACK => Some(PROMETHEUS_LABEL_ACK),
-                        _ => None,
-                    } {
-                        // FIXME: we need to distinguish between relayed and unrelayed messages
-                        PROMETHEUS_MESSAGES
-                            .with_label_values(&[
-                                message_label,
-                                &recipient_key.to_string(),
-                                PROMETHEUS_LABEL_TX,
-                            ])
-                            .inc();
-                        if message_type == MessageType::APP {
-                            PROMETHEUS_RELAYED_BYTES
-                                .with_label_values(&[
-                                    sender_key.to_string(),
-                                    recipient_key.to_string(),
-                                ])
-                                .inc_by(buf.len() as f64);
-                        }
+                    use crate::prometheus::{PROMETHEUS_RELAYED_BYTES, record_message_metric};
+                    record_message_metric(message_type, &recipient_key, false, true);
+                    if message_type == MessageType::APP {
+                        PROMETHEUS_RELAYED_BYTES
+                            .with_label_values(&[sender_key.to_string(), recipient_key.to_string()])
+                            .inc_by(buf.len() as f64);
                     }
                 }
 
@@ -281,14 +250,8 @@ impl SuperPeerInner {
 
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::*;
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_HELLO,
-                    &long_header.sender.to_string(),
-                    PROMETHEUS_LABEL_RX,
-                ])
-                .inc();
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::HELLO, &long_header.sender, true, false);
         }
 
         // time
@@ -307,14 +270,8 @@ impl SuperPeerInner {
 
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::*;
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_ACK,
-                    &long_header.sender.to_string(),
-                    PROMETHEUS_LABEL_TX,
-                ])
-                .inc();
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::ACK, &long_header.sender, false, false);
         }
 
         // reply with ACK
@@ -391,21 +348,9 @@ impl SuperPeerInner {
         if let (Some(sender_send), Some(recipient_send)) = (sender_send, recipient_send) {
             #[cfg(feature = "prometheus")]
             {
-                use crate::prometheus::*;
-                PROMETHEUS_MESSAGES
-                    .with_label_values(&[
-                        PROMETHEUS_LABEL_UNITE,
-                        &sender_key.to_string(),
-                        PROMETHEUS_LABEL_TX,
-                    ])
-                    .inc();
-                PROMETHEUS_MESSAGES
-                    .with_label_values(&[
-                        PROMETHEUS_LABEL_UNITE,
-                        &recipient_key.to_string(),
-                        PROMETHEUS_LABEL_TX,
-                    ])
-                    .inc();
+                use crate::prometheus::record_message_metric;
+                record_message_metric(MessageType::UNITE, sender_key, false, false);
+                record_message_metric(MessageType::UNITE, recipient_key, false, false);
             }
 
             self.send(*sender_key, sender_send.0, sender_send.1, &sender_send.2)
