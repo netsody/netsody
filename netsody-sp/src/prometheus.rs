@@ -8,6 +8,8 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use lazy_static::lazy_static;
+use p2p::identity::PubKey;
+use p2p::message::MessageType;
 use p2p::util;
 use prometheus::{
     CounterVec, Encoder, HistogramVec, TextEncoder, register_counter_vec, register_histogram_vec,
@@ -47,6 +49,7 @@ lazy_static! {
             "type", // ack, app, hello, unite
             "peer",
             "direction", // rx, tx
+            "relay", // direct, relayed
     ]).unwrap();
     pub static ref PROMETHEUS_RELAYED_BYTES: CounterVec =
         register_counter_vec!("netsody_sp_relayed_bytes", "Number of bytes relayed.", &[
@@ -72,6 +75,8 @@ pub const PROMETHEUS_LABEL_HELLO: &str = "hello";
 pub const PROMETHEUS_LABEL_UNITE: &str = "unite";
 pub const PROMETHEUS_LABEL_RX: &str = "rx";
 pub const PROMETHEUS_LABEL_TX: &str = "tx";
+pub const PROMETHEUS_LABEL_DIRECT: &str = "direct";
+pub const PROMETHEUS_LABEL_RELAYED: &str = "relayed";
 
 async fn serve_req(
     req: Request<Incoming>,
@@ -235,4 +240,45 @@ impl SuperPeerInner {
         }
         PROMETHEUS_PEERS.set(peers_count as f64);
     }
+}
+
+/// Record a message metric with proper labeling for type, peer, direction, and relay status.
+///
+/// # Arguments
+/// * `message_type` - The type of message (APP, HELLO, ACK, UNITE)
+/// * `peer` - The peer's public key
+/// * `is_received` - true for received (rx), false for sent (tx)
+/// * `is_relayed` - true if the message was relayed through a super peer, false if direct
+pub fn record_message_metric(
+    message_type: MessageType,
+    peer: &PubKey,
+    is_received: bool,
+    is_relayed: bool,
+) {
+    let message_label = match message_type {
+        MessageType::APP => PROMETHEUS_LABEL_APP,
+        MessageType::HELLO => PROMETHEUS_LABEL_HELLO,
+        MessageType::ACK => PROMETHEUS_LABEL_ACK,
+        MessageType::UNITE => PROMETHEUS_LABEL_UNITE,
+        _ => {
+            error!("Unknown message type: {:?}", message_type);
+            return;
+        }
+    };
+
+    let direction = if is_received {
+        PROMETHEUS_LABEL_RX
+    } else {
+        PROMETHEUS_LABEL_TX
+    };
+
+    let relay = if is_relayed {
+        PROMETHEUS_LABEL_RELAYED
+    } else {
+        PROMETHEUS_LABEL_DIRECT
+    };
+
+    PROMETHEUS_MESSAGES
+        .with_label_values(&[message_label, &peer.to_string(), direction, relay])
+        .inc();
 }
