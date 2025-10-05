@@ -1,6 +1,7 @@
 use crate::agent::dns::AgentDnsInterface;
 #[cfg(target_os = "macos")]
 use crate::agent::dns::macos::{scutil_add, scutil_get_dns_ip, scutil_remove};
+use crate::agent::housekeeping::HOUSEKEEPING_INTERVAL_MS;
 use crate::agent::{AgentInner, PlatformDependent};
 use crate::network::{AppliedStatus, Network};
 use arc_swap::ArcSwap;
@@ -110,10 +111,13 @@ impl AgentDns {
             if let Some(hostnames) = &network.desired_state.hostnames.applied {
                 for (ip, hostname) in hostnames.0.iter() {
                     trace!("Adding DNS A record: {}.netsody.me -> {}", hostname, ip);
+                    // Use short TTL based on housekeeping interval to ensure timely updates
+                    // when network config changes, as platform resolvers may cache DNS records
+                    let dns_ttl = (HOUSEKEEPING_INTERVAL_MS / 1000) as u32;
                     authority.upsert_mut(
                         Record::from_rdata(
                             Name::parse(format!("{hostname}.netsody.me.").as_str(), None).unwrap(),
-                            60,
+                            dns_ttl,
                             RData::A(A(*ip)),
                         )
                         .set_dns_class(DNSClass::IN)
@@ -281,6 +285,8 @@ impl AgentDnsInterface for AgentDns {
                     &network.current_state.hostnames, network.desired_state.hostnames
                 );
                 self.update_all_networks(networks).await;
+            } else {
+                trace!("DNS up to date");
             }
         }
     }

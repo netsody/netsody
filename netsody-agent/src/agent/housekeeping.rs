@@ -21,12 +21,15 @@ use url::Url;
 /// If a config cannot be received within this time, the retrieval is considered failed.
 pub(crate) const CONFIG_RETRIEVE_TIMEOUT: u64 = 5_000;
 
+/// Housekeeping interval in milliseconds.
+pub(crate) const HOUSEKEEPING_INTERVAL_MS: u64 = 10_000;
+
 impl AgentInner {
     pub(crate) async fn housekeeping_runner(
         inner: Arc<AgentInner>,
         housekeeping_shutdown: CancellationToken,
     ) -> Result<(), String> {
-        let mut interval = tokio::time::interval(Duration::from_millis(10_000));
+        let mut interval = tokio::time::interval(Duration::from_millis(HOUSEKEEPING_INTERVAL_MS));
 
         loop {
             tokio::select! {
