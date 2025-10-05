@@ -5,7 +5,7 @@
 
 // Standard library imports
 use std::fmt::{self, Formatter};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ptr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -214,6 +214,7 @@ impl SuperPeer {
             }
             all_paths_stale
         } else {
+            trace!("TCP connection should not be established because TCP is already established");
             false
         }
     }
@@ -344,18 +345,31 @@ impl SuperPeer {
         }
     }
 
-    /// Update the best UDP path based on current latency measurements.
+    /// Update the best UDP path based on reachability and latency measurements.
     ///
-    /// This method finds the UDP path with the lowest median latency and updates
-    /// the internal best path pointer accordingly.
-    pub(crate) fn update_best_udp_path(&self) {
+    /// This method finds the UDP path with the best combination of reachability
+    /// and median latency. Reachable paths are preferred over unreachable ones,
+    /// and among reachable paths, the one with the lowest median latency is selected.
+    ///
+    /// # Arguments
+    /// * `time` - Current timestamp in microseconds
+    /// * `hello_timeout` - Timeout period in seconds
+    pub(crate) fn update_best_udp_path(&self, time: u64, hello_timeout: u64) {
         let best_path_ptr = if let Some(best_key) = self
             .udp_paths
             .pin()
             .iter()
-            .filter_map(|(key, path)| path.median_lat().map(|lat| (key, lat)))
-            .min_by_key(|&(_, lat)| lat)
-            .map(|(key, _)| key)
+            .filter_map(|(key, path)| {
+                let is_reachable = path.is_reachable(time, hello_timeout);
+                let median_lat = path.median_lat();
+                Some((key, is_reachable, median_lat))
+            })
+            .min_by_key(|&(_, is_reachable, median_lat)| {
+                // Sort by reachability first (false comes before true, so we invert)
+                // Then by median latency (lower is better)
+                (!is_reachable, median_lat.unwrap_or(u64::MAX))
+            })
+            .map(|(key, _, _)| key)
         {
             best_key as *const PeerPathKey as *mut PeerPathKey
         } else {
@@ -381,6 +395,7 @@ impl SuperPeer {
         src: SocketAddr,
         time: u64,
         ack_time: u64,
+        hello_timeout: u64,
     ) {
         if let Some(udp_local_addr) = udp_local_addr {
             trace!("Got ACK via UDP");
@@ -398,7 +413,7 @@ impl SuperPeer {
                 udp_path.ack_rx(time, src, ack_time);
                 self.udp_paths.pin().insert(path_key, udp_path);
             }
-            self.update_best_udp_path();
+            self.update_best_udp_path(time, hello_timeout);
         } else {
             trace!("Got ACK via TCP");
             if let Some(tcp_path) = self.tcp_connection().as_ref() {
@@ -407,16 +422,28 @@ impl SuperPeer {
         }
     }
 
-    /// Remove stale UDP paths that haven't received responses within the timeout period.
+    /// Remove invalid UDP paths that are either stale or use outdated addresses.
     ///
     /// # Arguments
     /// * `time` - Current timestamp
     /// * `hello_timeout` - Timeout period in seconds
-    pub(crate) fn remove_stale_udp_paths(&self, time: u64, hello_timeout: u64) {
+    pub(crate) fn remove_invalid_udp_paths(
+        &self,
+        time: u64,
+        hello_timeout: u64,
+        my_addrs: &[IpAddr],
+    ) {
+        let resolved_addrs = self.resolved_addrs();
+
         let guard = self.udp_paths.guard();
         self.udp_paths.retain(
             |key, candidate| {
-                let valid = !candidate.stale(time, hello_timeout);
+                // A link is valid as long as it is not stale and using a existing local and remote address
+                let valid = !candidate.stale(time, hello_timeout)
+                    || (resolved_addrs
+                        .as_ref()
+                        .is_some_and(|addrs: &Arc<Vec<SocketAddr>>| addrs.contains(&key.0.1))
+                        && my_addrs.contains(&key.0.0.ip()));
                 if !valid {
                     trace!(path = %key, "Remove stale path");
                 }
@@ -424,7 +451,7 @@ impl SuperPeer {
             },
             &guard,
         );
-        self.update_best_udp_path();
+        self.update_best_udp_path(time, hello_timeout);
     }
 
     /// Check if this super peer is currently reachable.
