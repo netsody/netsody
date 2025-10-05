@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU8, AtomicU64};
 // External crate imports
 use papaya::{HashMap as PapayaHashMap, HashMapRef, OwnedGuard};
 use tokio::net::UdpSocket;
-use tracing::trace;
+use tracing::{trace, warn};
 
 // Crate-internal imports
 use crate::crypto::{
@@ -54,6 +54,10 @@ pub struct NodePeer {
     best_path_store: AtomicPtr<PeerPathKey>,
     /// Map of all known paths to this peer.
     pub paths: PapayaHashMap<PeerPathKey, PeerPath>,
+    /// Map of relay paths through super peers (super peer pubkey -> path).
+    pub relay_paths: PapayaHashMap<PubKey, PeerPath>,
+    /// Atomic pointer to the best super peer's public key.
+    best_sp_store: AtomicPtr<PubKey>,
     /// Short ID for receiving messages from this peer.
     pub rx_short_id: AtomicI32,
     /// Short ID for sending messages to this peer.
@@ -75,6 +79,7 @@ impl NodePeer {
     /// * `my_agreement_sk` - Our agreement secret key for key exchange
     /// * `my_agreement_pk` - Our agreement public key for key exchange
     /// * `time` - Current timestamp
+    /// * `default_route` - Default super peer to use as fallback
     ///
     /// # Returns
     /// A new NodePeer instance or an error if creation fails
@@ -82,6 +87,7 @@ impl NodePeer {
     /// # Errors
     /// * [`Error::AgreementPkNotPresent`] - If agreement keys are missing when encryption is enabled
     /// * [`Error::Crypto`] - If cryptographic operations fail
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         pow: Option<&Pow>,
         pk: &PubKey,
@@ -90,6 +96,7 @@ impl NodePeer {
         my_agreement_sk: Option<AgreementSecKey>,
         my_agreement_pk: Option<AgreementPubKey>,
         time: u64,
+        default_route: &PubKey,
     ) -> Result<Self, Error> {
         let pow = if let Some(pow) = pow {
             // PoW given, we can validate it
@@ -128,6 +135,7 @@ impl NodePeer {
             session_keys,
             created_at: time,
             rx_short_id: AtomicI32::new(i32::from_be_bytes(short_id)),
+            best_sp_store: AtomicPtr::new(default_route as *const PubKey as *mut PubKey),
             ..Default::default()
         })
     }
@@ -187,17 +195,33 @@ impl NodePeer {
     /// * `src` - Source address of the ACK
     /// * `hello_time` - Timestamp of the original HELLO message
     /// * `udp_socket` - UDP socket that received the ACK
+    /// * `relay_peer` - PubKey of the relay peer if this ACK was received via a relay path (TCP or UDP), None for direct ACKs
     pub(crate) fn ack_rx(
         &self,
         time: u64,
         src: SocketAddr,
         hello_time: u64,
-        udp_socket: Arc<UdpSocket>,
+        udp_socket: Option<Arc<UdpSocket>>,
+        relay_peer: Option<PubKey>,
     ) {
-        let key = Into::<PeerPathKey>::into((udp_socket.local_addr().unwrap(), src));
-        if let Some(path) = self.paths.pin().get(&key) {
-            path.ack_rx(time, src, hello_time);
-            self.update_best_path();
+        if let Some(relay_peer) = relay_peer {
+            // Relayed ACK - we know exactly which super peer sent this ACK (TCP or UDP)
+            if let Some(relay_path) = self.relay_paths.pin().get(&relay_peer) {
+                relay_path.ack_rx(time, src, hello_time);
+                trace!(%src, super_peer = %relay_peer, "Updated relay path ACK from super peer");
+            } else {
+                warn!(%src, "Received relayed ACK from non-super peer {}", relay_peer);
+            }
+        } else if let Some(udp_socket) = udp_socket {
+            // Normal direct ACK
+            let key = Into::<PeerPathKey>::into((udp_socket.local_addr().unwrap(), src));
+            if let Some(path) = self.paths.pin().get(&key) {
+                path.ack_rx(time, src, hello_time);
+                self.update_best_path();
+            }
+        } else {
+            // UDP ACK without socket - this should not happen anymore as relay_peer is now determined in on_node_peer_ack
+            warn!(%src, "Received UDP ACK without socket and without relay_peer - this should not happen");
         }
     }
 
@@ -221,6 +245,34 @@ impl NodePeer {
             ptr::null_mut()
         };
         self.best_path_store.store(best_path_ptr, SeqCst);
+    }
+
+    /// Update the best relay based on current relay path quality.
+    ///
+    /// This method finds the super peer with the lowest median latency among
+    /// reachable relay paths and updates the internal best relay pointer accordingly.
+    ///
+    /// # Arguments
+    /// * `time` - Current timestamp
+    /// * `hello_timeout` - Timeout period in seconds
+    /// * `default_route` - Default super peer to use as fallback
+    pub(crate) fn update_best_relay(&self, time: u64, hello_timeout: u64, default_route: &PubKey) {
+        let best_sp_ptr = if let Some(best_sp_pk) = self
+            .relay_paths
+            .pin()
+            .iter()
+            .filter(|(_, path)| path.is_reachable(time, hello_timeout))
+            .filter_map(|(sp_pk, path)| path.median_lat().map(|lat| (sp_pk, lat)))
+            .min_by_key(|&(_, lat)| lat)
+            .map(|(sp_pk, _)| sp_pk)
+        {
+            trace!(sp_pk = %best_sp_pk, "(New) best relay");
+            best_sp_pk as *const PubKey as *mut PubKey
+        } else {
+            trace!("No best relay, using default route");
+            default_route as *const PubKey as *mut PubKey
+        };
+        self.best_sp_store.store(best_sp_ptr, SeqCst);
     }
 
     /// Get the transmission session key for this peer.
@@ -326,6 +378,15 @@ impl NodePeer {
         } else {
             Some(unsafe { &*ptr })
         }
+    }
+
+    /// Get the public key of the best super peer for this node peer.
+    ///
+    /// # Returns
+    /// Reference to the best super peer's public key
+    pub fn best_sp(&self) -> &PubKey {
+        let ptr = self.best_sp_store.load(SeqCst);
+        unsafe { &*ptr }
     }
 
     /// Get the best path to this peer.

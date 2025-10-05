@@ -85,7 +85,7 @@ impl NodeInner {
         response_buf: &mut [u8],
         binding: Arc<UdpBinding>,
     ) -> Result<(), Error> {
-        self.on_packet(src, buf, response_buf, Some(binding.clone()))
+        self.on_packet(src, buf, response_buf, Some(binding.clone()), None)
             .await
     }
 }

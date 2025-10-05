@@ -120,16 +120,9 @@ impl NodeInner {
 
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::{
-                PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-            };
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_HELLO,
-                    &peer_key.to_string(),
-                    PROMETHEUS_LABEL_TX,
-                ])
-                .inc();
+            use crate::message::MessageType;
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::HELLO, &peer_key, false, false);
         }
 
         let hello = match HelloSuperPeerMessage::build(
@@ -180,7 +173,7 @@ impl NodeInner {
                         Some(Ok(bytes)) => {
                             // process segment
                             if let Err(e) = tcp_inner
-                                .on_tcp_segment(peer_addr, &mut bytes.to_vec(), &mut response_buf)
+                                .on_tcp_segment(peer_addr, &mut bytes.to_vec(), &mut response_buf, peer_key)
                                 .await
                             {
                                 error!("Error processing segment: {e}");
@@ -206,14 +199,16 @@ impl NodeInner {
         }
     }
 
-    #[instrument(fields(src = %src), skip_all)]
+    #[instrument(fields(src = %src, remote_peer = %remote_peer), skip_all)]
     pub async fn on_tcp_segment(
         &self,
         src: SocketAddr,
         buf: &mut [u8],
         response_buf: &mut [u8],
+        remote_peer: PubKey,
     ) -> Result<(), Error> {
-        self.on_packet(src, buf, response_buf, None).await
+        self.on_packet(src, buf, response_buf, None, Some(remote_peer))
+            .await
     }
 }
 

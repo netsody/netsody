@@ -6,7 +6,7 @@ use crate::node::SendHandleState;
 use crate::node::UdpBinding;
 use crate::node::inner::NodeInner;
 use crate::node::{Error, Node};
-use crate::peer::{NodePeer, Peer, SuperPeer};
+use crate::peer::{NodePeer, Peer, PeerPath, SuperPeer};
 use crate::util::get_addrs;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -241,10 +241,10 @@ impl NodeInner {
         let peers = self.peers_list.peers.pin();
 
         let default_route = self.peers_list.default_route();
-        let Peer::SuperPeer(super_peer) = peers.get(default_route).unwrap() else {
+        let Peer::SuperPeer(default_sp) = peers.get(default_route).unwrap() else {
             unreachable!()
         };
-        let sp_tcp_stream = super_peer.tcp_connection().as_ref().and_then(|tcp| {
+        let sp_tcp_stream = default_sp.tcp_connection().as_ref().and_then(|tcp| {
             tcp.stream_store
                 .load()
                 .as_ref()
@@ -258,6 +258,14 @@ impl NodeInner {
             let peer = peers.get(&peer_key);
 
             if let Some(Peer::NodePeer(node_peer)) = peer {
+                let best_sp = node_peer.best_sp();
+                let Peer::SuperPeer(super_peer) = peers.get(best_sp).unwrap() else {
+                    unreachable!()
+                };
+                trace!(
+                    "Update send handle for peer {:?} with best super peer {:?}",
+                    peer_key, best_sp
+                );
                 handle.update_state(node_peer.new_send_handle_state(inner.clone(), super_peer));
             } else {
                 handle.update_state(SendHandleState {
@@ -267,7 +275,7 @@ impl NodeInner {
                     tx_key: Default::default(),
                     short_id: Default::default(),
                     sp_tcp_stream: sp_tcp_stream.clone(),
-                    sp_udp_sockets: SendHandleState::sp_socket(super_peer, &inner.udp_bindings()),
+                    sp_udp_sockets: SendHandleState::sp_socket(default_sp, &inner.udp_bindings()),
                 });
             }
         });
@@ -305,6 +313,8 @@ impl NodeInner {
         peer_key: PubKey,
         node_peer: &NodePeer,
     ) -> Result<(), Error> {
+        let default_route = self.peers_list.default_route();
+
         // ensure peer has unique short id
         if node_peer.rx_short_id() == SHORT_ID_NONE {
             let guard = self.peers_list.rx_short_ids.guard();
@@ -348,16 +358,9 @@ impl NodeInner {
             for (path_key, path) in &node_peer.paths() {
                 #[cfg(feature = "prometheus")]
                 {
-                    use crate::prometheus::{
-                        PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-                    };
-                    PROMETHEUS_MESSAGES
-                        .with_label_values(&[
-                            PROMETHEUS_LABEL_HELLO,
-                            &peer_key.to_string(),
-                            PROMETHEUS_LABEL_TX,
-                        ])
-                        .inc();
+                    use crate::message::MessageType;
+                    use crate::prometheus::record_message_metric;
+                    record_message_metric(MessageType::HELLO, &peer_key, false, false);
                 }
 
                 trace!("Contact peer via endpoint to test reachability/maintain link: {path_key}");
@@ -388,11 +391,109 @@ impl NodeInner {
                     }
                 }
             }
+
+            // If we have app traffic but no reachable path to the peer, try to establish a relay path through super peers
+            if !node_peer.is_reachable(time, self.opts.hello_timeout) {
+                trace!(
+                    "No reachable path to peer, attempting to establish relay path through super peers"
+                );
+
+                // Send HelloNodePeerMessage through each super peer
+                for (sp_pk, peer) in &self.peers_list.peers.pin_owned() {
+                    let super_peer = match peer {
+                        Peer::SuperPeer(sp) => sp,
+                        _ => continue, // Skip non-super peers
+                    };
+
+                    let hello = HelloNodePeerMessage::build(
+                        &self.network_id,
+                        &self.opts.id.pk,
+                        &self.opts.id.pow,
+                        node_peer.tx_key().as_ref(),
+                        &peer_key,
+                        time,
+                        node_peer.rx_short_id(),
+                    )?;
+
+                    {
+                        // Get or create relay path for this super peer
+                        let relay_paths_guard = node_peer.relay_paths.pin();
+                        let relayed_path = relay_paths_guard.get_or_insert(*sp_pk, PeerPath::new());
+                        relayed_path.hello_tx(time);
+                    }
+
+                    // Try TCP first
+                    if let Some(stream) = super_peer.tcp_connection().as_ref().and_then(|tcp| {
+                        tcp.stream_store
+                            .load()
+                            .as_ref()
+                            .map(std::clone::Clone::clone)
+                            .as_ref()
+                            .cloned()
+                    }) {
+                        if let Err(e) = self
+                            .send_super_peer_tcp(&stream, hello.clone(), sp_pk)
+                            .await
+                        {
+                            trace!(
+                                "Failed to send relayed HELLO via super peer TCP {}: {}",
+                                sp_pk, e
+                            );
+                        } else {
+                            trace!(
+                                "Sent relayed HELLO to node peer via super peer TCP {}",
+                                sp_pk
+                            );
+                            continue;
+                        }
+                    } else {
+                        trace!("No TCP connection/stream available to super peer {}", sp_pk);
+                    }
+
+                    // Fall forward to UDP if TCP failed
+                    let (local_addr, remote_addr) = {
+                        let udp_paths_guard = super_peer.udp_paths.guard();
+                        if let Some((path_key, _path)) = super_peer.best_udp_path(&udp_paths_guard)
+                        {
+                            (path_key.local_addr(), path_key.remote_addr())
+                        } else {
+                            warn!("No UDP path available to super peer {}", sp_pk);
+                            continue;
+                        }
+                    };
+
+                    if let Some(udp_socket) = self.udp_socket_for(&local_addr) {
+                        if let Err(e) = udp_socket.send_to(&hello, remote_addr).await {
+                            warn!(
+                                "Failed to send relayed HELLO via super peer {} UDP local_addr={}: {}",
+                                sp_pk, local_addr, e
+                            );
+                        } else {
+                            trace!(
+                                "Sent relayed HELLO to node peer via super peer {} UDP local_addr={}",
+                                sp_pk, local_addr
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "No UDP socket found for path local_addr={} for super peer {}",
+                            local_addr, sp_pk
+                        );
+                    }
+                }
+            } else {
+                // We have a direct connection, clear all relay paths
+                trace!("Reachable direct paths available, cleared relay paths.");
+                node_peer.relay_paths.pin().clear();
+            }
         } else {
             trace!("No app traffic");
             node_peer.clear_paths();
             node_peer.clear_app_tx_rx();
         }
+
+        // Update best relay after potential changed default route or creation or clearing of relay paths
+        node_peer.update_best_relay(time, self.opts.hello_timeout, default_route);
 
         if !node_peer.is_reachable(time, self.opts.hello_timeout) {
             trace!("Node is not directly reachable.");
@@ -493,16 +594,9 @@ impl NodeInner {
 
         #[cfg(feature = "prometheus")]
         {
-            use crate::prometheus::{
-                PROMETHEUS_LABEL_HELLO, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-            };
-            PROMETHEUS_MESSAGES
-                .with_label_values(&[
-                    PROMETHEUS_LABEL_HELLO,
-                    &peer_key.to_string(),
-                    PROMETHEUS_LABEL_TX,
-                ])
-                .inc();
+            use crate::message::MessageType;
+            use crate::prometheus::record_message_metric;
+            record_message_metric(MessageType::HELLO, &peer_key, false, false);
         }
 
         // send HELLO

@@ -171,6 +171,7 @@ impl SendHandle {
                 inner.agreement_sk,
                 inner.agreement_pk,
                 inner.cached_time(),
+                inner.peers_list.default_route(),
             )?;
             inner
                 .peers_list
@@ -227,16 +228,9 @@ impl SendHandle {
 
             #[cfg(feature = "prometheus")]
             {
-                use crate::prometheus::{
-                    PROMETHEUS_LABEL_APP, PROMETHEUS_LABEL_TX, PROMETHEUS_MESSAGES,
-                };
-                PROMETHEUS_MESSAGES
-                    .with_label_values(&[
-                        PROMETHEUS_LABEL_APP,
-                        &self.recipient.to_string(),
-                        PROMETHEUS_LABEL_TX,
-                    ])
-                    .inc();
+                use crate::message::MessageType;
+                use crate::prometheus::record_message_metric;
+                record_message_metric(MessageType::APP, &self.recipient, false, false);
             }
 
             // TODO: Consider using a buffer pool to avoid repeated allocations.
@@ -311,7 +305,7 @@ impl SendHandle {
                         .send_super_peer_tcp(stream, app, default_route)
                         .await?;
                 } else {
-                    // Fallback to UDP
+                    // Fall forward to UDP
                     let mut result = false;
                     for (sp_resolved_addr, sp_udp_socket) in sp_udp_sockets {
                         if let Err(e) = sp_udp_socket.send_to(&app, sp_resolved_addr).await {
