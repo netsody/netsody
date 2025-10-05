@@ -284,8 +284,10 @@ impl NodeInner {
             let time = self.current_time();
             match peer {
                 Peer::SuperPeer(super_peer) => {
-                    self.super_peer_housekeeping(inner, &endpoints, *peer_key, super_peer, time)
-                        .await?;
+                    self.super_peer_housekeeping(
+                        inner, &endpoints, *peer_key, super_peer, time, my_addrs,
+                    )
+                    .await?;
                 }
                 Peer::NodePeer(node_peer) => {
                     self.node_peer_housekeeping(time, *peer_key, node_peer)
@@ -410,6 +412,7 @@ impl NodeInner {
         peer_key: PubKey,
         super_peer: &SuperPeer,
         time: u64,
+        my_addrs: &[IpAddr],
     ) -> Result<(), Error> {
         // tcp connection required?
         if super_peer.establish_tcp_connection(time, self.opts.hello_timeout, self.opts.enforce_tcp)
@@ -446,8 +449,8 @@ impl NodeInner {
                 .any(|b| b.local_addr.eq(&key.local_addr()))
         });
 
-        // remove stale endpoints
-        super_peer.remove_stale_udp_paths(time, self.opts.hello_timeout);
+        // remove invalid endpoints
+        super_peer.remove_invalid_udp_paths(time, self.opts.hello_timeout, my_addrs);
 
         // TCP connection not longer required as a udp path has become reachable?
         if !self.opts.enforce_tcp
