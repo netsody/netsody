@@ -381,7 +381,6 @@ impl SuperPeer {
         src: SocketAddr,
         time: u64,
         ack_time: u64,
-        enforce_tcp: bool,
     ) {
         if let Some(udp_local_addr) = udp_local_addr {
             trace!("Got ACK via UDP");
@@ -400,10 +399,6 @@ impl SuperPeer {
                 self.udp_paths.pin().insert(path_key, udp_path);
             }
             self.update_best_udp_path();
-
-            if !enforce_tcp && let Some(tcp_path) = self.tcp_connection().as_ref() {
-                tcp_path.cancel_connection();
-            }
         } else {
             trace!("Got ACK via TCP");
             if let Some(tcp_path) = self.tcp_connection().as_ref() {

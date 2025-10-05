@@ -476,7 +476,7 @@ impl NodeInner {
         let ack_time = ack.time.into();
         let local_addr = udp_binding.map(|binding| binding.local_addr);
 
-        super_peer.ack_rx(local_addr, src, time, ack_time, self.opts.enforce_tcp);
+        super_peer.ack_rx(local_addr, src, time, ack_time);
     }
 
     pub fn cached_time(&self) -> u64 {

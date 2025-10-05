@@ -449,6 +449,29 @@ impl NodeInner {
         // remove stale endpoints
         super_peer.remove_stale_udp_paths(time, self.opts.hello_timeout);
 
+        // TCP connection not longer required as a udp path has become reachable?
+        if !self.opts.enforce_tcp
+            && let Some(tcp_path) = super_peer.tcp_connection().as_ref()
+        {
+            // Check if we have at least one reachable UDP path before canceling TCP
+            let has_reachable_udp = super_peer
+                .udp_paths
+                .pin()
+                .values()
+                .any(|path| path.is_reachable(time, self.opts.hello_timeout));
+
+            if has_reachable_udp {
+                trace!(
+                    "TCP connection not longer required as a reachable UDP path has become available."
+                );
+                tcp_path.cancel_connection();
+            } else {
+                trace!(
+                    "TCP connection still required as no reachable UDP path has become available."
+                );
+            }
+        }
+
         match SuperPeer::lookup_host(super_peer.addr()).await {
             Ok(resolved_addrs) => super_peer.update_resolved_addrs(resolved_addrs),
             Err(e) => warn!(
