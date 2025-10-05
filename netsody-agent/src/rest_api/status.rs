@@ -305,6 +305,17 @@ impl SuperPeerStatus {
     /// Formats the status with optional secret masking
     fn fmt(&self, f: &mut String, _include_secrets: bool) -> std::fmt::Result {
         writeln!(f, "Address: {}", self.addr)?;
+        match &self.resolved_addrs {
+            Some(resolved_addrs) => {
+                writeln!(f, "Resolved Addresses:")?;
+                for addr in resolved_addrs {
+                    writeln!(f, "  {addr}")?;
+                }
+            }
+            None => {
+                writeln!(f, "Resolved Addresses: None")?;
+            }
+        }
         writeln!(f, "TCP:")?;
         writeln!(f, "  Port: {}", self.tcp_port)?;
         match &self.tcp_path {
@@ -330,24 +341,13 @@ impl SuperPeerStatus {
         //     }
         //     None => writeln!(f, "Session Keys: Not present")?,
         // }
-        match &self.resolved_addrs {
-            Some(resolved_addrs) => {
-                writeln!(f, "Resolved Addresses:")?;
-                for addr in resolved_addrs {
-                    writeln!(f, "  {addr}")?;
-                }
-            }
-            None => {
-                writeln!(f, "Resolved Addresses: None")?;
-            }
-        }
         writeln!(f, "UDP:")?;
         writeln!(
             f,
             "  Best Path: {}",
             self.best_udp_path
                 .as_ref()
-                .map_or("".to_string(), |p| p.to_string())
+                .map_or("None".to_string(), |p| p.to_string())
         )?;
         writeln!(f, "  Paths:")?;
         let mut sorted_paths: Vec<_> = self.udp_paths.iter().collect();
