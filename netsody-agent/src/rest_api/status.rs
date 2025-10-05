@@ -548,6 +548,15 @@ impl NetworkStatus {
 impl NetworkStatus {
     /// Returns a user-friendly string representation of the network status
     pub fn status_text(&self) -> String {
+        // Check for transition states based on disabled flag and status
+        if self.disabled && !matches!(self.status, AgentStateStatus::Disabled) {
+            return "Disabling...".to_string();
+        }
+        if !self.disabled && matches!(self.status, AgentStateStatus::Disabled) {
+            return "Enabling...".to_string();
+        }
+
+        // Normal status display
         match &self.status {
             AgentStateStatus::Initializing => "Initializing".to_string(),
             AgentStateStatus::Disabled => "Disabled".to_string(),
