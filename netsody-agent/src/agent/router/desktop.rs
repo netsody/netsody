@@ -121,11 +121,16 @@ impl AgentRouterInterface for AgentRouter {
                     let if_index = tun_device.if_index().ok();
                     for (_, route) in routes.0.iter() {
                         let net_route = Self::net_route(route, if_index);
+                        let existing = existing_routes.iter().any(|route| {
+                            net_route.destination == route.destination
+                                && net_route.prefix == route.prefix
+                                && net_route.gateway == route.gateway
+                        });
 
-                        if !existing_routes.contains(&net_route) {
-                            warn!("Route {:?} has been removed by externally.", route);
+                        if !existing {
+                            warn!("Route {:?} has been removed externally.", route);
                             network.current_state.routes = AppliedStatus::error(format!(
-                                "Route {:?} has been removed by externally.",
+                                "Route {:?} has been removed externally.",
                                 route
                             ));
                         }
