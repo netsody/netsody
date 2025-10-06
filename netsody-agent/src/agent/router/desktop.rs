@@ -31,7 +31,7 @@ impl AgentRouter {
         .with_gateway(IpAddr::V4(effective_route.gw));
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let route = route.with_metric(4900);
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         let route = route.with_ifindex(if_index.expect("Interface index is required"));
         route
     }
@@ -121,8 +121,13 @@ impl AgentRouterInterface for AgentRouter {
                     let if_index = tun_device.if_index().ok();
                     for (_, route) in routes.0.iter() {
                         let net_route = Self::net_route(route, if_index);
+                        let existing = existing_routes.iter().any(|route| {
+                            net_route.destination == route.destination
+                                && net_route.prefix == route.prefix
+                                && net_route.gateway == route.gateway
+                        });
 
-                        if !existing_routes.contains(&net_route) {
+                        if !existing {
                             warn!("Route {:?} has been removed externally.", route);
                             network.current_state.routes = AppliedStatus::error(format!(
                                 "Route {:?} has been removed externally.",
