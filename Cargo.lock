@@ -4302,6 +4302,7 @@ dependencies = [
  "ipnet-trie",
  "net-route",
  "netsody-p2p",
+ "resolv-conf",
  "serde",
  "serde_json",
  "sysctl",
@@ -6014,9 +6015,9 @@ dependencies = [
 
 [[package]]
 name = "resolv-conf"
-version = "0.7.3"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc7c8f7f733062b66dc1c63f9db168ac0b97a9210e247fa90fdc9ad08f51b302"
+checksum = "6b3789b30bd25ba102de4beabd95d21ac45b69b1be7d14522bab988c526d6799"
 
 [[package]]
 name = "rgb"
