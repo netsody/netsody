@@ -31,7 +31,7 @@ impl AgentRouter {
         .with_gateway(IpAddr::V4(effective_route.gw));
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let route = route.with_metric(4900);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         let route = route.with_ifindex(if_index.expect("Interface index is required"));
         route
     }
