@@ -22,6 +22,7 @@ egui = "0.32.3"
 egui_glow = { version = "0.32.3", features = ["winit", "clipboard"] }
 arboard = "3.6.1"
 webbrowser = "1.0.5"
+ipnet = { version = "2.11.0" }
 
 [target."cfg(target_os = \"macos\")".dependencies]
 objc2-core-foundation = { version = "0.3.0", default-features = false, features = [
