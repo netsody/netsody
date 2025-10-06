@@ -267,10 +267,9 @@ impl AgentDnsInterface for AgentDns {
             let server_exists = scutil_get_dns_ip().await;
             for (_, network) in networks.iter_mut() {
                 if network.current_state.hostnames.applied.is_some() && server_exists == Ok(None) {
-                    warn!("DNS server has been removed by externally.");
-                    network.current_state.hostnames = AppliedStatus::error(
-                        "DNS server has been removed by externally.".to_string(),
-                    );
+                    warn!("DNS server has been removed externally.");
+                    network.current_state.hostnames =
+                        AppliedStatus::error("DNS server has been removed externally.".to_string());
                 }
             }
         }

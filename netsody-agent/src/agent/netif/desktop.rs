@@ -110,11 +110,11 @@ impl AgentNetifInterface for AgentNetif {
                         .any(|address| address == &IpAddr::V4(current_ip.addr()))
                 {
                     warn!(
-                        "TUN device address {} has been removed by externally.",
+                        "TUN device address {} has been removed externally.",
                         current_ip
                     );
                     network.current_state.ip = AppliedStatus::error(format!(
-                        "TUN device address {} has been removed by externally.",
+                        "TUN device address {} has been removed externally.",
                         current_ip
                     ));
                 }

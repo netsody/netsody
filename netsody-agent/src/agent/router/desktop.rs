@@ -123,9 +123,9 @@ impl AgentRouterInterface for AgentRouter {
                         let net_route = Self::net_route(route, if_index);
 
                         if !existing_routes.contains(&net_route) {
-                            warn!("Route {:?} has been removed by externally.", route);
+                            warn!("Route {:?} has been removed externally.", route);
                             network.current_state.routes = AppliedStatus::error(format!(
-                                "Route {:?} has been removed by externally.",
+                                "Route {:?} has been removed externally.",
                                 route
                             ));
                         }
