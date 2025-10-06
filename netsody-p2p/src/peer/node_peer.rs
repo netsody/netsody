@@ -262,7 +262,7 @@ impl NodePeer {
             // No current path and no candidate found -> no path
             (None, None) => {
                 trace!("Node peer path unchanged: no current path, no candidate found");
-                current_key
+                None
             }
 
             // No current path but candidate found -> use candidate
@@ -274,13 +274,13 @@ impl NodePeer {
                 Some(candidate_key)
             }
 
-            // Current path exists but no candidate found -> keep current
+            // Current path exists but no candidate found -> clear path
             (Some(current_lat), None) => {
                 trace!(
-                    "Node peer path unchanged: current path exists, no candidate found (current: {:.1}ms)",
+                    "Node peer path cleared: current path exists but no candidate found (current: {:.1}ms)",
                     current_lat as f64 / 1_000.0
                 );
-                current_key
+                None
             }
 
             // Both current path and candidate exist -> apply hysteresis
