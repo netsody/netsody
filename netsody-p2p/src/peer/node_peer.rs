@@ -221,6 +221,7 @@ impl NodePeer {
             if let Some(path) = self.paths.pin().get(&key) {
                 path.ack_rx(time, src, hello_time);
                 self.update_best_path();
+                // TODO: udate the send handle here as well, to make directly use of the updated best path
             }
         } else {
             // UDP ACK without socket - this should not happen anymore as relay_peer is now determined in on_node_peer_ack
