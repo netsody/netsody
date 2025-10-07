@@ -221,6 +221,7 @@ impl NodePeer {
             if let Some(path) = self.paths.pin().get(&key) {
                 path.ack_rx(time, src, hello_time);
                 self.update_best_path();
+                // TODO: udate the send handle here as well, to make directly use of the updated best path
             }
         } else {
             // UDP ACK without socket - this should not happen anymore as relay_peer is now determined in on_node_peer_ack
@@ -262,7 +263,7 @@ impl NodePeer {
             // No current path and no candidate found -> no path
             (None, None) => {
                 trace!("Node peer path unchanged: no current path, no candidate found");
-                current_key
+                None
             }
 
             // No current path but candidate found -> use candidate
@@ -274,13 +275,13 @@ impl NodePeer {
                 Some(candidate_key)
             }
 
-            // Current path exists but no candidate found -> keep current
+            // Current path exists but no candidate found -> clear path
             (Some(current_lat), None) => {
                 trace!(
-                    "Node peer path unchanged: current path exists, no candidate found (current: {:.1}ms)",
+                    "Node peer path cleared: current path exists but no candidate found (current: {:.1}ms)",
                     current_lat as f64 / 1_000.0
                 );
-                current_key
+                None
             }
 
             // Both current path and candidate exist -> apply hysteresis
