@@ -137,11 +137,15 @@ impl SuperPeer {
         tokio::spawn(async move {
             while let Some(result) = join_set.join_next().await {
                 if let Err(e) = result {
-                    error!("Task failed: {e}");
+                    error!("Task failed. Cancel token: {e}");
                     monitoring_token.cancel();
                     break;
+                } else if !monitoring_token.is_cancelled() {
+                    trace!("Task prematurely finished. Cancel token.");
+                    monitoring_token.cancel();
                 }
             }
+            trace!("Monitoring task cancelled.");
         });
 
         Ok(Self { inner })

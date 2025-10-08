@@ -103,10 +103,7 @@ impl AgentInner {
         Ok((node, Arc::new(recv_buf_rx)))
     }
 
-    pub(crate) async fn node_runner(
-        inner: Arc<AgentInner>,
-        node_shutdown: CancellationToken,
-    ) -> Result<(), String> {
+    pub(crate) async fn node_runner(inner: Arc<AgentInner>, node_shutdown: CancellationToken) {
         let recv_buf_rx = inner.recv_buf_rx.clone();
         let netsody_rx = inner.netsody_rx.clone();
 
@@ -114,24 +111,39 @@ impl AgentInner {
         let c2d_threads = util::get_env("C2D_THREADS", 3);
         let tun_threads = util::get_env("TUN_THREADS", 3);
 
-        let mut join_set: JoinSet<Result<(), String>> = JoinSet::new();
+        let mut join_set = JoinSet::new();
 
-        // Netsody <-> tun packet processing
+        // monitor node still running
+        let token_clone = inner.cancellation_token.clone();
+        let node_clone = inner.node.clone();
+        join_set.spawn(async move {
+            tokio::select! {
+                biased;
+                _ = token_clone.cancelled() => {
+                    trace!("Node token cancelled.");
+                },
+                _ = node_clone.cancelled() => {
+                    trace!("Node has cancelled prematurely.");
+                },
+            }
+        });
+
+        // Netsody -> tun packet processing
         #[allow(unused_variables)]
         for i in 0..tun_threads {
             // Netsody -> tun
             let recv_buf_rx = recv_buf_rx.clone();
             let token_clone = node_shutdown.clone();
             let inner_clone = inner.clone();
+            let token_clone2 = node_shutdown.clone();
             join_set.spawn(async move {
                 tokio::select! {
                     biased;
                     _ = token_clone.cancelled() => {
-                        trace!("Token cancelled. Exiting Netsody <-> tun packet processing task ({}/{}).", i + 1, tun_threads);
-                        Ok(())
+                        trace!("Token cancelled. Exiting Netsody -> tun packet processing task ({}/{}).", i + 1, tun_threads);
                     }
                     result = async move {
-                        trace!("Netsody <-> tun packet processing task started ({}/{}).", i + 1, tun_threads);
+                        trace!("Netsody -> tun packet processing task started ({}/{}).", i + 1, tun_threads);
                         loop {
                             match recv_buf_rx.recv_async().await {
                                 Ok((sender_key, buf)) => {
@@ -233,8 +245,8 @@ impl AgentInner {
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to receive packet from Netsody: {}", e);
-                                    return Err(format!("Failed to receive packet from Netsody: {}", e));
+                                    error!("Failed to receive packet from Netsody. Cancel token: {}", e);
+                                    token_clone2.cancel();
                                 }
                             }
                         }
@@ -250,12 +262,12 @@ impl AgentInner {
             // channel -> Netsody processing
             let netsody_rx = netsody_rx.clone();
             let token_close = node_shutdown.clone();
+            let token_close2 = node_shutdown.clone();
             join_set.spawn(async move {
                 tokio::select! {
                     biased;
                     _ = token_close.cancelled() => {
                         trace!("Token cancelled. Exiting channel -> Netsody processing task ({}/{}).", i + 1, c2d_threads);
-                        Ok(())
                     }
                     result = async move {
                         trace!("channel -> Netsody processing task started ({}/{}).", i + 1, c2d_threads);
@@ -275,8 +287,8 @@ impl AgentInner {
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to receive packet from channel: {}", e);
-                                    return Err(format!("Failed to receive packet from channel: {}", e));
+                                    error!("Failed to receive packet from channel. Cancel token: {}", e);
+                                    token_close2.cancel();
                                 }
                             }
                         }
@@ -289,11 +301,14 @@ impl AgentInner {
 
         while let Some(result) = join_set.join_next().await {
             if let Err(e) = result {
-                return Err(format!("Node task failed: {}", e));
+                error!("Task failed. Cancel token: {}", e);
+                node_shutdown.clone().cancel();
+            } else if !node_shutdown.is_cancelled() {
+                trace!("Task prematurely finished. Cancel token.");
+                node_shutdown.cancel();
             }
         }
 
         trace!("Node runner done.");
-        Ok(())
     }
 }

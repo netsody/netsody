@@ -351,98 +351,91 @@ impl SuperPeer {
 
     /// Update the best UDP path based on reachability and latency measurements.
     ///
-    /// This method finds the UDP path with the best combination of reachability
-    /// and median latency. Reachable paths are preferred over unreachable ones,
-    /// and among reachable paths, the one with the lowest median latency is selected.
-    ///
-    /// Hysteresis is applied to prevent frequent path switching: a new path is only
-    /// selected if it's significantly better than the current best path.
+    /// This method finds the UDP path with the lowest median latency and updates
+    /// the internal best UDP path pointer accordingly. Hysteresis is applied to
+    /// prevent frequent path switching. Paths are only considered if they have
+    /// latency data and are reachable.
     ///
     /// # Arguments
     /// * `time` - Current timestamp in microseconds
     /// * `hello_timeout` - Timeout period in seconds
     pub(crate) fn update_best_udp_path(&self, time: u64, hello_timeout: u64) {
-        let guard = self.udp_paths.guard();
-
         // Get current best path information
-        let current_best = self.best_udp_path(&guard);
-        let (current_key, current_reachable, current_latency) =
-            current_best.map_or((None, false, None), |(key, path)| {
-                let reachable = path.is_reachable(time, hello_timeout);
-                let latency = path.median_lat();
-                (Some(key), reachable, latency)
-            });
+        let current_best_key = self.best_udp_path_key();
+        let (current_key, current_latency) = if let Some(key) = current_best_key {
+            let udp_paths_guard = self.udp_paths.guard();
+            let current_latency = self
+                .udp_paths
+                .get(key, &udp_paths_guard)
+                .and_then(super::path::PeerPath::median_lat);
+            (Some(key), current_latency)
+        } else {
+            (None, None)
+        };
 
         // Find the best available path using original selection logic
-        let best_candidate = self
-            .udp_paths
-            .iter(&guard)
+        // Only consider paths that are reachable and have latency data
+        let udp_paths_pin = self.udp_paths.pin();
+        let best_candidate = udp_paths_pin
+            .iter()
             .filter_map(|(key, path)| {
-                let reachable = path.is_reachable(time, hello_timeout);
+                // Only consider paths that are reachable
+                if !path.is_reachable(time, hello_timeout) {
+                    return None;
+                }
                 let latency = path.median_lat()?; // Only consider paths with latency data
-                Some((key, reachable, latency))
+                Some((key, latency))
             })
-            .min_by_key(|&(_, reachable, latency)| (!reachable, latency));
+            .min_by_key(|&(_, latency)| latency);
 
         // Decide which path to use based on hysteresis rules
-        let selected_path = match (current_reachable, current_latency, best_candidate) {
-            // Current path is reachable and no better candidate found -> keep current
-            (true, _, None) => {
-                trace!("UDP path unchanged: current path reachable, no better candidate found");
-                current_key
-            }
-
-            // Current path not reachable and no candidate found -> no path
-            (false, _, None) => {
-                trace!("UDP path cleared: current path not reachable, no candidate found");
+        let selected_path = match (current_latency, best_candidate) {
+            // No current path and no candidate found -> no path
+            (None, None) => {
+                trace!("UDP path unchanged: no current path, no candidate found");
                 None
             }
 
-            // Found a candidate path
-            (_, _, Some((candidate_key, candidate_reachable, candidate_latency))) => {
-                if !candidate_reachable {
-                    // Candidate is not reachable, keep current if it's reachable
-                    if current_reachable {
-                        trace!(
-                            "UDP path unchanged: candidate not reachable, keeping current reachable path"
-                        );
-                        current_key
-                    } else {
-                        trace!("UDP path cleared: neither current nor candidate reachable");
-                        None
-                    }
-                } else if let Some(current_lat) = current_latency {
-                    // Both paths are reachable, apply hysteresis
-                    let threshold =
-                        (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
-                    if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
-                        // Candidate is significantly better
-                        trace!(
-                            "UDP path changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
-                            current_lat as f64 / 1_000.0,
-                            candidate_latency as f64 / 1_000.0,
-                            threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64
-                                / 1_000.0
-                        );
-                        Some(candidate_key)
-                    } else {
-                        // Candidate is not significantly better, keep current
-                        trace!(
-                            "UDP path unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
-                            current_lat as f64 / 1_000.0,
-                            candidate_latency as f64 / 1_000.0,
-                            threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64
-                                / 1_000.0
-                        );
-                        current_key
-                    }
-                } else {
-                    // No current latency info, use candidate
+            // No current path but candidate found -> use candidate
+            (None, Some((candidate_key, candidate_latency))) => {
+                trace!(
+                    "UDP path changed: no current path, using candidate ({:.1}ms)",
+                    candidate_latency as f64 / 1_000.0
+                );
+                Some(candidate_key)
+            }
+
+            // Current path exists but no candidate found -> clear path
+            (Some(current_lat), None) => {
+                trace!(
+                    "UDP path cleared: current path exists but no candidate found (current: {:.1}ms)",
+                    current_lat as f64 / 1_000.0
+                );
+                None
+            }
+
+            // Both current path and candidate exist -> apply hysteresis
+            (Some(current_lat), Some((candidate_key, candidate_latency))) => {
+                let threshold =
+                    (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
+                if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
+                    // Candidate is significantly better
                     trace!(
-                        "UDP path changed: no current latency info, using candidate ({:.1}ms)",
-                        candidate_latency as f64 / 1_000.0
+                        "UDP path changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
                     );
                     Some(candidate_key)
+                } else {
+                    // Candidate is not significantly better, keep current
+                    trace!(
+                        "UDP path unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    current_key
                 }
             }
         };

@@ -61,15 +61,19 @@ impl NodeInner {
             tokio::select! {
                 biased;
                 _ = cancellation_token.cancelled() => {
+                    trace!("Housekeeping cancelled");
                     break;
                 }
                 _ = interval.tick() => {
                     if let Err(e) = inner.housekeeping(&inner).await {
                         error!("Error in housekeeping: {e}");
+                        break;
                     }
                 }
             }
         }
+
+        trace!("Housekeeping runner stopped");
     }
 
     #[instrument(skip_all)]

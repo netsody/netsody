@@ -40,7 +40,7 @@ pub trait AgentNetifInterface {
 
         let device = tun_device.clone();
 
-        // tun <-> Netsody packet processing
+        // tun -> Netsody packet processing
         #[allow(unused_variables)]
         for i in 0..tun_threads {
             // tun -> channel
@@ -53,16 +53,16 @@ pub trait AgentNetifInterface {
             let dev_clone = device.clone();
             let tun_tx = tun_tx.clone();
             let cancellation_token_clone = cancellation_token.clone();
+            let cancellation_token_clone2 = cancellation_token.clone();
             let inner_clone = inner.clone();
             join_set.spawn(async move {
                 tokio::select! {
                     biased;
                     _ = cancellation_token_clone.cancelled() => {
-                        trace!("Token cancelled. Exiting tun <-> Netsody packet processing task ({}/{}).", i + 1, tun_threads);
-                        Ok(())
+                        trace!("Token cancelled. Exiting tun -> Netsody packet processing task ({}/{}).", i + 1, tun_threads);
                     }
                     result = async move {
-                        trace!("tun <-> Netsody packet processing task started ({}/{}).", i + 1, tun_threads);
+                        trace!("tun -> Netsody packet processing task started ({}/{}).", i + 1, tun_threads);
                         let mut buf = vec![0u8; mtu as usize];
                         loop {
                             match dev_clone.recv(&mut buf).await {
@@ -203,8 +203,8 @@ pub trait AgentNetifInterface {
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to receive packet from TUN device: {}", e);
-                                    return Err(format!("Failed to receive packet from TUN device: {}", e));
+                                    error!("Failed to receive packet from TUN device. Cancel token: {}", e);
+                                    cancellation_token_clone2.cancel();
                                 }
                             }
                         }
