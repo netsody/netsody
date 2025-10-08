@@ -28,7 +28,7 @@ impl AgentInner {
     pub(crate) async fn housekeeping_runner(
         inner: Arc<AgentInner>,
         housekeeping_shutdown: CancellationToken,
-    ) -> Result<(), String> {
+    ) {
         let mut interval = tokio::time::interval(Duration::from_millis(HOUSEKEEPING_INTERVAL_MS));
 
         loop {
@@ -47,7 +47,6 @@ impl AgentInner {
         }
 
         trace!("Housekeeping runner finished");
-        Ok(())
     }
 
     async fn housekeeping(&self, inner: &Arc<AgentInner>) -> Result<(), Error> {
