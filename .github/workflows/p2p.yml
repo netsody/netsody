@@ -55,7 +55,7 @@ jobs:
         if: success() && matrix.job_name == 'linux-arm64'
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build netsody-p2p FFI
         run: cargo build --verbose --package netsody-p2p --features ffi --release
