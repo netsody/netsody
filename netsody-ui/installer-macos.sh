@@ -82,6 +82,11 @@ cat > "${SCRIPTS_DIR}/preinstall" <<'EOF'
 {
   echo "$(date): Starting Netsody preinstall script"
 
+  # Stop Netsody UI application if running
+  echo "Stopping Netsody UI application..."
+  osascript -e 'quit app "Netsody UI"' 2> /dev/null || true
+  echo "Netsody UI application stopped (if it was running)."
+
   # Check if the service 'netsody' is loaded
   if launchctl list netsody >/dev/null 2>&1; then
     echo "Service 'netsody' is running. Stopping service..."
@@ -135,6 +140,11 @@ cat > "${SCRIPTS_DIR}/postinstall" <<'EOF'
   # Load the LaunchDaemon
   echo "Loading LaunchDaemon..."
   /bin/launchctl load /Library/LaunchDaemons/netsody.plist
+
+  # Start Netsody UI application
+  echo "Starting Netsody UI application..."
+  sudo -u "$CURRENT_USER" open -a "Netsody UI" 2> /dev/null || true
+  echo "Netsody UI application started."
 
   echo "$(date): Netsody postinstall script completed"
 } > /var/log/netsody.postinstall.log 2>&1
