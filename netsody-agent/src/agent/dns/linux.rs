@@ -120,8 +120,8 @@ impl AgentDns {
                             dns_ttl,
                             RData::A(A(*ip)),
                         )
-                        .set_dns_class(DNSClass::IN)
-                        .clone(),
+                            .set_dns_class(DNSClass::IN)
+                            .clone(),
                         0,
                     );
                 }
@@ -534,10 +534,10 @@ impl ResponseHandler for ResponseHandle {
             dst_ip.octets(), // Destination IP
             64,              // TTL
         )
-        .udp(
-            self.src.port(), // Source Port (DNS Server)
-            self.dst.port(), // Destination Port
-        );
+            .udp(
+                self.src.port(), // Source Port (DNS Server)
+                self.dst.port(), // Destination Port
+            );
 
         // Serialize the packet
         let packet_size = builder.size(buffer.len());

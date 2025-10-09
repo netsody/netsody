@@ -50,15 +50,14 @@ cfg_if! {
         pub use embedded::AgentDns;
     }
     else if #[cfg(target_os = "linux")] {
-        mod hosts_file;
-        pub use hosts_file::AgentDns;
+        mod linux;
+        pub use linux::AgentDns;
     }
     else {
         // unsupported platform
         use crate::agent::PlatformDependent;
         use crate::network::AppliedStatus;
         use tracing::warn;
-
 
         pub struct AgentDns {}
 
