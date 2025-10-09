@@ -128,7 +128,7 @@ impl HelloSuperPeerMessage {
             return Err(Error::HelloMessageInvalidChildTime);
         }
 
-        if (hello.endpoints.len() % HELLO_ENDPOINT_LEN) != 0 {
+        if !hello.endpoints.len().is_multiple_of(HELLO_ENDPOINT_LEN) {
             return Err(Error::HelloMessageInvalidEndpoints);
         }
 

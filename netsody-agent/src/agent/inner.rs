@@ -57,7 +57,7 @@ pub struct AgentInner {
 
 impl AgentInner {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    pub(crate) async fn new(
         id: Identity,
         networks: HashMap<Url, Network>,
         cancellation_token: CancellationToken,
@@ -86,7 +86,7 @@ impl AgentInner {
             firewall: AgentFirewall::new(),
             router: AgentRouter::new(),
             #[cfg(feature = "dns")]
-            dns: crate::agent::dns::AgentDns::new(platform_dependent.clone()),
+            dns: crate::agent::dns::AgentDns::new(platform_dependent.clone()).await,
             trie_tx: ArcSwap::new(Arc::new(TrieTx::new())),
             trie_rx: ArcSwap::new(Arc::new(TrieRx::new())),
             tun_tx,

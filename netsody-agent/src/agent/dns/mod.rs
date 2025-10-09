@@ -1,15 +1,26 @@
-#[cfg(target_os = "macos")]
-mod macos;
-
 use crate::agent::AgentInner;
+use crate::agent::housekeeping::HOUSEKEEPING_INTERVAL_MS;
 use crate::network::Network;
 use cfg_if::cfg_if;
+use hickory_proto::rr::rdata::A;
+use hickory_proto::rr::{DNSClass, Name, RData, Record};
+use hickory_resolver::config::*;
+use hickory_server::authority::{Authority, Catalog, ZoneType};
+use hickory_server::store::in_memory::InMemoryAuthority;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::MutexGuard;
+use tracing::trace;
 use tun_rs::AsyncDevice;
 use url::Url;
+
+/// DNS domain name used by netsody for internal DNS resolution
+pub(crate) const NETSODY_DOMAIN: &str = "netsody.me";
+
+/// TUN interface name used by netsody on Linux systems
+#[cfg(target_os = "linux")]
+pub(crate) const NETSODY_INTERFACE_NAME: &str = "netsody";
 
 pub trait AgentDnsInterface {
     async fn apply_desired_state(
@@ -45,11 +56,18 @@ pub trait AgentDnsInterface {
 }
 
 cfg_if! {
-    if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "android"))] {
-        mod embedded;
-        pub use embedded::AgentDns;
+    if #[cfg(any(target_os = "macos"))] {
+        mod shared;
+        mod macos;
+        pub use macos::AgentDns;
     }
-    else if #[cfg(target_os = "linux")] {
+    else if #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))] {
+        mod shared;
+        mod mobile;
+        pub use mobile::AgentDns;
+    }
+    else if #[cfg(any(target_os = "linux"))] {
+        mod shared;
         mod linux;
         pub use linux::AgentDns;
     }
