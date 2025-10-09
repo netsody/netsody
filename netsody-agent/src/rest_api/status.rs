@@ -804,7 +804,7 @@ fn format_path(path: &PeerPathInner) -> String {
         sorted_lats.sort_unstable();
 
         let mid = sorted_lats.len() / 2;
-        let median_lat = if sorted_lats.len().is_multiple_of(2) {
+        let median_lat = if sorted_lats.len() % 2 == 0 {
             (sorted_lats[mid - 1] + sorted_lats[mid]) / 2
         } else {
             sorted_lats[mid]

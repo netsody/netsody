@@ -52,17 +52,15 @@ hickory-server = { version = "0.25.2", features = ["resolver"] }
 hickory-resolver = "0.25.2"
 async-trait = "0.1.89"
 zbus = "5.11.0"
-resolv-conf = "0.7.5"
 
 [target."cfg(target_os = \"linux\")".dependencies]
 net-route = "0.4.6"
-sysctl = "0.7.1"
-zbus = "5.11.0"
-resolv-conf = "0.7.5"
 hickory-proto = "0.25.2"
 hickory-server = { version = "0.25.2", features = ["resolver"] }
 hickory-resolver = "0.25.2"
 async-trait = "0.1.89"
+zbus = "5.11.0"
+sysctl = "0.7.1"
 
 [target."cfg(target_os = \"ios\")".dependencies]
 hickory-proto = "0.25.2"

@@ -4303,7 +4303,6 @@ dependencies = [
  "libc",
  "net-route",
  "netsody-p2p",
- "resolv-conf",
  "serde",
  "serde_json",
  "sysctl",

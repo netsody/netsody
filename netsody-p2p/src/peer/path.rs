@@ -169,7 +169,7 @@ impl PeerPathInner {
         sorted_lats.sort_unstable();
 
         let mid = sorted_lats.len() / 2;
-        if sorted_lats.len().is_multiple_of(2) {
+        if sorted_lats.len() % 2 == 0 {
             Some((sorted_lats[mid - 1] + sorted_lats[mid]) / 2)
         } else {
             Some(sorted_lats[mid])
