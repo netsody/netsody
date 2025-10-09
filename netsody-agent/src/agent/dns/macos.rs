@@ -63,7 +63,7 @@ impl AgentDnsInterface for AgentDns {
     async fn apply_desired_state(
         &self,
         _inner: Arc<AgentInner>,
-        config_url: &Url,
+        _config_url: &Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         // Get current DNS configuration

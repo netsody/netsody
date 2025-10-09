@@ -166,7 +166,6 @@ pub trait AgentNetifInterface {
                                         else {
                                             #[cfg(feature = "dns")]
                                             {
-                                                use crate::agent::dns::AgentDnsInterface;
                                                 use etherparse::ip_number::UDP;
                                                 use etherparse::UdpHeaderSlice;
 

@@ -1,17 +1,10 @@
 use crate::agent::AgentInner;
-use crate::agent::housekeeping::HOUSEKEEPING_INTERVAL_MS;
 use crate::network::Network;
 use cfg_if::cfg_if;
-use hickory_proto::rr::rdata::A;
-use hickory_proto::rr::{DNSClass, Name, RData, Record};
-use hickory_resolver::config::*;
-use hickory_server::authority::{Authority, Catalog, ZoneType};
-use hickory_server::store::in_memory::InMemoryAuthority;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::MutexGuard;
-use tracing::trace;
 use tun_rs::AsyncDevice;
 use url::Url;
 

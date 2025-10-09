@@ -1,4 +1,4 @@
-use crate::agent::dns::{AgentDns, AgentDnsInterface, NETSODY_DOMAIN};
+use crate::agent::dns::{AgentDns, NETSODY_DOMAIN};
 use crate::agent::housekeeping::HOUSEKEEPING_INTERVAL_MS;
 use crate::network::Network;
 use etherparse::PacketBuilder;
