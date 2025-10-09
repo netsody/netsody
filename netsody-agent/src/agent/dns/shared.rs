@@ -8,7 +8,9 @@ use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{DNSClass, Name, RData, Record};
 use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
 use hickory_proto::xfer::Protocol;
-use hickory_resolver::config::*;
+use hickory_resolver::config::NameServerConfigGroup;
+#[cfg(target_os = "android")]
+use hickory_resolver::config::ResolverOpts;
 use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageResponse, ZoneType};
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use hickory_server::store::in_memory::InMemoryAuthority;

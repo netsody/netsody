@@ -1,29 +1,20 @@
 use crate::agent::dns::AgentDnsInterface;
-use crate::agent::housekeeping::HOUSEKEEPING_INTERVAL_MS;
 use crate::agent::{AgentInner, PlatformDependent};
-use crate::network::{AppliedStatus, Network};
+use crate::network::Network;
 use arc_swap::ArcSwap;
-use etherparse::PacketBuilder;
-use hickory_proto::ProtoError;
-use hickory_proto::op::{Header, MessageType, ResponseCode};
-use hickory_proto::rr::rdata::A;
-use hickory_proto::rr::{DNSClass, Name, RData, Record};
-use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
+#[cfg(target_os = "android")]
 use hickory_proto::xfer::Protocol;
-use hickory_resolver::config::*;
-use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageResponse, ZoneType};
-use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
-use hickory_server::store::in_memory::InMemoryAuthority;
+#[cfg(target_os = "android")]
+use hickory_resolver::config::NameServerConfig;
+use hickory_resolver::config::NameServerConfigGroup;
+use hickory_server::authority::Catalog;
 use std::collections::HashMap;
-use std::io;
-use std::io::{Error, ErrorKind};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[cfg(target_os = "android")]
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::SeqCst;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicU32;
 use tokio::sync::MutexGuard;
-use tracing::{Level, debug, enabled, error, instrument, trace};
-use tun_rs::AsyncDevice;
+use tracing::trace;
 use url::Url;
 
 /// DNS management for mobile platforms (iOS, tvOS, Android).
@@ -91,7 +82,7 @@ impl AgentDnsInterface for AgentDns {
     async fn apply_desired_state(
         &self,
         _inner: Arc<AgentInner>,
-        config_url: &Url,
+        _config_url: &Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         // Check if hostname mappings need to be updated

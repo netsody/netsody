@@ -5,31 +5,18 @@ use crate::agent::dns::linux::systemd_resolved::{
     systemd_resolved_available, systemd_resolved_dns_ip, systemd_resolved_dns_stub_listener,
     systemd_resolved_flush_caches, systemd_resolved_revert, systemd_resolved_set_dns_ip,
 };
-use crate::agent::housekeeping::HOUSEKEEPING_INTERVAL_MS;
 use crate::agent::{AgentInner, PlatformDependent};
 use crate::network::{AppliedStatus, Network};
 use arc_swap::ArcSwap;
-use etherparse::PacketBuilder;
-use hickory_proto::ProtoError;
-use hickory_proto::op::{Header, MessageType, ResponseCode};
-use hickory_proto::rr::rdata::A;
-use hickory_proto::rr::{DNSClass, Name, RData, Record};
-use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
-use hickory_proto::xfer::Protocol;
-use hickory_resolver::config::*;
-use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageResponse, ZoneType};
-use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
-use hickory_server::store::in_memory::InMemoryAuthority;
+use hickory_resolver::config::NameServerConfigGroup;
+use hickory_server::authority::Catalog;
 use std::collections::HashMap;
-use std::io;
-use std::io::{Error, ErrorKind};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::SeqCst;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicU32;
 use tokio::sync::MutexGuard;
-use tracing::{Level, debug, enabled, error, instrument, trace, warn};
-use tun_rs::AsyncDevice;
+use tracing::{trace, warn};
 use url::Url;
 
 /// DNS management for Linux systems.
@@ -112,7 +99,7 @@ impl AgentDnsInterface for AgentDns {
     async fn apply_desired_state(
         &self,
         _inner: Arc<AgentInner>,
-        config_url: &Url,
+        _config_url: &Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         // Get current DNS configuration
@@ -123,9 +110,9 @@ impl AgentDnsInterface for AgentDns {
                     dns_ip
                 }
                 Err(e) => {
-                    warn!("Unable to determine current DNS IP: {}.", e);
                     for (_, network) in networks.iter_mut() {
                         if network.current_state.hostnames.applied.is_some() {
+                            warn!("Unable to determine current DNS IP: {}", e);
                             network.current_state.hostnames = AppliedStatus::error(format!(
                                 "Unable to determine current DNS IP: {}",
                                 e
@@ -136,9 +123,14 @@ impl AgentDnsInterface for AgentDns {
                 }
             },
             _ => {
-                warn!(
-                    "Can not apply desired DNS state as we were unable to determine used DNS resolver."
-                );
+                // log nothing, we already did this in the constructor
+                for (_, network) in networks.iter_mut() {
+                    if network.desired_state.hostnames.applied.is_some() {
+                        network.current_state.hostnames = AppliedStatus::error(format!(
+                            "Unable to determine used DNS resolver"
+                        ));
+                    }
+                }
                 return;
             }
         };

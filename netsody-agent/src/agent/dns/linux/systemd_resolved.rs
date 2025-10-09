@@ -166,7 +166,13 @@ pub async fn systemd_resolved_flush_caches() -> Result<(), String> {
 /// * `Err(String)` - Error occurred while querying the configuration
 pub async fn systemd_resolved_dns_ip() -> Result<Option<Ipv4Addr>, String> {
     trace!("systemd_resolved_dns_ip: getting current DNS IP configuration");
-    let ifindex = get_interface_index()?;
+    let ifindex = match get_interface_index() {
+        Ok(idx) => idx,
+        Err(_) => {
+            trace!("systemd_resolved_dns_ip: interface not found, returning None");
+            return Ok(None);
+        }
+    };
     trace!("systemd_resolved_dns_ip: got ifindex={}", ifindex);
 
     let connection = Connection::system()

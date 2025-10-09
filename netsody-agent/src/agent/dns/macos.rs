@@ -10,7 +10,7 @@ const SCUTIL_DNS_KEY: &str = "/Network/Service/Netsody/DNS";
 use crate::agent::{AgentInner, PlatformDependent};
 use crate::network::{AppliedStatus, Network};
 use arc_swap::ArcSwap;
-use hickory_resolver::config::*;
+use hickory_resolver::config::NameServerConfigGroup;
 use hickory_server::authority::Catalog;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -73,7 +73,7 @@ impl AgentDnsInterface for AgentDns {
                 dns_ip
             }
             Err(e) => {
-                warn!("Unable to determine current DNS IP: {}.", e);
+                warn!("Unable to determine current DNS IP: {}", e);
                 for (_, network) in networks.iter_mut() {
                     if network.current_state.hostnames.applied.is_some() {
                         network.current_state.hostnames = AppliedStatus::error(format!(
