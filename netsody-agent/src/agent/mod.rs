@@ -45,7 +45,7 @@ impl Agent {
         // options
         let channel_cap = util::get_env("CHANNEL_CAP", 512);
 
-        // tun <-> Netsody packet processing
+        // tun -> Netsody packet processing
         let (tun_tx, netsody_rx) = flume::bounded::<(Vec<u8>, Arc<SendHandle>)>(channel_cap);
         let tun_tx = Arc::new(tun_tx);
         let netsody_rx = Arc::new(netsody_rx);
@@ -82,11 +82,15 @@ impl Agent {
         tokio::spawn(async move {
             while let Some(result) = join_set.join_next().await {
                 if let Err(e) = result {
-                    error!("Task failed: {e}");
+                    error!("Task failed. Cancel token: {e}");
                     monitoring_token.cancel();
                     break;
+                } else if !monitoring_token.is_cancelled() {
+                    trace!("Task prematurely finished. Cancel token.");
+                    monitoring_token.cancel();
                 }
             }
+            trace!("Monitoring task cancelled.");
         });
 
         info!("Agent started.");

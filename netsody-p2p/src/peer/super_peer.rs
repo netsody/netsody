@@ -36,6 +36,10 @@ use crate::peer::PeerPathKey;
 use crate::peer::error::Error;
 use crate::peer::{PeerPath, SessionKeys};
 
+// Constants for UDP path selection hysteresis
+pub(crate) const PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR: f64 = 0.9; // 10% improvement required
+pub(crate) const PATH_LAT_HYSTERESIS_MIN_DELTA: u64 = 5_000; // 5ms in microseconds
+
 /// A super peer connection in the Netsody network.
 ///
 /// Super peers are special nodes that help with peer discovery and message
@@ -347,35 +351,101 @@ impl SuperPeer {
 
     /// Update the best UDP path based on reachability and latency measurements.
     ///
-    /// This method finds the UDP path with the best combination of reachability
-    /// and median latency. Reachable paths are preferred over unreachable ones,
-    /// and among reachable paths, the one with the lowest median latency is selected.
+    /// This method finds the UDP path with the lowest median latency and updates
+    /// the internal best UDP path pointer accordingly. Hysteresis is applied to
+    /// prevent frequent path switching. Paths are only considered if they have
+    /// latency data and are reachable.
     ///
     /// # Arguments
     /// * `time` - Current timestamp in microseconds
     /// * `hello_timeout` - Timeout period in seconds
     pub(crate) fn update_best_udp_path(&self, time: u64, hello_timeout: u64) {
-        let best_path_ptr = if let Some(best_key) = self
-            .udp_paths
-            .pin()
+        // Get current best path information
+        let current_best_key = self.best_udp_path_key();
+        let (current_key, current_latency) = if let Some(key) = current_best_key {
+            let udp_paths_guard = self.udp_paths.guard();
+            let current_latency = self
+                .udp_paths
+                .get(key, &udp_paths_guard)
+                .and_then(super::path::PeerPath::median_lat);
+            (Some(key), current_latency)
+        } else {
+            (None, None)
+        };
+
+        // Find the best available path using original selection logic
+        // Only consider paths that are reachable and have latency data
+        let udp_paths_pin = self.udp_paths.pin();
+        let best_candidate = udp_paths_pin
             .iter()
             .filter_map(|(key, path)| {
-                let is_reachable = path.is_reachable(time, hello_timeout);
-                let median_lat = path.median_lat();
-                Some((key, is_reachable, median_lat))
+                // Only consider paths that are reachable
+                if !path.is_reachable(time, hello_timeout) {
+                    return None;
+                }
+                let latency = path.median_lat()?; // Only consider paths with latency data
+                Some((key, latency))
             })
-            .min_by_key(|&(_, is_reachable, median_lat)| {
-                // Sort by reachability first (false comes before true, so we invert)
-                // Then by median latency (lower is better)
-                (!is_reachable, median_lat.unwrap_or(u64::MAX))
-            })
-            .map(|(key, _, _)| key)
-        {
-            best_key as *const PeerPathKey as *mut PeerPathKey
-        } else {
-            ptr::null_mut()
+            .min_by_key(|&(_, latency)| latency);
+
+        // Decide which path to use based on hysteresis rules
+        let selected_path = match (current_latency, best_candidate) {
+            // No current path and no candidate found -> no path
+            (None, None) => {
+                trace!("UDP path unchanged: no current path, no candidate found");
+                None
+            }
+
+            // No current path but candidate found -> use candidate
+            (None, Some((candidate_key, candidate_latency))) => {
+                trace!(
+                    "UDP path changed: no current path, using candidate ({:.1}ms)",
+                    candidate_latency as f64 / 1_000.0
+                );
+                Some(candidate_key)
+            }
+
+            // Current path exists but no candidate found -> clear path
+            (Some(current_lat), None) => {
+                trace!(
+                    "UDP path cleared: current path exists but no candidate found (current: {:.1}ms)",
+                    current_lat as f64 / 1_000.0
+                );
+                None
+            }
+
+            // Both current path and candidate exist -> apply hysteresis
+            (Some(current_lat), Some((candidate_key, candidate_latency))) => {
+                let threshold =
+                    (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
+                if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
+                    // Candidate is significantly better
+                    trace!(
+                        "UDP path changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    Some(candidate_key)
+                } else {
+                    // Candidate is not significantly better, keep current
+                    trace!(
+                        "UDP path unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    current_key
+                }
+            }
         };
-        self.best_udp_path_store.store(best_path_ptr, SeqCst);
+
+        // Convert to pointer and store
+        let path_ptr = selected_path.map_or(ptr::null_mut(), |key| {
+            key as *const PeerPathKey as *mut PeerPathKey
+        });
+
+        self.best_udp_path_store.store(path_ptr, SeqCst);
     }
 
     /// Record that an ACK message was received from this super peer.

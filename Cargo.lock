@@ -4291,6 +4291,7 @@ dependencies = [
  "glutin-winit",
  "gtk",
  "image",
+ "ipnet",
  "netsody-agent",
  "objc2-core-foundation",
  "tokio",

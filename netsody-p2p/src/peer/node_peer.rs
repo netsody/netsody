@@ -21,6 +21,9 @@ use crate::crypto::{
     AgreementPubKey, AgreementSecKey, compute_kx_session_keys, convert_ed25519_pk_to_curve25519_pk,
     random_bytes,
 };
+use crate::peer::super_peer::{
+    PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR, PATH_LAT_HYSTERESIS_MIN_DELTA,
+};
 // Crate-internal imports
 use crate::crypto::SessionKey;
 use crate::identity::{Pow, PubKey};
@@ -218,6 +221,7 @@ impl NodePeer {
             if let Some(path) = self.paths.pin().get(&key) {
                 path.ack_rx(time, src, hello_time);
                 self.update_best_path();
+                // TODO: udate the send handle here as well, to make directly use of the updated best path
             }
         } else {
             // UDP ACK without socket - this should not happen anymore as relay_peer is now determined in on_node_peer_ack
@@ -228,51 +232,179 @@ impl NodePeer {
     /// Update the best path to this peer based on current latency measurements.
     ///
     /// This method finds the path with the lowest median latency and updates
-    /// the internal best path pointer accordingly.
+    /// the internal best path pointer accordingly. Hysteresis is applied to
+    /// prevent frequent path switching.
     fn update_best_path(&self) {
-        let best_path_ptr = if let Some(best_addr) = self
-            .paths
-            .pin()
-            .iter()
-            .filter_map(|(addr, candidate)| candidate.median_lat().map(|lat| (addr, lat)))
-            .min_by_key(|&(_, lat)| lat)
-            .map(|(addr, _)| addr)
-        {
-            trace!(path = %best_addr, "(New) best path");
-            best_addr as *const PeerPathKey as *mut PeerPathKey
+        // Get current best path information
+        let current_best_key = self.best_path_key();
+        let (current_key, current_latency) = if let Some(key) = current_best_key {
+            let paths_guard = self.paths.guard();
+            let current_latency = self
+                .paths
+                .get(key, &paths_guard)
+                .and_then(super::path::PeerPath::median_lat);
+            (Some(key), current_latency)
         } else {
-            trace!("No best path");
-            ptr::null_mut()
+            (None, None)
         };
-        self.best_path_store.store(best_path_ptr, SeqCst);
+
+        // Find the best available path using original selection logic
+        let paths_pin = self.paths.pin();
+        let best_candidate = paths_pin
+            .iter()
+            .filter_map(|(key, path)| {
+                let latency = path.median_lat()?; // Only consider paths with latency data
+                Some((key, latency))
+            })
+            .min_by_key(|&(_, latency)| latency);
+
+        // Decide which path to use based on hysteresis rules
+        let selected_path = match (current_latency, best_candidate) {
+            // No current path and no candidate found -> no path
+            (None, None) => {
+                trace!("Node peer path unchanged: no current path, no candidate found");
+                None
+            }
+
+            // No current path but candidate found -> use candidate
+            (None, Some((candidate_key, candidate_latency))) => {
+                trace!(
+                    "Node peer path changed: no current path, using candidate ({:.1}ms)",
+                    candidate_latency as f64 / 1_000.0
+                );
+                Some(candidate_key)
+            }
+
+            // Current path exists but no candidate found -> clear path
+            (Some(current_lat), None) => {
+                trace!(
+                    "Node peer path cleared: current path exists but no candidate found (current: {:.1}ms)",
+                    current_lat as f64 / 1_000.0
+                );
+                None
+            }
+
+            // Both current path and candidate exist -> apply hysteresis
+            (Some(current_lat), Some((candidate_key, candidate_latency))) => {
+                let threshold =
+                    (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
+                if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
+                    // Candidate is significantly better
+                    trace!(
+                        "Node peer path changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    Some(candidate_key)
+                } else {
+                    // Candidate is not significantly better, keep current
+                    trace!(
+                        "Node peer path unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    current_key
+                }
+            }
+        };
+
+        // Convert to pointer and store
+        let path_ptr = selected_path.map_or(ptr::null_mut(), |key| {
+            key as *const PeerPathKey as *mut PeerPathKey
+        });
+
+        self.best_path_store.store(path_ptr, SeqCst);
     }
 
     /// Update the best relay based on current relay path quality.
     ///
     /// This method finds the super peer with the lowest median latency among
     /// reachable relay paths and updates the internal best relay pointer accordingly.
+    /// Hysteresis is applied to prevent frequent relay switching.
     ///
     /// # Arguments
     /// * `time` - Current timestamp
     /// * `hello_timeout` - Timeout period in seconds
     /// * `default_route` - Default super peer to use as fallback
-    pub(crate) fn update_best_relay(&self, time: u64, hello_timeout: u64, default_route: &PubKey) {
-        let best_sp_ptr = if let Some(best_sp_pk) = self
+    pub(crate) fn update_best_relay(&self, time: u64, hello_timeout: u64, _default_route: &PubKey) {
+        // Get current best relay information
+        let current_best_sp = self.best_sp();
+        let relay_paths_guard = self.relay_paths.guard();
+        let current_latency = self
             .relay_paths
-            .pin()
+            .get(current_best_sp, &relay_paths_guard)
+            .and_then(super::path::PeerPath::median_lat);
+
+        // Find the best available relay using original selection logic
+        let relay_paths_pin = self.relay_paths.pin();
+        let best_candidate = relay_paths_pin
             .iter()
             .filter(|(_, path)| path.is_reachable(time, hello_timeout))
-            .filter_map(|(sp_pk, path)| path.median_lat().map(|lat| (sp_pk, lat)))
-            .min_by_key(|&(_, lat)| lat)
-            .map(|(sp_pk, _)| sp_pk)
-        {
-            trace!(sp_pk = %best_sp_pk, "(New) best relay");
-            best_sp_pk as *const PubKey as *mut PubKey
-        } else {
-            trace!("No best relay, using default route");
-            default_route as *const PubKey as *mut PubKey
+            .filter_map(|(sp_pk, path)| {
+                let latency = path.median_lat()?; // Only consider paths with latency data
+                Some((sp_pk, latency))
+            })
+            .min_by_key(|&(_, latency)| latency);
+
+        // Decide which relay to use based on hysteresis rules
+        let selected_relay = match (current_latency, best_candidate) {
+            // Current relay has no latency and no candidate found -> keep current
+            (None, None) => {
+                trace!(
+                    "Node peer relay unchanged: current relay has no latency, no candidate found"
+                );
+                current_best_sp
+            }
+
+            // Current relay has no latency but candidate found -> use candidate
+            (None, Some((candidate_key, candidate_latency))) => {
+                trace!(
+                    "Node peer relay changed: current relay has no latency, using candidate ({:.1}ms)",
+                    candidate_latency as f64 / 1_000.0
+                );
+                candidate_key
+            }
+
+            // Current relay exists but no candidate found -> keep current
+            (Some(current_lat), None) => {
+                trace!(
+                    "Node peer relay unchanged: current relay exists, no candidate found (current: {:.1}ms)",
+                    current_lat as f64 / 1_000.0
+                );
+                current_best_sp
+            }
+
+            // Both current relay and candidate exist -> apply hysteresis
+            (Some(current_lat), Some((candidate_key, candidate_latency))) => {
+                let threshold =
+                    (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
+                if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
+                    // Candidate is significantly better
+                    trace!(
+                        "Node peer relay changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    candidate_key
+                } else {
+                    // Candidate is not significantly better, keep current
+                    trace!(
+                        "Node peer relay unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    current_best_sp
+                }
+            }
         };
-        self.best_sp_store.store(best_sp_ptr, SeqCst);
+
+        // Convert to pointer and store
+        let relay_ptr = selected_relay as *const PubKey as *mut PubKey;
+        self.best_sp_store.store(relay_ptr, SeqCst);
     }
 
     /// Get the transmission session key for this peer.

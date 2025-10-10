@@ -6,7 +6,10 @@ use crate::node::SendHandleState;
 use crate::node::UdpBinding;
 use crate::node::inner::NodeInner;
 use crate::node::{Error, Node};
-use crate::peer::{NodePeer, Peer, PeerPath, SuperPeer};
+use crate::peer::{
+    NodePeer, PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR, PATH_LAT_HYSTERESIS_MIN_DELTA, Peer,
+    PeerPath, SuperPeer,
+};
 use crate::util::get_addrs;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -58,15 +61,19 @@ impl NodeInner {
             tokio::select! {
                 biased;
                 _ = cancellation_token.cancelled() => {
+                    trace!("Housekeeping cancelled");
                     break;
                 }
                 _ = interval.tick() => {
                     if let Err(e) = inner.housekeeping(&inner).await {
                         error!("Error in housekeeping: {e}");
+                        break;
                     }
                 }
             }
         }
+
+        trace!("Housekeeping runner stopped");
     }
 
     #[instrument(skip_all)]
@@ -211,29 +218,99 @@ impl NodeInner {
     }
 
     fn default_route_housekeeping(&self) {
-        // best super peer
-        let mut best_median_lat = u64::MAX;
-        let mut best_sp = self.peers_list.default_route_ptr.load(SeqCst) as usize;
+        // Get current default route information
+        let current_default_route_ptr = self.peers_list.default_route_ptr.load(SeqCst);
+        let current_key = unsafe { &*current_default_route_ptr };
+        let peers_guard = self.peers_list.peers.guard();
+        let current_latency = self
+            .peers_list
+            .peers
+            .get(current_key, &peers_guard)
+            .and_then(|peer| {
+                if let Peer::SuperPeer(super_peer) = peer {
+                    super_peer.median_lat()
+                } else {
+                    None
+                }
+            });
 
-        for (peer_key, peer) in &self.peers_list.peers.pin_owned() {
+        // Find the best available super peer using original selection logic
+        let mut best_candidate = None;
+        let mut best_candidate_latency = u64::MAX;
+        let peers_pin = self.peers_list.peers.pin();
+
+        for (peer_key, peer) in &peers_pin {
             let span = trace_span!("peer", peer = %peer_key);
             let _guard = span.enter();
 
-            let peer_key_ptr = peer_key as *const PubKey;
-            if let Peer::SuperPeer(super_peer) = peer {
-                // best super peer?
-                if let Some(median_lat) = super_peer.median_lat()
-                    && median_lat < best_median_lat
-                {
-                    best_median_lat = median_lat;
-                    best_sp = peer_key_ptr as usize;
-                }
+            if let Peer::SuperPeer(super_peer) = peer
+                && let Some(median_lat) = super_peer.median_lat()
+                && median_lat < best_candidate_latency
+            {
+                best_candidate_latency = median_lat;
+                best_candidate = Some((peer_key, median_lat));
             }
         }
 
+        // Decide which super peer to use based on hysteresis rules
+        // IMPORTANT: Default route should NEVER be set to null - always keep a fallback
+        let selected_route = match (current_latency, best_candidate) {
+            // Current route exists but no candidate found -> keep current
+            (current_lat, None) => {
+                if let Some(lat) = current_lat {
+                    trace!(
+                        "Default route unchanged: current route exists, no candidate found (current: {:.1}ms)",
+                        lat as f64 / 1_000.0
+                    );
+                } else {
+                    trace!(
+                        "Default route unchanged: current route exists, no candidate found (no latency info)"
+                    );
+                }
+                current_key
+            }
+
+            // Both current route and candidate exist -> apply hysteresis
+            (Some(current_lat), Some((candidate_key, candidate_latency))) => {
+                let threshold =
+                    (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
+                if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
+                    // Candidate is significantly better
+                    trace!(
+                        "Default route changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    candidate_key
+                } else {
+                    // Candidate is not significantly better, keep current
+                    trace!(
+                        "Default route unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        current_lat as f64 / 1_000.0,
+                        candidate_latency as f64 / 1_000.0,
+                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                    );
+                    current_key
+                }
+            }
+
+            // Current route exists but no latency info, candidate found -> use candidate
+            (None, Some((candidate_key, candidate_latency))) => {
+                trace!(
+                    "Default route changed: no current latency info, using candidate ({:.1}ms)",
+                    candidate_latency as f64 / 1_000.0
+                );
+                candidate_key
+            }
+        };
+
+        // Store the selected route (always a valid route)
+        let new_route_ptr = selected_route as *const PubKey as *mut PubKey;
+
         self.peers_list
             .default_route_ptr
-            .store(best_sp as *const PubKey as *mut PubKey, SeqCst);
+            .store(new_route_ptr, SeqCst);
     }
 
     fn send_handles_housekeeping(&self, inner: &Arc<NodeInner>) {

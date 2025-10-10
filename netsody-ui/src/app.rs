@@ -3,6 +3,7 @@ use crate::user_event::UserEvent;
 use agent::rest_api;
 use agent::rest_api::{NetworkStatus, Status, mask_url};
 use arboard::Clipboard;
+use ipnet::Ipv4Net;
 use rest_api::RestApiClient;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
@@ -142,6 +143,9 @@ impl App {
                                                         item.set_text(format!(
                                                             "IP:{tabs}  {0}",
                                                             Self::network_ip(network)
+                                                                .map_or("None".to_string(), |ip| {
+                                                                    ip.to_string()
+                                                                })
                                                         ));
                                                     }
                                                     _ => {}
@@ -265,7 +269,10 @@ impl App {
                 };
                 let item = MenuItem::with_id(
                     format!("network_ip {config_url_str}"),
-                    format!("IP:{tabs}  {0}", Self::network_ip(network)),
+                    format!(
+                        "IP:{tabs}  {0}",
+                        Self::network_ip(network).map_or("None".to_string(), |ip| ip.to_string())
+                    ),
                     true,
                     None,
                 );
@@ -336,12 +343,8 @@ impl App {
         display_text
     }
 
-    fn network_ip(network: &NetworkStatus) -> String {
-        network
-            .current_state
-            .ip
-            .applied
-            .map_or("None".to_string(), |ip| ip.to_string())
+    fn network_ip(network: &NetworkStatus) -> Option<Ipv4Net> {
+        network.current_state.ip.applied
     }
 
     /// Sanitizes text for use in menu items by only allowing safe characters
@@ -1014,7 +1017,9 @@ impl ApplicationHandler<UserEvent> for App {
                             if let Some(network) = status.networks.get(&Url::parse(url).unwrap()) {
                                 let ip = Self::network_ip(network);
 
-                                if let Err(e) = self.clipboard.set_text(ip) {
+                                if let Err(e) = self.clipboard.set_text(
+                                    ip.map_or("None".to_string(), |ip| ip.addr().to_string()),
+                                ) {
                                     warn!("Failed to copy network IP to clipboard: {}", e);
                                 } else {
                                     trace!("Copied network IP to clipboard: {}", url);
