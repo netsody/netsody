@@ -1,10 +1,10 @@
 use crate::agent::AgentInner;
 use crate::agent::router::AgentRouterInterface;
-use crate::network::Network;
+use crate::network::{AppliedStatus, Network};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::MutexGuard;
-use tracing::trace;
+use tracing::{trace, warn};
 use url::Url;
 
 pub struct AgentRouter {}
@@ -23,12 +23,25 @@ impl AgentRouterInterface for AgentRouter {
         config_url: &Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
-        trace!(
-            "We're running on a mobile platform where the network listener handles route updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
-        );
-
         if let Some(network) = networks.get_mut(config_url) {
+            // routes
+            trace!(
+                "We're running on a mobile platform where the network listener handles route updates. Therefore, we just assume everything is fine and hope for the best! 🤞"
+            );
             network.current_state.routes = network.desired_state.routes.clone();
+
+            // forwarding
+            match network.desired_state.forwarding.applied {
+                Some(true) => {
+                    warn!(
+                        "We're configured as a gateway. Forwarding is not supported on this platform."
+                    );
+                    network.current_state.forwarding = AppliedStatus::error("We're configured as a gateway. Forwarding is not supported on this platform.".to_string());
+                }
+                _ => {
+                    network.current_state.forwarding = network.desired_state.forwarding.clone();
+                }
+            }
         }
     }
 }
