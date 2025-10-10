@@ -82,13 +82,17 @@ impl AgentDns {
         for network in networks.values() {
             if let Some(hostnames) = &network.desired_state.hostnames.applied {
                 for (ip, hostname) in hostnames.0.iter() {
-                    trace!("Adding DNS A record: {}.{} -> {}", hostname, NETSODY_DOMAIN, ip);
+                    trace!(
+                        "Adding DNS A record: {}.{} -> {}",
+                        hostname, NETSODY_DOMAIN, ip
+                    );
                     // Use short TTL based on housekeeping interval to ensure timely updates
                     // when network config changes, as platform resolvers may cache DNS records
                     let dns_ttl = (HOUSEKEEPING_INTERVAL_MS / 1000) as u32;
                     authority.upsert_mut(
                         Record::from_rdata(
-                            Name::parse(&format!("{}.{}.", hostname, NETSODY_DOMAIN), None).unwrap(),
+                            Name::parse(&format!("{}.{}.", hostname, NETSODY_DOMAIN), None)
+                                .unwrap(),
                             dns_ttl,
                             RData::A(A(*ip)),
                         )
