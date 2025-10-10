@@ -9,10 +9,11 @@ use hickory_resolver::config::NameServerConfig;
 use hickory_resolver::config::NameServerConfigGroup;
 use hickory_server::authority::Catalog;
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 #[cfg(target_os = "android")]
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
 use tokio::sync::MutexGuard;
 use tracing::trace;
 use url::Url;
@@ -85,6 +86,36 @@ impl AgentDnsInterface for AgentDns {
         _config_url: &Url,
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
+        // Calculate desired DNS IP from enabled networks
+        let network_dns_ips: Vec<Ipv4Addr> = networks
+            .values()
+            .filter(|network| !network.disabled)
+            .filter_map(|network| network.current_state.ip.applied)
+            .map(|network_ip| {
+                let broadcast = network_ip.broadcast();
+                // DNS server IP is the broadcast address minus 1
+                Ipv4Addr::from(u32::from(broadcast).saturating_sub(1))
+            })
+            .collect();
+        let desired_dns_ip = network_dns_ips.first();
+
+        // Update DNS server IP if changed
+        let current_ip_bits = self.server_ip.load(SeqCst);
+        let current_ip = if current_ip_bits == 0 {
+            None
+        } else {
+            Some(Ipv4Addr::from(current_ip_bits))
+        };
+
+        if current_ip != desired_dns_ip.copied() {
+            trace!(
+                "DNS server IP changed: {:?} -> {:?}",
+                current_ip, desired_dns_ip
+            );
+            self.server_ip
+                .store(desired_dns_ip.map(|ip| ip.to_bits()).unwrap_or(0), SeqCst);
+        }
+
         // Check if hostname mappings need to be updated
         let mut update_hostnames = false;
         for (_, network) in networks.iter_mut() {
