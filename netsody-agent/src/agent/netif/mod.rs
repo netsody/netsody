@@ -1,4 +1,6 @@
 use crate::agent::{AgentInner, is_netsody_control_packet};
+#[cfg(target_os = "windows")]
+use crate::agent::dns::AgentDnsInterface;
 use crate::network::Network;
 use cfg_if::cfg_if;
 use etherparse::Ipv4HeaderSlice;
@@ -166,7 +168,6 @@ pub trait AgentNetifInterface {
                                         else {
                                             #[cfg(feature = "dns")]
                                             {
-                                                use crate::agent::dns::AgentDnsInterface;
                                                 use etherparse::ip_number::UDP;
                                                 use etherparse::UdpHeaderSlice;
 

@@ -2,7 +2,6 @@ use crate::agent::AgentInner;
 use crate::agent::PlatformDependent;
 use crate::agent::netif::AgentNetifInterface;
 use crate::network::Network;
-use arc_swap::ArcSwapOption;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;

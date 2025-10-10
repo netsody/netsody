@@ -1,10 +1,6 @@
-use crate::agent::dns::AgentDnsInterface;
-#[cfg(target_os = "macos")]
-use crate::agent::dns::macos::{scutil_add, scutil_get_dns_ip, scutil_remove};
+use crate::agent::dns::{AgentDns, NETSODY_DOMAIN};
 use crate::agent::housekeeping::HOUSEKEEPING_INTERVAL_MS;
-use crate::agent::{AgentInner, PlatformDependent};
-use crate::network::{AppliedStatus, Network};
-use arc_swap::ArcSwap;
+use crate::network::Network;
 use etherparse::PacketBuilder;
 use hickory_proto::ProtoError;
 use hickory_proto::op::{Header, MessageType, ResponseCode};
@@ -12,7 +8,9 @@ use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{DNSClass, Name, RData, Record};
 use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
 use hickory_proto::xfer::Protocol;
-use hickory_resolver::config::*;
+use hickory_resolver::config::NameServerConfigGroup;
+#[cfg(target_os = "android")]
+use hickory_resolver::config::ResolverOpts;
 use hickory_server::authority::{Authority, Catalog, MessageRequest, MessageResponse, ZoneType};
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use hickory_server::store::in_memory::InMemoryAuthority;
@@ -21,54 +19,28 @@ use std::io;
 use std::io::{Error, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::SeqCst;
 use tokio::sync::MutexGuard;
 use tracing::{Level, debug, enabled, error, instrument, trace};
 use tun_rs::AsyncDevice;
 use url::Url;
 
-pub struct AgentDns {
-    embedded_catalog: ArcSwap<Catalog>,
-    server_ip: AtomicU32,
-    upstream_servers: NameServerConfigGroup,
-}
-
 impl AgentDns {
-    #[allow(unused_variables)]
-    pub(crate) fn new(platform_dependent: Arc<PlatformDependent>) -> Self {
-        #[cfg(target_os = "android")]
-        trace!(
-            "Initializing DNS with upstream servers: {:?}",
-            platform_dependent.dns_servers
-        );
-        let upstream_servers = {
-            #[cfg(target_os = "android")]
-            {
-                NameServerConfigGroup::from(
-                    platform_dependent
-                        .dns_servers
-                        .iter()
-                        .map(|&ip| NameServerConfig::new(SocketAddr::from((ip, 53)), Protocol::Udp))
-                        .collect::<Vec<_>>(),
-                )
-            }
-            #[cfg(not(target_os = "android"))]
-            {
-                NameServerConfigGroup::new()
-            }
-        };
-
-        Self {
-            embedded_catalog: ArcSwap::from_pointee(Catalog::new()),
-            server_ip: AtomicU32::default(),
-            upstream_servers,
-        }
-    }
-
+    /// Build a DNS catalog with configured hostnames and optional upstream forwarding.
+    ///
+    /// This method constructs a DNS catalog that:
+    /// - On Android: Forwards non-netsody queries to upstream DNS servers
+    /// - On all platforms: Resolves *.netsody.me hostnames to configured IPs
+    ///
+    /// # Arguments
+    /// * `networks` - Network configurations containing hostname mappings
+    /// * `upstream_servers` - Upstream DNS servers for forwarding (Android only)
+    ///
+    /// # Returns
+    /// A configured DNS catalog ready for query handling
     #[allow(unused)]
     #[allow(clippy::unreadable_literal)]
-    fn build_catalog(
+    pub(crate) fn build_catalog(
         &self,
         networks: &mut MutexGuard<HashMap<Url, Network>>,
         upstream_servers: &NameServerConfigGroup,
@@ -104,19 +76,19 @@ impl AgentDns {
         }
 
         // Add local netsody.me zone
-        let origin: Name = Name::parse("netsody.me.", None).unwrap();
+        let origin: Name = Name::parse(&format!("{}.", NETSODY_DOMAIN), None).unwrap();
         let mut authority = InMemoryAuthority::empty(origin.clone(), ZoneType::External, false);
 
         for network in networks.values() {
             if let Some(hostnames) = &network.desired_state.hostnames.applied {
                 for (ip, hostname) in hostnames.0.iter() {
-                    trace!("Adding DNS A record: {}.netsody.me -> {}", hostname, ip);
+                    trace!("Adding DNS A record: {}.{} -> {}", hostname, NETSODY_DOMAIN, ip);
                     // Use short TTL based on housekeeping interval to ensure timely updates
                     // when network config changes, as platform resolvers may cache DNS records
                     let dns_ttl = (HOUSEKEEPING_INTERVAL_MS / 1000) as u32;
                     authority.upsert_mut(
                         Record::from_rdata(
-                            Name::parse(format!("{hostname}.netsody.me.").as_str(), None).unwrap(),
+                            Name::parse(&format!("{}.{}.", hostname, NETSODY_DOMAIN), None).unwrap(),
                             dns_ttl,
                             RData::A(A(*ip)),
                         )
@@ -132,169 +104,27 @@ impl AgentDns {
         catalog
     }
 
-    async fn update_all_networks(&self, networks: &mut MutexGuard<'_, HashMap<Url, Network>>) {
-        trace!("Update all hostnames");
-
-        #[cfg(not(target_os = "macos"))]
-        let mut current_ip = if self.server_ip.load(SeqCst) != 0 {
-            Some(Ipv4Addr::from(self.server_ip.load(SeqCst)))
-        } else {
+    /// Get the current DNS server IP address if configured.
+    ///
+    /// # Returns
+    /// The DNS server IP, or None if not configured (stored as 0)
+    pub(crate) fn server_ip(&self) -> Option<Ipv4Addr> {
+        let ip_bits = self.server_ip.load(SeqCst);
+        if ip_bits == 0 {
             None
-        };
-        // For macOS: Get actual current DNS server IP from scutil
-        #[cfg(target_os = "macos")]
-        let mut current_ip = match scutil_get_dns_ip().await {
-            Ok(Some(ip)) => {
-                // ensure that stored IP is the same as the one returned by scutil
-                self.server_ip.store(ip.to_bits(), SeqCst);
-                Some(ip)
-            }
-            Ok(None) => None,
-            Err(e) => {
-                error!("Failed to check DNS server existence: {}", e);
-                for (_, network) in networks.iter_mut() {
-                    network.current_state.hostnames =
-                        AppliedStatus::error(format!("Failed to check DNS server: {}", e));
-                }
-                self.embedded_catalog.store(Default::default());
-                self.server_ip.store(0, SeqCst);
-                return;
-            }
-        };
-
-        // Collect the DNS server IPs for all enabled networks
-        let network_dns_ips: Vec<Ipv4Addr> = networks
-            .values()
-            .filter(|network| !network.disabled)
-            .filter_map(|network| network.current_state.ip.applied)
-            .map(|network_ip| {
-                let broadcast = network_ip.broadcast();
-                // DNS server IP is the broadcast address minus 1
-                Ipv4Addr::from(u32::from(broadcast).saturating_sub(1))
-            })
-            .collect();
-
-        // Check if we need to remove the existing DNS server
-        // This is the case when it exists but is not in the expected DNS IPs
-        let needs_dns_removal = if let Some(existing_ip) = current_ip {
-            !network_dns_ips.contains(&existing_ip)
         } else {
-            false
-        };
-
-        // Handle DNS server removal platform-specifically
-        if needs_dns_removal {
-            #[cfg(target_os = "macos")]
-            {
-                // On macOS: Remove the DNS server using scutil
-                trace!(
-                    "Removing DNS server because current IP is not in expected IPs: existing={:?}, expected={:?}",
-                    current_ip, network_dns_ips
-                );
-                if let Err(e) = scutil_remove().await {
-                    error!("Failed to remove DNS server: {}", e);
-                    for (_, network) in networks.iter_mut() {
-                        network.current_state.hostnames =
-                            AppliedStatus::error(format!("Failed to remove DNS server: {}", e));
-                    }
-                    return;
-                }
-            }
-
-            // On all platforms: Clear the server IP
-            trace!(
-                "Clearing DNS server IP because current IP is not in expected IPs: existing={:?}, expected={:?}",
-                current_ip, network_dns_ips
-            );
-            self.embedded_catalog.store(Default::default());
-            self.server_ip.store(0, SeqCst);
-            current_ip = None;
-        }
-
-        // Check if we need to add the DNS server
-        // This is the case when current_ip is None and we have network DNS IPs available
-        if current_ip.is_none()
-            && !network_dns_ips.is_empty()
-            && let Some(&dns_server) = network_dns_ips.first()
-        {
-            trace!(
-                "Adding DNS server because current IP is None: new_ip={}",
-                dns_server
-            );
-
-            #[cfg(target_os = "macos")]
-            {
-                // On macOS: Add the DNS server using scutil
-                let domains = vec!["netsody.me"];
-                if let Err(e) = scutil_add(&dns_server, &domains).await {
-                    error!("Failed to add DNS server: {}", e);
-                    for (_, network) in networks.iter_mut() {
-                        network.current_state.hostnames =
-                            AppliedStatus::error(format!("Failed to add DNS server: {}", e));
-                    }
-                    return;
-                }
-            }
-
-            // On all platforms: Store the new IP
-            self.server_ip.store(dns_server.to_bits(), SeqCst);
-        }
-
-        // update DNS entries
-        self.embedded_catalog.store(Arc::new(
-            self.build_catalog(networks, &self.upstream_servers),
-        ));
-
-        // Update network states first
-        for (_, network) in networks.iter_mut() {
-            network.current_state.hostnames = network.desired_state.hostnames.clone();
-        }
-    }
-}
-
-impl AgentDnsInterface for AgentDns {
-    async fn apply_desired_state(
-        &self,
-        _inner: Arc<AgentInner>,
-        config_url: &Url,
-        networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
-    ) {
-        #[cfg(target_os = "macos")]
-        {
-            use tracing::warn;
-
-            // check if DNS server still exists
-            let server_exists = scutil_get_dns_ip().await;
-            for (_, network) in networks.iter_mut() {
-                if network.current_state.hostnames.applied.is_some() && server_exists == Ok(None) {
-                    warn!("DNS server has been removed externally.");
-                    network.current_state.hostnames =
-                        AppliedStatus::error("DNS server has been removed externally.".to_string());
-                }
-            }
-        }
-
-        // we do not support updating a single network. We have to update all networks.
-        if let Some(network) = networks.get_mut(config_url) {
-            trace!("Update network in DNS");
-
-            if network.current_state.hostnames != network.desired_state.hostnames {
-                trace!(
-                    "DNS mismatch: current={:?} desired={:?}",
-                    &network.current_state.hostnames, network.desired_state.hostnames
-                );
-                self.update_all_networks(networks).await;
-            } else {
-                trace!("DNS up to date");
-            }
+            Some(Ipv4Addr::from(ip_bits))
         }
     }
 
-    fn server_ip(&self) -> Option<Ipv4Addr> {
-        Some(Ipv4Addr::from(self.server_ip.load(SeqCst)))
-    }
-
-    fn is_server_ip(&self, ip: Ipv4Addr) -> bool {
+    /// Check if the given IP address matches the configured DNS server IP.
+    ///
+    /// # Arguments
+    /// * `ip` - IP address to check
+    ///
+    /// # Returns
+    /// `true` if the IP matches the DNS server IP, `false` otherwise
+    pub(crate) fn is_server_ip(&self, ip: Ipv4Addr) -> bool {
         if enabled!(Level::TRACE) {
             trace!(
                 "Checking if IP {} is the DNS server IP {}",
@@ -306,7 +136,22 @@ impl AgentDnsInterface for AgentDns {
         server_ip != 0 && server_ip == ip.to_bits()
     }
 
-    async fn on_packet(
+    /// Handle a DNS packet received on the TUN interface.
+    ///
+    /// This method processes DNS queries using the embedded DNS server and
+    /// sends responses back through the TUN device.
+    ///
+    /// # Arguments
+    /// * `message_bytes` - DNS message data
+    /// * `src` - Source IP address
+    /// * `src_port` - Source port
+    /// * `dst` - Destination IP address (DNS server)
+    /// * `dst_port` - Destination port (usually 53)
+    /// * `dev` - TUN device for sending responses
+    ///
+    /// # Returns
+    /// `true` if packet was handled, `false` otherwise
+    pub(crate) async fn on_packet(
         &self,
         message_bytes: &[u8],
         src: Ipv4Addr,

@@ -1,6 +1,3 @@
-#[cfg(target_os = "macos")]
-mod macos;
-
 use crate::agent::AgentInner;
 use crate::network::Network;
 use cfg_if::cfg_if;
@@ -10,6 +7,13 @@ use std::sync::Arc;
 use tokio::sync::MutexGuard;
 use tun_rs::AsyncDevice;
 use url::Url;
+
+/// DNS domain name used by netsody for internal DNS resolution
+pub(crate) const NETSODY_DOMAIN: &str = "netsody.me";
+
+/// TUN interface name used by netsody on Linux systems
+#[cfg(target_os = "linux")]
+pub(crate) const NETSODY_INTERFACE_NAME: &str = "netsody";
 
 pub trait AgentDnsInterface {
     async fn apply_desired_state(
@@ -45,13 +49,20 @@ pub trait AgentDnsInterface {
 }
 
 cfg_if! {
-    if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "android"))] {
-        mod embedded;
-        pub use embedded::AgentDns;
+    if #[cfg(any(target_os = "macos"))] {
+        mod shared;
+        mod macos;
+        pub use macos::AgentDns;
     }
-    else if #[cfg(target_os = "linux")] {
-        mod hosts_file;
-        pub use hosts_file::AgentDns;
+    else if #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))] {
+        mod shared;
+        mod mobile;
+        pub use mobile::AgentDns;
+    }
+    else if #[cfg(any(target_os = "linux"))] {
+        mod shared;
+        mod linux;
+        pub use linux::AgentDns;
     }
     else {
         // unsupported platform
@@ -59,11 +70,10 @@ cfg_if! {
         use crate::network::AppliedStatus;
         use tracing::warn;
 
-
         pub struct AgentDns {}
 
         impl AgentDns {
-            pub(crate) fn new(_platform_dependent: Arc<PlatformDependent>) -> Self {
+            pub(crate) async fn new(_platform_dependent: Arc<PlatformDependent>) -> Self {
                 Self {}
             }
         }
