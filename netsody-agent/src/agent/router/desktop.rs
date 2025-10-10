@@ -108,7 +108,7 @@ impl AgentRouterInterface for AgentRouter {
         networks: &mut MutexGuard<'_, HashMap<Url, Network>>,
     ) {
         if let Some(network) = networks.get_mut(config_url) {
-            // routing
+            // routes
 
             // check if routes are still in desired state
             let routes_handle = self.handle.clone();

@@ -46,8 +46,6 @@ impl AgentInner {
             .collect();
         trace!("Collected {} IPs: {:?}", all_ips.len(), all_ips);
 
-        #[cfg(feature = "dns")]
-        use crate::agent::dns::AgentDnsInterface;
         let networks_change = NetworkChange {
             routes: Some(all_routes),
             ips: Some(all_ips),

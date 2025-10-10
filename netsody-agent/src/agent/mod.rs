@@ -50,19 +50,22 @@ impl Agent {
         let tun_tx = Arc::new(tun_tx);
         let netsody_rx = Arc::new(netsody_rx);
 
-        let inner = Arc::new(AgentInner::new(
-            config.id,
-            config.networks,
-            cancellation_token,
-            node,
-            recv_buf_rx,
-            tun_tx.clone(),
-            netsody_rx.clone(),
-            config_path,
-            token_path,
-            config.mtu.unwrap_or(AgentConfig::default_mtu()),
-            Arc::new(platform_dependent),
-        ));
+        let inner = Arc::new(
+            AgentInner::new(
+                config.id,
+                config.networks,
+                cancellation_token,
+                node,
+                recv_buf_rx,
+                tun_tx.clone(),
+                netsody_rx.clone(),
+                config_path,
+                token_path,
+                config.mtu.unwrap_or(AgentConfig::default_mtu()),
+                Arc::new(platform_dependent),
+            )
+            .await,
+        );
 
         let mut join_set = JoinSet::new();
 
