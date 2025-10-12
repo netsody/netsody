@@ -676,7 +676,7 @@ pub extern "C" fn netsody_agent_network_change_dns_server(
 pub extern "C" fn netsody_agent_start(
     runtime: &mut RuntimePtr,
     config: &mut AgentConfigPtr,
-    tun_device: &mut TunDevicePtr,
+    tun_device: *mut TunDevicePtr,
     networks_change_callback: extern "C" fn(change: *const NetworkChange),
     dns_servers: *const c_char,
     agent: *mut *mut AgentPtr,
@@ -692,9 +692,15 @@ pub extern "C" fn netsody_agent_start(
         // Extract the AgentConfig from the pointer
         let agent_config: &AgentConfig = config.into();
 
-        // Extract the TunDevice from the pointer
+        // Extract the TunDevice from the pointer (optional)
         #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
-        let tun_device: &Arc<TunDevice> = tun_device.into();
+        let tun_device: Option<Arc<TunDevice>> = if tun_device.is_null() {
+            None
+        } else {
+            let tun_device_ptr = &mut *tun_device;
+            let tun_device_ref: &Arc<TunDevice> = tun_device_ptr.into();
+            Some(tun_device_ref.clone())
+        };
 
         match runtime.block_on(Agent::start(
             agent_config.clone(),
@@ -702,7 +708,7 @@ pub extern "C" fn netsody_agent_start(
             "".to_string(),
             PlatformDependent {
                 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
-                tun_device: tun_device.clone(),
+                tun_device: tun_device,
                 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
                 network_listener: Box::new(move |change: crate::agent::NetworkChange| {
                     // Convert Rust NetworkChange to C NetworkChange
@@ -864,6 +870,55 @@ pub extern "C" fn netsody_agent_cancel_udp_bindings(agent: &mut AgentPtr) -> c_i
     trace!("FFI: All UDP bindings canceled");
     trace!("FFI: Operation successful");
     0
+}
+
+#[cfg(target_os = "android")]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn netsody_agent_update_tun_device(
+    runtime: &mut RuntimePtr,
+    agent: &mut AgentPtr,
+    new_tun_device: *mut TunDevicePtr,
+) -> c_int {
+    trace!("FFI: Starting TUN device update operation");
+
+    let runtime: &Runtime = runtime.into();
+    let agent: &Agent = agent.into();
+
+    unsafe {
+        // Extract the TunDevice from the pointer (optional)
+        let new_tun_device: Option<Arc<TunDevice>> = if new_tun_device.is_null() {
+            trace!("FFI: NULL TUN device provided, will remove current device");
+            None
+        } else {
+            let tun_device_ptr = &mut *new_tun_device;
+            let tun_device_ref: &Arc<TunDevice> = tun_device_ptr.into();
+            trace!("FFI: New TUN device provided");
+            Some(tun_device_ref.clone())
+        };
+
+        trace!("FFI: Converted runtime, agent, and tun_device pointers");
+
+        // Get the inner agent to access the netif
+        let inner = agent.inner.clone();
+        trace!("FFI: Retrieved agent inner");
+
+        // Lock networks and update TUN device
+        trace!("FFI: Acquiring networks lock and updating TUN device");
+        runtime.block_on(async {
+            let networks_guard = inner.networks.lock().await;
+            trace!("FFI: Networks lock acquired");
+
+            trace!("FFI: Calling update_tun_device");
+            inner.netif.update_tun_device(inner.clone(), new_tun_device);
+            trace!("FFI: update_tun_device completed");
+
+            drop(networks_guard); // Release the lock
+            trace!("FFI: Networks lock released");
+        });
+        trace!("FFI: Operation successful");
+        0
+    }
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]

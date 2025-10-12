@@ -256,7 +256,7 @@ impl MessageSink for ChannelSink {
 
 pub struct PlatformDependent {
     #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
-    pub tun_device: Arc<tun_rs::AsyncDevice>,
+    pub tun_device: Option<Arc<tun_rs::AsyncDevice>>,
     #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
     pub network_listener: NetworkListener,
     #[cfg(target_os = "android")]
