@@ -16,7 +16,7 @@ impl AgentInner {
         trace!("Networks change listener set, check if we have a change");
 
         trace!("Collecting routes from {} networks", networks.len());
-        let all_routes: Vec<Ipv4Net> = networks
+        let mut all_routes: Vec<Ipv4Net> = networks
             .iter()
             .filter_map(|(url, network)| {
                 trace!(
@@ -32,9 +32,10 @@ impl AgentInner {
             })
             .flatten()
             .collect();
+        all_routes.sort();
         trace!("Collected {} routes: {:?}", all_routes.len(), all_routes);
 
-        let all_ips: Vec<Ipv4Net> = networks
+        let mut all_ips: Vec<Ipv4Net> = networks
             .iter()
             .filter_map(|(url, network)| {
                 trace!(
@@ -44,6 +45,7 @@ impl AgentInner {
                 network.current_state.ip.applied
             })
             .collect();
+        all_ips.sort();
         trace!("Collected {} IPs: {:?}", all_ips.len(), all_ips);
 
         let networks_change = NetworkChange {
