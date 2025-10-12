@@ -24,7 +24,8 @@ impl AgentNetif {
     }
 
     /// Update the TUN device, stopping any existing runner and starting a new one if needed
-    pub(crate) fn update_tun_device(&self, inner: Arc<AgentInner>, new_device: Arc<TunDevice>) {
+    /// If new_device is None, the current TUN device will be removed and the runner will be stopped
+    pub(crate) fn update_tun_device(&self, inner: Arc<AgentInner>, new_device: Option<Arc<TunDevice>>) {
         trace!("Updating TUN device");
 
         // Get current state
@@ -39,31 +40,36 @@ impl AgentNetif {
             cancellation_token.cancel();
         }
 
-        // Always start a new runner
-        let token = inner.cancellation_token.child_token();
-        let new_device_clone = new_device.clone();
-        let token_clone = token.clone();
+        // Start a new runner only if new_device is Some
+        let new_token = if let Some(new_device) = new_device.clone() {
+            let token = inner.cancellation_token.child_token();
+            let new_device_clone = new_device.clone();
+            let token_clone = token.clone();
 
-        trace!("Starting new TUN device runner");
-        let inner_clone = inner.clone();
-        tokio::spawn(async move {
-            let result =
-                AgentNetif::tun_runner(inner_clone.clone(), new_device_clone.clone(), token_clone)
-                    .await;
+            trace!("Starting new TUN device runner");
+            let inner_clone = inner.clone();
+            tokio::spawn(async move {
+                let result =
+                    AgentNetif::tun_runner(inner_clone.clone(), new_device_clone.clone(), token_clone)
+                        .await;
 
-            if let Err(e) = result {
-                error!("TUN runner failed: {}", e);
-                inner_clone.cancellation_token.cancel();
-            } else {
-                trace!("TUN runner finished");
-            }
-        });
-        let new_token = Some(token);
+                if let Err(e) = result {
+                    error!("TUN runner failed: {}", e);
+                    inner_clone.cancellation_token.cancel();
+                } else {
+                    trace!("TUN runner finished");
+                }
+            });
+            Some(token)
+        } else {
+            trace!("No new TUN device provided, runner will remain stopped");
+            None
+        };
 
         // Update the device
         self.tun_device
-            .store(Arc::new((Some(new_device), new_token)));
-        trace!("TUN device replaced successfully");
+            .store(Arc::new((new_device, new_token)));
+        trace!("TUN device updated successfully");
     }
 }
 

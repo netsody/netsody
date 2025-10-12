@@ -878,37 +878,49 @@ pub extern "C" fn netsody_agent_cancel_udp_bindings(agent: &mut AgentPtr) -> c_i
 pub extern "C" fn netsody_agent_update_tun_device(
     runtime: &mut RuntimePtr,
     agent: &mut AgentPtr,
-    new_tun_device: &mut TunDevicePtr,
+    new_tun_device: *mut TunDevicePtr,
 ) -> c_int {
     trace!("FFI: Starting TUN device update operation");
 
     let runtime: &Runtime = runtime.into();
     let agent: &Agent = agent.into();
-    let new_tun_device: &Arc<TunDevice> = new_tun_device.into();
 
-    trace!("FFI: Converted runtime, agent, and tun_device pointers");
+    unsafe {
+        // Extract the TunDevice from the pointer (optional)
+        let new_tun_device: Option<Arc<TunDevice>> = if new_tun_device.is_null() {
+            trace!("FFI: NULL TUN device provided, will remove current device");
+            None
+        } else {
+            let tun_device_ptr = &mut *new_tun_device;
+            let tun_device_ref: &Arc<TunDevice> = tun_device_ptr.into();
+            trace!("FFI: New TUN device provided");
+            Some(tun_device_ref.clone())
+        };
 
-    // Get the inner agent to access the netif
-    let inner = agent.inner.clone();
-    trace!("FFI: Retrieved agent inner");
+        trace!("FFI: Converted runtime, agent, and tun_device pointers");
 
-    // Lock networks and update TUN device
-    trace!("FFI: Acquiring networks lock and updating TUN device");
-    runtime.block_on(async {
-        let networks_guard = inner.networks.lock().await;
-        trace!("FFI: Networks lock acquired");
+        // Get the inner agent to access the netif
+        let inner = agent.inner.clone();
+        trace!("FFI: Retrieved agent inner");
 
-        trace!("FFI: Calling update_tun_device");
-        inner
-            .netif
-            .update_tun_device(inner.clone(), new_tun_device.clone());
-        trace!("FFI: update_tun_device completed");
+        // Lock networks and update TUN device
+        trace!("FFI: Acquiring networks lock and updating TUN device");
+        runtime.block_on(async {
+            let networks_guard = inner.networks.lock().await;
+            trace!("FFI: Networks lock acquired");
 
-        drop(networks_guard); // Release the lock
-        trace!("FFI: Networks lock released");
-    });
-    trace!("FFI: Operation successful");
-    0
+            trace!("FFI: Calling update_tun_device");
+            inner
+                .netif
+                .update_tun_device(inner.clone(), new_tun_device);
+            trace!("FFI: update_tun_device completed");
+
+            drop(networks_guard); // Release the lock
+            trace!("FFI: Networks lock released");
+        });
+        trace!("FFI: Operation successful");
+        0
+    }
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
