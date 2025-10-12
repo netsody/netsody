@@ -13,8 +13,8 @@ use hickory_server::authority::Catalog;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::SeqCst;
 use tokio::sync::MutexGuard;
 use tracing::{trace, warn};
 use url::Url;
@@ -126,9 +126,8 @@ impl AgentDnsInterface for AgentDns {
                 // log nothing, we already did this in the constructor
                 for (_, network) in networks.iter_mut() {
                     if network.desired_state.hostnames.applied.is_some() {
-                        network.current_state.hostnames = AppliedStatus::error(format!(
-                            "Unable to determine used DNS resolver"
-                        ));
+                        network.current_state.hostnames =
+                            AppliedStatus::error(format!("Unable to determine used DNS resolver"));
                     }
                 }
                 return;
