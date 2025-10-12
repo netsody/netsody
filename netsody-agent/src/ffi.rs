@@ -872,7 +872,7 @@ pub extern "C" fn netsody_agent_cancel_udp_bindings(agent: &mut AgentPtr) -> c_i
     0
 }
 
-#[cfg(any(target_os = "android"))]
+#[cfg(target_os = "android")]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn netsody_agent_update_tun_device(

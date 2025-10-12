@@ -32,8 +32,6 @@ impl AgentNetif {
         let device_pair = self.tun_device.load();
         let (_, current_token) = device_pair.as_ref();
 
-        // TODO: drop previous tun device?
-
         // Cancel existing runner if running
         if let Some(cancellation_token) = current_token {
             trace!("Cancelling existing TUN runner for device replacement");
