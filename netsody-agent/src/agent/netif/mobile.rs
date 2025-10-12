@@ -25,7 +25,12 @@ impl AgentNetif {
 
     /// Update the TUN device, stopping any existing runner and starting a new one if needed
     /// If new_device is None, the current TUN device will be removed and the runner will be stopped
-    pub(crate) fn update_tun_device(&self, inner: Arc<AgentInner>, new_device: Option<Arc<TunDevice>>) {
+    #[cfg(target_os = "android")]
+    pub(crate) fn update_tun_device(
+        &self,
+        inner: Arc<AgentInner>,
+        new_device: Option<Arc<TunDevice>>,
+    ) {
         trace!("Updating TUN device");
 
         // Get current state
@@ -47,9 +52,12 @@ impl AgentNetif {
             trace!("Starting new TUN device runner");
             let inner_clone = inner.clone();
             tokio::spawn(async move {
-                let result =
-                    AgentNetif::tun_runner(inner_clone.clone(), new_device_clone.clone(), token_clone)
-                        .await;
+                let result = AgentNetif::tun_runner(
+                    inner_clone.clone(),
+                    new_device_clone.clone(),
+                    token_clone,
+                )
+                .await;
 
                 if let Err(e) = result {
                     error!("TUN runner failed: {}", e);
@@ -65,8 +73,7 @@ impl AgentNetif {
         };
 
         // Update the device
-        self.tun_device
-            .store(Arc::new((new_device, new_token)));
+        self.tun_device.store(Arc::new((new_device, new_token)));
         trace!("TUN device updated successfully");
     }
 }

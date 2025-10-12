@@ -910,9 +910,7 @@ pub extern "C" fn netsody_agent_update_tun_device(
             trace!("FFI: Networks lock acquired");
 
             trace!("FFI: Calling update_tun_device");
-            inner
-                .netif
-                .update_tun_device(inner.clone(), new_tun_device);
+            inner.netif.update_tun_device(inner.clone(), new_tun_device);
             trace!("FFI: update_tun_device completed");
 
             drop(networks_guard); // Release the lock
