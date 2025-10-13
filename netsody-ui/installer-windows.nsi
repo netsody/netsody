@@ -59,7 +59,7 @@ Section "Install"
 	WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\netsody" "NoRepair" 1
 
 	DetailPrint "Creating Netsody service..."
-	ExecWait 'sc create netsody binpath= "\"$INSTDIR\netsody.exe\" run-service --log-file $COMMONPROGRAMDATA\Netsody\netsody.log --log-level trace --config $COMMONPROGRAMDATA\Netsody\config.toml --token $COMMONPROGRAMDATA\Netsody\auth.token" DisplayName= "Netsody" start= auto'
+	ExecWait 'sc create netsody binpath= "\"$INSTDIR\netsody.exe\" run-service --log-file $COMMONPROGRAMDATA\Netsody\netsody.log --config $COMMONPROGRAMDATA\Netsody\config.toml --token $COMMONPROGRAMDATA\Netsody\auth.token" DisplayName= "Netsody" start= auto'
 	DetailPrint "Setting Netsody service description..."
 	ExecWait 'sc description netsody "Netsody provides secure, software-defined overlay networks, connecting all your devices."'
 	DetailPrint "Starting Netsody service..."
