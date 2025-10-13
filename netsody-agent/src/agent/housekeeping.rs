@@ -97,16 +97,11 @@ impl AgentInner {
                     trace!("Network config retrieved successfully");
 
                     // update network name from config
-                    if let (Some(new_name), Some(old_name)) = (
-                        config.name.as_ref().filter(|s| !s.trim().is_empty()),
-                        network.name.as_ref(),
-                    ) && new_name != old_name
-                    {
+                    if network.name != config.name {
                         trace!(
                             "Network name changed from '{:?}' to '{:?}'",
                             network.name, config.name
                         );
-
                         save_config = true;
                     }
                     network.name = config.name.clone();

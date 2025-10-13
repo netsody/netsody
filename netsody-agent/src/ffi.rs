@@ -175,16 +175,24 @@ pub extern "C" fn netsody_agent_runtime_free(runtime: *mut RuntimePtr) {
 //
 #[repr(C)]
 pub struct NetworkInfo {
-    pub url: *const c_char, // Owned C-String pointer (freed on drop)
-    pub disabled: c_int,    // Disabled status (0 = enabled, 1 = disabled)
+    pub url: *const c_char,  // Owned C-String pointer (freed on drop)
+    pub disabled: c_int,     // Disabled status (0 = enabled, 1 = disabled)
+    pub name: *const c_char, // Owned C-String pointer for name (NULL if not available, freed on drop)
 }
 
 impl Drop for NetworkInfo {
     fn drop(&mut self) {
         if !self.url.is_null() {
             unsafe {
-                trace!("Dropping NetworkInfo and freeing CString");
+                trace!("Dropping NetworkInfo url and freeing CString");
                 let cstring = CString::from_raw(self.url as *mut c_char);
+                drop(cstring);
+            }
+        }
+        if !self.name.is_null() {
+            unsafe {
+                trace!("Dropping NetworkInfo name and freeing CString");
+                let cstring = CString::from_raw(self.name as *mut c_char);
                 drop(cstring);
             }
         }
@@ -417,7 +425,7 @@ pub extern "C" fn netsody_agent_config_networks(
         for (url, net) in &agent_config.networks {
             let url_str = url.as_str();
 
-            // Create CString
+            // Create CString for URL
             let cs = match CString::new(url_str) {
                 Ok(s) => s,
                 Err(_) => continue, // Skip on error
@@ -426,10 +434,21 @@ pub extern "C" fn netsody_agent_config_networks(
             // Transfer ownership to NetworkInfo
             let url_ptr = cs.into_raw();
 
+            // Create CString for name (if available)
+            let name_ptr = if let Some(ref name) = net.name {
+                match CString::new(name.as_str()) {
+                    Ok(cs) => cs.into_raw(),
+                    Err(_) => std::ptr::null(),
+                }
+            } else {
+                std::ptr::null()
+            };
+
             let disabled_val = if net.disabled { 1 } else { 0 };
             vec.push(NetworkInfo {
                 url: url_ptr,
                 disabled: disabled_val,
+                name: name_ptr,
             });
         }
 
@@ -481,6 +500,22 @@ pub extern "C" fn netsody_agent_network_disabled(
     unsafe {
         let network_info = networks.offset(index as isize);
         (*network_info).disabled
+    }
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn netsody_agent_network_name(
+    networks: *const NetworkInfo,
+    index: c_int,
+) -> *const c_char {
+    if networks.is_null() || index < 0 {
+        return std::ptr::null();
+    }
+
+    unsafe {
+        let network_info = networks.offset(index as isize);
+        (*network_info).name
     }
 }
 
@@ -676,12 +711,13 @@ pub extern "C" fn netsody_agent_network_change_dns_server(
 pub extern "C" fn netsody_agent_start(
     runtime: &mut RuntimePtr,
     config: &mut AgentConfigPtr,
+    config_path: *const c_char,
     tun_device: *mut TunDevicePtr,
     networks_change_callback: extern "C" fn(change: *const NetworkChange),
     dns_servers: *const c_char,
     agent: *mut *mut AgentPtr,
 ) -> c_int {
-    if agent.is_null() {
+    if agent.is_null() || config_path.is_null() {
         return ERR_IO;
     }
 
@@ -691,6 +727,12 @@ pub extern "C" fn netsody_agent_start(
 
         // Extract the AgentConfig from the pointer
         let agent_config: &AgentConfig = config.into();
+
+        // Extract the config path
+        let config_path_str = match CStr::from_ptr(config_path).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return ERR_UTF8,
+        };
 
         // Extract the TunDevice from the pointer (optional)
         #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
@@ -704,7 +746,7 @@ pub extern "C" fn netsody_agent_start(
 
         match runtime.block_on(Agent::start(
             agent_config.clone(),
-            "".to_string(),
+            config_path_str,
             "".to_string(),
             PlatformDependent {
                 #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
