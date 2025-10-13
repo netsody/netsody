@@ -268,6 +268,7 @@ fn run_agent(
                 },
                 _ = cancellation_token.cancelled() => {
                     trace!("Cancellation token cancelled");
+                    agent_clone.shutdown().await;
                 }
             }
         }
