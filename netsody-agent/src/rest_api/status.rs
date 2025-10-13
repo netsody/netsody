@@ -558,7 +558,7 @@ impl NetworkStatus {
 
         // Normal status display
         match &self.status {
-            AgentStateStatus::Initializing => "Initializing".to_string(),
+            AgentStateStatus::Initializing => "Initializing...".to_string(),
             AgentStateStatus::Disabled => "Disabled".to_string(),
             AgentStateStatus::Ok => "Ok".to_string(),
             AgentStateStatus::Pending => "Pending".to_string(),

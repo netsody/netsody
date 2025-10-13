@@ -147,17 +147,29 @@ impl AgentInner {
                 }
                 Ok(Err(e)) => {
                     warn!("Failed to retrieve network config: {}", e);
-                    new_status = Some(AgentStateStatus::RetrieveConfigError(format!("{}", e)));
+                    // ignore config errors for disabled networks
+                    if !network.disabled {
+                        new_status = Some(AgentStateStatus::RetrieveConfigError(format!("{}", e)));
+                    } else {
+                        trace!("Ignoring config error for disabled network");
+                        new_status = Some(AgentStateStatus::Disabled);
+                    }
                 }
                 Err(_) => {
                     warn!(
                         "Timeout of {} ms exceeded while attempting to retrieve network config",
                         CONFIG_RETRIEVE_TIMEOUT
                     );
-                    new_status = Some(AgentStateStatus::RetrieveConfigError(format!(
-                        "Timeout of {} ms exceeded while attempting to retrieve network config",
-                        CONFIG_RETRIEVE_TIMEOUT
-                    )));
+                    // ignore config errors for disabled networks
+                    if !network.disabled {
+                        new_status = Some(AgentStateStatus::RetrieveConfigError(format!(
+                            "Timeout of {} ms exceeded while attempting to retrieve network config",
+                            CONFIG_RETRIEVE_TIMEOUT
+                        )));
+                    } else {
+                        trace!("Ignoring config timeout for disabled network");
+                        new_status = Some(AgentStateStatus::Disabled);
+                    }
                 }
             }
 
