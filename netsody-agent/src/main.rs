@@ -282,7 +282,7 @@ fn run_agent(
 define_windows_service!(ffi_service_main, run_agent_win_entry);
 
 #[cfg(target_os = "windows")]
-fn run_agent_win_entry(arguments: Vec<OsString>) {
+fn run_agent_win_entry(_arguments: Vec<OsString>) {
     let cancellation_token = CancellationToken::new();
     let child_token = cancellation_token.child_token();
 
