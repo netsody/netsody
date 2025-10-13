@@ -690,7 +690,8 @@ impl fmt::Display for NetworkStatus {
                 target_os = "macos",
                 target_os = "linux",
                 target_os = "ios",
-                target_os = "android"
+                target_os = "android",
+                target_os = "windows",
             )
         ))]
         {

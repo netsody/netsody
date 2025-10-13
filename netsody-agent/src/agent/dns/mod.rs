@@ -49,7 +49,7 @@ pub trait AgentDnsInterface {
 }
 
 cfg_if! {
-    if #[cfg(any(target_os = "macos"))] {
+    if #[cfg(target_os = "macos")] {
         mod shared;
         mod macos;
         pub use macos::AgentDns;
@@ -59,10 +59,15 @@ cfg_if! {
         mod mobile;
         pub use mobile::AgentDns;
     }
-    else if #[cfg(any(target_os = "linux"))] {
+    else if #[cfg(target_os = "linux")] {
         mod shared;
         mod linux;
         pub use linux::AgentDns;
+    }
+    else if #[cfg(target_os = "windows")] {
+        mod shared;
+        mod windows;
+        pub use windows::AgentDns;
     }
     else {
         // unsupported platform
