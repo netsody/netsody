@@ -1,5 +1,3 @@
-#[cfg(target_os = "windows")]
-use crate::agent::dns::AgentDnsInterface;
 use crate::agent::{AgentInner, is_netsody_control_packet};
 use crate::network::Network;
 use cfg_if::cfg_if;
