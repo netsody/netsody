@@ -181,6 +181,7 @@ impl NetworkConfig {
         Ok(EffectiveAccessRuleList(entries))
     }
 
+    #[cfg(feature = "dns")]
     pub(crate) fn hostnames(&self, my_pk: &PubKey) -> HostnameList {
         let mut hostnames = HashMap::new();
         let mut entries: Vec<_> = self.nodes.values().collect();
