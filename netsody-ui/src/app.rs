@@ -136,7 +136,7 @@ impl App {
                                                     }
                                                     id if id.0.starts_with("network_ip ") => {
                                                         let tabs = if cfg!(target_os = "linux") {
-                                                            "\t\t\t"
+                                                            "\t\t\t\t"
                                                         } else {
                                                             "\t\t"
                                                         };
@@ -176,8 +176,13 @@ impl App {
                                     match id {
                                         id if id == &MenuId::new("version_agent") => match result {
                                             Ok(status) => {
+                                                let tabs = if cfg!(target_os = "linux") {
+                                                    "\t\t"
+                                                } else {
+                                                    "\t"
+                                                };
                                                 item.set_text(format!(
-                                                    "Agent:\t  {0} ({1})",
+                                                    "Agent:{tabs}  {0} ({1})",
                                                     status.version_info.version,
                                                     status.version_info.full_commit()
                                                 ));
@@ -263,7 +268,7 @@ impl App {
 
                 // IP
                 let tabs = if cfg!(target_os = "linux") {
-                    "\t\t\t"
+                    "\t\t\t\t"
                 } else {
                     "\t\t"
                 };
