@@ -202,7 +202,7 @@ impl AgentRouterInterface for AgentRouter {
                         Ok(forwarding_enabled) => {
                             if forwarding_enabled {
                                 // IP forwarding is enabled, now apply gateway rules for all networks
-                                match apply_gateway_rules(networks.values()) {
+                                match apply_gateway_rules(networks.values()).await {
                                     Ok(()) => {
                                         trace!("Successfully applied IP forwarding and gateway rules.");
                                         // Update current_state for all networks that have forwarding destinations
@@ -324,9 +324,9 @@ fn apply_ip_forwarding(needs_forwarding: bool) -> Result<bool, String> {
 ///
 /// Returns `Ok(())` on success, `Err(msg)` on failure.
 #[cfg(target_os = "linux")]
-fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) -> Result<(), String> {
-    use if_addrs::IfAddr;
+async fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) -> Result<(), String> {
     use ipnet::Ipv4Net;
+    use net_route::Handle;
     use std::collections::{HashMap, HashSet};
 
     // Collect all destinations from all networks (use HashSet to avoid duplicates)
@@ -346,49 +346,77 @@ fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) -> Resul
         destinations
     );
 
-    // Get all network interfaces once to map destinations to physical interfaces
-    let all_interfaces =
-        if_addrs::get_if_addrs().map_err(|e| format!("Failed to get network interfaces: {}", e))?;
-    trace!(
-        "Retrieved {} network interfaces from system to find matching interfaces for destinations.",
-        all_interfaces.len()
-    );
+    // Get routing table to determine which interface to use for each destination
+    let route_handle = Handle::new()
+        .map_err(|e| format!("Failed to create route handle: {}", e))?;
+    let routes = route_handle
+        .list()
+        .await
+        .map_err(|e| format!("Failed to list routes: {}", e))?;
+    
+    trace!("Retrieved {} routes from system routing table.", routes.len());
 
-    // Map destinations to their physical interfaces
+    // Map destinations to their physical interfaces using routing table
     let mut dest_to_iface: HashMap<Ipv4Net, String> = HashMap::new();
     for dest in destinations.iter() {
-        // Find matching interface for this destination
-        let mut found = false;
-        for interface in &all_interfaces {
-            if let IfAddr::V4(v4_addr) = &interface.addr {
-                // Calculate prefix length from netmask
-                let prefix_len = v4_addr
-                    .netmask
-                    .octets()
-                    .iter()
-                    .map(|octet| octet.count_ones())
-                    .sum::<u32>() as u8;
-
-                // Create IpNet for this interface
-                let iface_net = Ipv4Net::new(v4_addr.ip, prefix_len)
-                    .map_err(|e| format!("Failed to create IpNet: {}", e))?;
-
-                // Check if the target subnet is within or equals this interface's subnet
-                if iface_net.contains(dest) || iface_net == *dest {
-                    trace!(
-                        "Mapping destination '{}' to interface '{}' because subnet {} contains or matches destination.",
-                        dest, interface.name, iface_net
-                    );
-                    dest_to_iface.insert(*dest, interface.name.clone());
-                    found = true;
-                    break;
+        // Find the best matching route for this destination
+        let mut best_route: Option<&net_route::Route> = None;
+        let mut best_prefix_len: u8 = 0;
+        
+        for route in &routes {
+            // Only consider IPv4 routes
+            if let IpAddr::V4(route_dest) = route.destination {
+                let route_prefix = route.prefix;
+                // Create network for this route
+                if let Ok(route_net) = Ipv4Net::new(route_dest, route_prefix) {
+                    // Check if this route matches our destination (destination is within route's network)
+                    if route_net.contains(dest) || route_net == *dest {
+                        // Use the most specific route (longest prefix match)
+                        if route_prefix > best_prefix_len {
+                            best_route = Some(route);
+                            best_prefix_len = route_prefix;
+                        }
+                    }
                 }
             }
         }
-
-        if !found {
+        
+        if let Some(route) = best_route {
+            if let Some(ifindex) = route.ifindex {
+                // Convert ifindex to interface name using libc
+                let mut buf = [0u8; libc::IF_NAMESIZE];
+                let result = unsafe {
+                    libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char)
+                };
+                
+                if result.is_null() {
+                    return Err(format!(
+                        "Route for destination '{}' has ifindex {} but if_indextoname failed. Cannot configure gateway rules.",
+                        dest, ifindex
+                    ));
+                }
+                
+                let ifname = unsafe {
+                    std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char)
+                        .to_str()
+                        .map_err(|e| format!("Invalid interface name for ifindex {}: {}", ifindex, e))?
+                        .to_string()
+                };
+                
+                trace!(
+                    "Mapping destination '{}' to interface '{}' via routing table (prefix: /{}).",
+                    dest, ifname, best_prefix_len
+                );
+                dest_to_iface.insert(*dest, ifname);
+            } else {
+                return Err(format!(
+                    "Route for destination '{}' has no interface index. Cannot configure gateway rules.",
+                    dest
+                ));
+            }
+        } else {
             return Err(format!(
-                "No network interface found for destination '{}'. Cannot configure gateway rules without a matching physical interface.",
+                "No route found for destination '{}'. Cannot configure gateway rules without a matching route.",
                 dest
             ));
         }

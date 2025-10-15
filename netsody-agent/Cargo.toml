@@ -68,7 +68,6 @@ async-trait = "0.1.89"
 zbus = "5.11.0"
 sysctl = "0.7.1"
 iptables = "0.6.0"
-if-addrs = { workspace = true }
 
 [target."cfg(target_os = \"ios\")".dependencies]
 hickory-proto = "0.25.2"
