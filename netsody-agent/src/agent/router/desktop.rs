@@ -1,6 +1,8 @@
 use crate::agent::AgentInner;
 use crate::agent::router::AgentRouterInterface;
 use crate::network::{AppliedStatus, EffectiveRoute, EffectiveRoutingList, Network};
+#[cfg(target_os = "linux")]
+use crate::network::EffectiveForwardingList;
 use cfg_if::cfg_if;
 use net_route::{Handle, Route};
 use std::collections::HashMap;
@@ -10,6 +12,13 @@ use tokio::sync::MutexGuard;
 use tracing::{trace, warn};
 use tun_rs::AsyncDevice;
 use url::Url;
+
+#[cfg(target_os = "linux")]
+const NETSODY_IFACE: &str = "netsody";
+#[cfg(target_os = "linux")]
+const NAT_CHAIN: &str = "NETSODY-NAT";
+#[cfg(target_os = "linux")]
+const FORWARD_CHAIN: &str = "NETSODY-FORWARD";
 
 pub struct AgentRouter {
     pub(crate) handle: Arc<Handle>,
@@ -176,62 +185,551 @@ impl AgentRouterInterface for AgentRouter {
                 }
             }
 
-            // forwarding
-            cfg_if! {
-                if #[cfg(target_os = "linux")] {
-                    use sysctl::Sysctl;
+            // Note: Forwarding is applied globally for all networks below, not per-network
+        }
 
-                    match sysctl::Ctl::new("net.ipv4.ip_forward") {
-                        Ok(ctl) => match ctl.value_string() {
-                            Ok(ref s) if s == "1" && network.desired_state.forwarding.applied == Some(true) => {
-                                trace!("IP forwarding is already enabled.");
-                                network.current_state.forwarding = network.desired_state.forwarding.clone();
-                            }
-                            Ok(ref s) if s == "0" && network.desired_state.forwarding.applied == Some(true) => {
-                                trace!("IP forwarding is not enabled. Enabling...");
-                                match ctl.set_value_string("1") {
-                                    Ok(_) => {
-                                        trace!("Enabled IP forwarding");
-                                        network.current_state.forwarding = network.desired_state.forwarding.clone();
-                                    },
+        // Apply global forwarding settings (IP forwarding + gateway rules)
+        // This runs for every network but the operations are idempotent
+        cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                // Check if any network has forwarding destinations
+                let needs_forwarding = networks.values()
+                    .any(|net| net.desired_state.forwardings.applied.as_ref().map_or(false, |list| !list.is_empty()));
+
+                if needs_forwarding {
+                    // Apply IP forwarding via sysctl (global kernel setting)
+                    match apply_ip_forwarding(needs_forwarding) {
+                        Ok(forwarding_enabled) => {
+                            if forwarding_enabled {
+                                // IP forwarding is enabled, now apply gateway rules for all networks
+                                match apply_gateway_rules(networks.values()) {
+                                    Ok(()) => {
+                                        trace!("Successfully applied IP forwarding and gateway rules.");
+                                        // Update current_state for all networks that have forwarding destinations
+                                        for network in networks.values_mut() {
+                                            if let Some(desired_list) = &network.desired_state.forwardings.applied {
+                                                if !desired_list.is_empty() {
+                                                    network.current_state.forwardings = AppliedStatus::applied(desired_list.clone());
+                                                }
+                                            }
+                                        }
+                                    }
                                     Err(e) => {
-                                        warn!("Failed to enable IP forwarding: {}", e);
-                                        network.current_state.forwarding = AppliedStatus::with_error(false, format!("Failed to enable IP forwarding: {}", e));
+                                        warn!("Failed to apply gateway rules: {}", e);
+                                        // Update current_state for all networks that have forwarding destinations
+                                        for network in networks.values_mut() {
+                                            if let Some(desired_list) = &network.desired_state.forwardings.applied {
+                                                if !desired_list.is_empty() {
+                                                    network.current_state.forwardings = AppliedStatus::with_error(
+                                                        EffectiveForwardingList::default(),
+                                                        format!("IP forwarding enabled but gateway rules failed: {}", e)
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Forwarding is disabled for all networks
+                                for network in networks.values_mut() {
+                                    network.current_state.forwardings = AppliedStatus::applied(EffectiveForwardingList::default());
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to apply IP forwarding: {}", e);
+                            for network in networks.values_mut() {
+                                if let Some(desired_list) = &network.desired_state.forwardings.applied {
+                                    if !desired_list.is_empty() {
+                                        network.current_state.forwardings = AppliedStatus::with_error(EffectiveForwardingList::default(), e.clone());
                                     }
                                 }
                             }
-                            Ok(ref s) if s == "0" => {
-                                trace!("IP forwarding is already disabled.");
-                                network.current_state.forwarding = network.desired_state.forwarding.clone();
-                            }
-                            Ok(_) => {
-                                // ip forwarding is enabled, but we dont need it. We keep it enabled, because we can't know if another application needs it. Therefore, we change the desired state to "enabled".
-                                network.current_state.forwarding = AppliedStatus::applied(true);
-                                network.desired_state.forwarding = AppliedStatus::applied(true);
-                            }
-                            Err(e) => {
-                                warn!("Failed to get value for Ctl '{}': {}", "net.ipv4.ip_forward", e);
-                                network.current_state.forwarding = AppliedStatus::with_error(false, format!("Failed to get value for Ctl '{}': {}", "net.ipv4.ip_forward", e));
-                            }
-                        },
-                        Err(e) => {
-                            warn!("Failed to construct Ctl for '{}': {}", "net.ipv4.ip_forward", e);
-                            network.current_state.forwarding = AppliedStatus::with_error(false, format!("Failed to construct Ctl for '{}': {}", "net.ipv4.ip_forward", e));
+                        }
+                    }
+                } else {
+                    // No network needs forwarding, ensure all are marked as empty
+                    for network in networks.values_mut() {
+                        if network.desired_state.forwardings.applied.as_ref().map_or(true, |list| list.is_empty()) {
+                            network.current_state.forwardings = AppliedStatus::applied(EffectiveForwardingList::default());
                         }
                     }
                 }
-                else {
-                    match network.desired_state.forwarding.applied {
-                        Some(true) => {
+            }
+            else {
+                for network in networks.values_mut() {
+                    if let Some(desired_list) = &network.desired_state.forwardings.applied {
+                        if !desired_list.is_empty() {
                             warn!("We're configured as a gateway. Forwarding is not supported on this platform.");
-                            network.current_state.forwarding = AppliedStatus::error("We're configured as a gateway. Forwarding is not supported on this platform.".to_string());
+                            network.current_state.forwardings = AppliedStatus::error("We're configured as a gateway. Forwarding is not supported on this platform.".to_string());
+                        } else {
+                            network.current_state.forwardings = network.desired_state.forwardings.clone();
                         }
-                        _ => {
-                            network.current_state.forwarding = network.desired_state.forwarding.clone();
-                        }
+                    } else {
+                        network.current_state.forwardings = network.desired_state.forwardings.clone();
                     }
                 }
             }
         }
     }
+}
+
+/// Apply IP forwarding setting via sysctl
+///
+/// IP forwarding must be enabled in the kernel to allow routing between network interfaces.
+/// Without this, packets would be dropped by the kernel even if iptables rules allow forwarding.
+/// This is a global kernel setting that applies to all networks.
+///
+/// Returns `Ok(true)` if forwarding is enabled, `Ok(false)` if disabled, `Err(msg)` on failure.
+#[cfg(target_os = "linux")]
+fn apply_ip_forwarding(needs_forwarding: bool) -> Result<bool, String> {
+    use sysctl::Sysctl;
+
+    let ctl = sysctl::Ctl::new("net.ipv4.ip_forward")
+        .map_err(|e| format!("Failed to construct Ctl for 'net.ipv4.ip_forward': {}", e))?;
+
+    let current_value = ctl
+        .value_string()
+        .map_err(|e| format!("Failed to get value for Ctl 'net.ipv4.ip_forward': {}", e))?;
+
+    match (current_value.as_str(), needs_forwarding) {
+        ("1", true) => {
+            trace!("IP forwarding is already enabled as needed.");
+            Ok(true)
+        }
+        ("0", true) => {
+            trace!("At least one network needs forwarding, enabling IP forwarding.");
+            ctl.set_value_string("1")
+                .map_err(|e| format!("Failed to enable IP forwarding: {}", e))?;
+            trace!("Enabled IP forwarding.");
+            Ok(true)
+        }
+        ("0", false) => {
+            trace!("No network needs forwarding, IP forwarding is already disabled.");
+            Ok(false)
+        }
+        ("1", false) => {
+            // IP forwarding is enabled, but we don't need it. We keep it enabled, because we can't know if another application needs it.
+            trace!("IP forwarding already enabled by another application, keeping it enabled.");
+            Ok(true)
+        }
+        _ => Err(format!("Unexpected IP forwarding value: {}", current_value)),
+    }
+}
+
+/// Apply gateway rules via iptables for all networks
+///
+/// Configures MASQUERADE (NAT) and FORWARD rules for gateway functionality.
+/// This allows packets from the netsody interface to be routed to the internet.
+///
+/// Returns `Ok(())` on success, `Err(msg)` on failure.
+#[cfg(target_os = "linux")]
+fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) -> Result<(), String> {
+    use if_addrs::IfAddr;
+    use ipnet::Ipv4Net;
+    use std::collections::{HashMap, HashSet};
+
+    // Collect all destinations from all networks (use HashSet to avoid duplicates)
+    let destinations: HashSet<Ipv4Net> = networks
+        .flat_map(|net| {
+            net.desired_state
+                .forwardings
+                .applied
+                .as_ref()
+                .map(|list| list.iter().copied().collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .collect();
+
+    trace!(
+        "This node needs to forward to following destinations: {:?}.",
+        destinations
+    );
+
+    // Get all network interfaces once to map destinations to physical interfaces
+    let all_interfaces =
+        if_addrs::get_if_addrs().map_err(|e| format!("Failed to get network interfaces: {}", e))?;
+    trace!(
+        "Retrieved {} network interfaces from system to find matching interfaces for destinations.",
+        all_interfaces.len()
+    );
+
+    // Map destinations to their physical interfaces
+    let mut dest_to_iface: HashMap<Ipv4Net, String> = HashMap::new();
+    for dest in destinations.iter() {
+        // Find matching interface for this destination
+        let mut found = false;
+        for interface in &all_interfaces {
+            if let IfAddr::V4(v4_addr) = &interface.addr {
+                // Calculate prefix length from netmask
+                let prefix_len = v4_addr
+                    .netmask
+                    .octets()
+                    .iter()
+                    .map(|octet| octet.count_ones())
+                    .sum::<u32>() as u8;
+
+                // Create IpNet for this interface
+                let iface_net = Ipv4Net::new(v4_addr.ip, prefix_len)
+                    .map_err(|e| format!("Failed to create IpNet: {}", e))?;
+
+                // Check if the target subnet is within or equals this interface's subnet
+                if iface_net.contains(dest) || iface_net == *dest {
+                    trace!(
+                        "Mapping destination '{}' to interface '{}' because subnet {} contains or matches destination.",
+                        dest, interface.name, iface_net
+                    );
+                    dest_to_iface.insert(*dest, interface.name.clone());
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            return Err(format!(
+                "No network interface found for destination '{}'. Cannot configure gateway rules without a matching physical interface.",
+                dest
+            ));
+        }
+    }
+
+    trace!(
+        "Successfully mapped {} destinations to their interfaces.",
+        dest_to_iface.len()
+    );
+
+    let ipt = iptables::new(false).map_err(|e| format!("Failed to initialize iptables: {}", e))?;
+
+    // If no valid destination mappings exist, clean up all chains and exit
+    if dest_to_iface.is_empty() {
+        trace!("No valid destination-to-interface mappings, removing all Netsody iptables rules.");
+
+        // Remove jump rule from POSTROUTING
+        let nat_jump_rule = format!("-j {}", NAT_CHAIN);
+        if ipt
+            .exists("nat", "POSTROUTING", &nat_jump_rule)
+            .map_err(|e| format!("Failed to check NAT rule existence: {}", e))?
+        {
+            ipt.delete("nat", "POSTROUTING", &nat_jump_rule)
+                .map_err(|e| format!("Failed to delete NAT jump rule: {}", e))?;
+            trace!(
+                "No NAT needed without valid destinations, removed POSTROUTING jump to '{}'",
+                NAT_CHAIN
+            );
+        }
+
+        // Remove jump rule from FORWARD
+        let forward_jump_rule = format!("-j {}", FORWARD_CHAIN);
+        if ipt
+            .exists("filter", "FORWARD", &forward_jump_rule)
+            .map_err(|e| format!("Failed to check FORWARD rule existence: {}", e))?
+        {
+            ipt.delete("filter", "FORWARD", &forward_jump_rule)
+                .map_err(|e| format!("Failed to delete FORWARD jump rule: {}", e))?;
+            trace!(
+                "No forwarding needed without valid destinations, removed FORWARD jump to '{}'",
+                FORWARD_CHAIN
+            );
+        }
+
+        // Flush and delete NAT chain
+        if ipt
+            .chain_exists("nat", NAT_CHAIN)
+            .map_err(|e| format!("Failed to check NAT chain existence: {}", e))?
+        {
+            ipt.flush_chain("nat", NAT_CHAIN)
+                .map_err(|e| format!("Failed to flush NAT chain: {}", e))?;
+            ipt.delete_chain("nat", NAT_CHAIN)
+                .map_err(|e| format!("Failed to delete NAT chain: {}", e))?;
+            trace!(
+                "NAT chain '{}' no longer needed, flushed and deleted it",
+                NAT_CHAIN
+            );
+        }
+
+        // Flush and delete FORWARD chain
+        if ipt
+            .chain_exists("filter", FORWARD_CHAIN)
+            .map_err(|e| format!("Failed to check FORWARD chain existence: {}", e))?
+        {
+            ipt.flush_chain("filter", FORWARD_CHAIN)
+                .map_err(|e| format!("Failed to flush FORWARD chain: {}", e))?;
+            ipt.delete_chain("filter", FORWARD_CHAIN)
+                .map_err(|e| format!("Failed to delete FORWARD chain: {}", e))?;
+            trace!(
+                "FORWARD chain '{}' no longer needed, flushed and deleted it",
+                FORWARD_CHAIN
+            );
+        }
+
+        trace!("Cleaned up all Netsody iptables rules.");
+        return Ok(());
+    }
+
+    // We have valid destination-to-interface mappings, so we need NAT and FORWARD chains
+    trace!(
+        "Have {} valid destination mappings, ensuring NAT and FORWARD chains are configured.",
+        dest_to_iface.len()
+    );
+
+    // iptables -t nat -L $CHAIN || iptables -t nat -N $CHAIN
+    if !ipt
+        .chain_exists("nat", NAT_CHAIN)
+        .map_err(|e| format!("Failed to check NAT chain: {}", e))?
+    {
+        ipt.new_chain("nat", NAT_CHAIN)
+            .map_err(|e| format!("Failed to create NAT chain: {}", e))?;
+        trace!(
+            "NAT chain '{}' did not exist, created it to organize MASQUERADE rules.",
+            NAT_CHAIN
+        );
+    } else {
+        trace!(
+            "NAT chain '{}' already exists, skipping creation.",
+            NAT_CHAIN
+        );
+    }
+
+    // iptables -t nat -C POSTROUTING -j $CHAIN || iptables -t nat -A POSTROUTING -j $CHAIN
+    let nat_jump_rule = format!("-j {}", NAT_CHAIN);
+    if !ipt
+        .exists("nat", "POSTROUTING", &nat_jump_rule)
+        .map_err(|e| format!("Failed to check POSTROUTING rule: {}", e))?
+    {
+        ipt.append("nat", "POSTROUTING", &nat_jump_rule)
+            .map_err(|e| format!("Failed to add POSTROUTING rule: {}", e))?;
+        trace!(
+            "POSTROUTING did not jump to '{}', added jump rule to route packets through our NAT chain.",
+            NAT_CHAIN
+        );
+    } else {
+        trace!(
+            "POSTROUTING already jumps to '{}', no action needed.",
+            NAT_CHAIN
+        );
+    }
+
+    // iptables -N $FORWARD_CHAIN
+    if !ipt
+        .chain_exists("filter", FORWARD_CHAIN)
+        .map_err(|e| format!("Failed to check FORWARD chain: {}", e))?
+    {
+        ipt.new_chain("filter", FORWARD_CHAIN)
+            .map_err(|e| format!("Failed to create FORWARD chain: {}", e))?;
+        trace!(
+            "FORWARD chain '{}' did not exist, created it to organize forwarding rules.",
+            FORWARD_CHAIN
+        );
+    } else {
+        trace!(
+            "FORWARD chain '{}' already exists, skipping creation.",
+            FORWARD_CHAIN
+        );
+    }
+
+    // iptables -C FORWARD -j $FORWARD_CHAIN || iptables -A FORWARD -j $FORWARD_CHAIN
+    let forward_jump_rule = format!("-j {}", FORWARD_CHAIN);
+    if !ipt
+        .exists("filter", "FORWARD", &forward_jump_rule)
+        .map_err(|e| format!("Failed to check FORWARD jump rule: {}", e))?
+    {
+        ipt.append("filter", "FORWARD", &forward_jump_rule)
+            .map_err(|e| format!("Failed to add FORWARD jump rule: {}", e))?;
+        trace!(
+            "FORWARD did not jump to '{}', added jump rule to route packets through our forward chain.",
+            FORWARD_CHAIN
+        );
+    } else {
+        trace!(
+            "FORWARD already jumps to '{}', no action needed.",
+            FORWARD_CHAIN
+        );
+    }
+
+    // Collect all valid physical interfaces from the cached mappings
+    let valid_phy_ifaces: HashSet<&str> = dest_to_iface.values().map(|s| s.as_str()).collect();
+    trace!(
+        "Valid interfaces that should have rules: {:?}.",
+        valid_phy_ifaces
+    );
+
+    // Clean up rules for interfaces not in destinations
+    if ipt
+        .chain_exists("nat", NAT_CHAIN)
+        .map_err(|e| format!("Failed to check NAT chain: {}", e))?
+    {
+        let nat_rules = ipt
+            .list("nat", NAT_CHAIN)
+            .map_err(|e| format!("Failed to list NAT rules: {}", e))?;
+        trace!("Checking NAT chain for obsolete rules (interfaces no longer in destinations).");
+        for rule in nat_rules.iter() {
+            // Remove "-A CHAIN_NAME " prefix from the rule string
+            let prefix = format!("-A {} ", NAT_CHAIN);
+            let rule_cleaned = rule.strip_prefix(&prefix).unwrap_or(rule).trim();
+
+            if rule_cleaned.contains("-o") && rule_cleaned.contains("MASQUERADE") {
+                // Extract interface name from rule like "-o eth0 -j MASQUERADE"
+                if let Some(iface) = rule_cleaned
+                    .split_whitespace()
+                    .skip_while(|&s| s != "-o")
+                    .nth(1)
+                {
+                    trace!(
+                        "Found MASQUERADE rule for interface '{}' in NAT chain.",
+                        iface
+                    );
+                    if !valid_phy_ifaces.contains(iface) {
+                        let rule_to_delete = format!("-o {} -j MASQUERADE", iface);
+                        ipt.delete("nat", NAT_CHAIN, &rule_to_delete)
+                            .map_err(|e| format!("Failed to delete NAT rule: {}", e))?;
+                        trace!(
+                            "Interface '{}' not in destinations {:?}, deleted obsolete MASQUERADE rule.",
+                            iface, valid_phy_ifaces
+                        );
+                    } else {
+                        trace!(
+                            "Interface '{}' still in destinations, keeping MASQUERADE rule.",
+                            iface
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if ipt
+        .chain_exists("filter", FORWARD_CHAIN)
+        .map_err(|e| format!("Failed to check FORWARD chain: {}", e))?
+    {
+        let forward_rules = ipt
+            .list("filter", FORWARD_CHAIN)
+            .map_err(|e| format!("Failed to list FORWARD rules: {}", e))?;
+        trace!("Checking FORWARD chain for obsolete rules (interfaces no longer in destinations).");
+        for rule in forward_rules.iter() {
+            // Remove "-A CHAIN_NAME " prefix from the rule string
+            let prefix = format!("-A {} ", FORWARD_CHAIN);
+            let rule_cleaned = rule.strip_prefix(&prefix).unwrap_or(rule).trim();
+
+            // Check for FORWARD rules with physical interfaces
+            if (rule_cleaned.contains("-i") || rule_cleaned.contains("-o"))
+                && (rule_cleaned.contains(NETSODY_IFACE)
+                    || rule_cleaned.contains("RELATED,ESTABLISHED"))
+            {
+                // Extract physical interface from rules and check if rule should be deleted
+                let parts: Vec<&str> = rule_cleaned.split_whitespace().collect();
+                let mut should_delete = false;
+                for (i, &part) in parts.iter().enumerate() {
+                    if (part == "-i" || part == "-o") && i + 1 < parts.len() {
+                        let iface = parts[i + 1];
+                        if iface != NETSODY_IFACE && !valid_phy_ifaces.contains(iface) {
+                            // Found an interface that's not in our destinations - delete this rule
+                            should_delete = true;
+                            ipt.delete("filter", FORWARD_CHAIN, rule_cleaned)
+                                .map_err(|e| format!("Failed to delete FORWARD rule: {}", e))?;
+                            trace!(
+                                "Interface '{}' no longer in destinations, deleted FORWARD rule: {}.",
+                                iface, rule_cleaned
+                            );
+                            break;
+                        }
+                    }
+                }
+
+                if !should_delete {
+                    trace!("FORWARD rule still needed, keeping: {}.", rule_cleaned);
+                }
+            }
+        }
+    }
+
+    // Iterate over unique interfaces to configure rules once per interface (avoid duplicate work)
+    trace!(
+        "Configuring rules for {} unique interfaces.",
+        valid_phy_ifaces.len()
+    );
+
+    // Iterate over each unique interface and configure rules once per interface
+    for phy_iface in valid_phy_ifaces.iter() {
+        // Find which destinations use this interface (for logging)
+        let destinations_for_iface: Vec<Ipv4Net> = dest_to_iface
+            .iter()
+            .filter(|(_, iface)| iface.as_str() == *phy_iface)
+            .map(|(dest, _)| *dest)
+            .collect();
+
+        trace!(
+            "Configuring rules for interface '{}' (used by {} destination(s): {:?}).",
+            phy_iface,
+            destinations_for_iface.len(),
+            destinations_for_iface
+        );
+
+        // iptables -t nat -A $CHAIN -o $PHY_IFACE -j MASQUERADE
+        let masquerade_rule = format!("-o {} -j MASQUERADE", phy_iface);
+        if !ipt
+            .exists("nat", NAT_CHAIN, &masquerade_rule)
+            .map_err(|e| format!("Failed to check MASQUERADE rule: {}", e))?
+        {
+            ipt.append("nat", NAT_CHAIN, &masquerade_rule)
+                .map_err(|e| format!("Failed to add MASQUERADE rule: {}", e))?;
+            trace!(
+                "Interface '{}' requires NAT, added MASQUERADE rule.",
+                phy_iface
+            );
+        } else {
+            trace!(
+                "MASQUERADE rule for '{}' already exists, no action needed.",
+                phy_iface
+            );
+        }
+
+        // iptables -A $FORWARD_CHAIN -i $PHY_IFACE -o $NETSODY_IFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
+        let forward_in_rule = format!(
+            "-i {} -o {} -m state --state RELATED,ESTABLISHED -j ACCEPT",
+            phy_iface, NETSODY_IFACE
+        );
+        if !ipt
+            .exists("filter", FORWARD_CHAIN, &forward_in_rule)
+            .map_err(|e| format!("Failed to check FORWARD in rule: {}", e))?
+        {
+            ipt.append("filter", FORWARD_CHAIN, &forward_in_rule)
+                .map_err(|e| format!("Failed to add FORWARD in rule: {}", e))?;
+            trace!(
+                "Need to forward response packets from '{}' to '{}', added RELATED,ESTABLISHED rule.",
+                phy_iface, NETSODY_IFACE
+            );
+        } else {
+            trace!(
+                "FORWARD rule for responses from '{}' already exists, no action needed.",
+                phy_iface
+            );
+        }
+
+        // iptables -A $FORWARD_CHAIN -i $NETSODY_IFACE -o $PHY_IFACE -j ACCEPT
+        let forward_out_rule = format!("-i {} -o {} -j ACCEPT", NETSODY_IFACE, phy_iface);
+        if !ipt
+            .exists("filter", FORWARD_CHAIN, &forward_out_rule)
+            .map_err(|e| format!("Failed to check FORWARD out rule: {}", e))?
+        {
+            ipt.append("filter", FORWARD_CHAIN, &forward_out_rule)
+                .map_err(|e| format!("Failed to add FORWARD out rule: {}", e))?;
+            trace!(
+                "Need to forward outgoing packets from '{}' to '{}', added ACCEPT rule.",
+                NETSODY_IFACE, phy_iface
+            );
+        } else {
+            trace!(
+                "FORWARD rule for outgoing to '{}' already exists, no action needed.",
+                phy_iface
+            );
+        }
+    }
+
+    trace!(
+        "Configured NAT chain '{}', FORWARD chain '{}', netsody iface '{}'.",
+        NAT_CHAIN, FORWARD_CHAIN, NETSODY_IFACE
+    );
+
+    Ok(())
 }

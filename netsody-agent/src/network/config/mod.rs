@@ -244,16 +244,21 @@ impl NetworkConfig {
         Ok(EffectiveRoutingList(physical_route))
     }
 
-    /// Returns true if at least one route exists with the given node as gateway
+    /// Returns the list of destinations that this node should forward as a gateway
     ///
     /// # Arguments
     /// * `my_pk` - The public key of the node to check
     ///
     /// # Returns
-    /// * `true` if the node is configured as a gateway for at least one route
-    /// * `false` if the node is not a gateway for any route
-    pub(crate) fn is_gateway(&self, my_pk: &PubKey) -> bool {
-        self.routes.values().any(|route| route.gw == *my_pk)
+    /// * `EffectiveForwardingList` containing all destinations where this node is the gateway
+    pub(crate) fn effective_forwarding_list(&self, my_pk: &PubKey) -> EffectiveForwardingList {
+        let mut destinations = EffectiveForwardingList::default();
+        for route in self.routes.values() {
+            if route.gw == *my_pk {
+                destinations.add(route.dest);
+            }
+        }
+        destinations
     }
 }
 
@@ -698,6 +703,27 @@ impl Display for EffectiveRoutingList {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct EffectiveForwardingList(pub HashSet<Ipv4Net>);
+
+impl EffectiveForwardingList {
+    pub(crate) fn iter(&self) -> std::collections::hash_set::Iter<'_, Ipv4Net> {
+        self.0.iter()
+    }
+
+    pub(crate) fn contains(&self, dest: &Ipv4Net) -> bool {
+        self.0.contains(dest)
+    }
+
+    pub(crate) fn add(&mut self, dest: Ipv4Net) {
+        self.0.insert(dest);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -1412,7 +1438,7 @@ groups = ["a"]
     }
 
     #[test]
-    fn test_is_gateway_returns_true_when_node_is_gateway() {
+    fn test_effective_forwarding_list_returns_destinations_when_node_is_gateway() {
         let toml_str = r#"
             network = "192.168.1.0/24"
             name = "Test Network"
@@ -1437,15 +1463,20 @@ groups = ["a"]
             PubKey::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .unwrap();
 
-        // Test that is_gateway returns true when my_pk is a gateway
+        // Test that effective_forwarding_list returns destinations when my_pk is a gateway
+        let forwarding_list = config.effective_forwarding_list(&my_pk);
         assert!(
-            config.is_gateway(&my_pk),
-            "is_gateway should return true when node is a gateway"
+            !forwarding_list.is_empty(),
+            "effective_forwarding_list should return destinations when node is a gateway"
+        );
+        assert!(
+            forwarding_list.contains(&"10.0.0.0/8".parse().unwrap()),
+            "forwarding list should contain 10.0.0.0/8"
         );
     }
 
     #[test]
-    fn test_is_gateway_returns_false_when_node_is_not_gateway() {
+    fn test_effective_forwarding_list_returns_empty_when_node_is_not_gateway() {
         let toml_str = r#"
             network = "192.168.1.0/24"
             name = "Test Network"
@@ -1470,10 +1501,11 @@ groups = ["a"]
             PubKey::from_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .unwrap();
 
-        // Test that is_gateway returns false when my_pk is not a gateway
+        // Test that effective_forwarding_list returns empty when my_pk is not a gateway
+        let forwarding_list = config.effective_forwarding_list(&my_pk);
         assert!(
-            !config.is_gateway(&my_pk),
-            "is_gateway should return false when node is not a gateway"
+            forwarding_list.is_empty(),
+            "effective_forwarding_list should return empty when node is not a gateway"
         );
     }
 }

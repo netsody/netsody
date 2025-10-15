@@ -71,7 +71,7 @@ pub struct AgentState {
     pub ip: AppliedStatus<Ipv4Net>,
     pub(crate) access_rules: AppliedStatus<EffectiveAccessRuleList>,
     pub(crate) routes: AppliedStatus<EffectiveRoutingList>,
-    pub(crate) forwarding: AppliedStatus<bool>,
+    pub(crate) forwardings: AppliedStatus<EffectiveForwardingList>,
     #[cfg(feature = "dns")]
     pub(crate) hostnames: AppliedStatus<HostnameList>,
 }

@@ -3348,6 +3348,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "iptables"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f30c9a636a0a728c67d1d420471c99b215708a17c222bb9afb16d0821e2d80d8"
+dependencies = [
+ "lazy_static",
+ "regex",
+]
+
+[[package]]
 name = "iroh"
 version = "0.34.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4298,8 +4308,10 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "if-addrs",
  "ipnet",
  "ipnet-trie",
+ "iptables",
  "libc",
  "net-route",
  "netsody-p2p",

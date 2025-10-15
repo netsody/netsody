@@ -26,6 +26,7 @@ arc-swap = "1.7.1"
 futures = "0.3.31"
 prometheus = { version = "0.14.0", default-features = false }
 url = { version = "2.5.7" }
+if-addrs = "0.14.0"
 
 [profile.release]
 opt-level = 3

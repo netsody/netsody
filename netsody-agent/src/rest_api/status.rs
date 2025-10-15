@@ -1,7 +1,7 @@
 use crate::agent::Agent;
 use crate::network::{
-    AgentState, AgentStateStatus, AppliedStatus, EffectiveAccessRuleList, EffectiveRoutingList,
-    Network,
+    AgentState, AgentStateStatus, AppliedStatus, EffectiveAccessRuleList, EffectiveForwardingList,
+    EffectiveRoutingList, Network,
 };
 use crate::rest_api::RestApiClient;
 use crate::rest_api::auth::AuthToken;
@@ -12,6 +12,7 @@ use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Local, Utc};
 use humantime::format_duration;
+use ipnet::Ipv4Net;
 use p2p::identity::PubKey;
 use p2p::message::ShortId;
 use p2p::node::{HELLO_TIMEOUT_DEFAULT, NodeOpts};
@@ -676,12 +677,48 @@ impl fmt::Display for NetworkStatus {
         }
 
         // forwarding
-        if self.current_state.forwarding == self.desired_state.forwarding {
-            writeln!(f, "Forwarding: {}", self.current_state.forwarding)?;
+        let write_forwardings = |f: &mut std::fmt::Formatter,
+                                 status: &AppliedStatus<EffectiveForwardingList>,
+                                 indent: &str|
+         -> Result<(), std::fmt::Error> {
+            match &status.applied {
+                Some(forwardings) if !forwardings.is_empty() => {
+                    let mut entries: Vec<&Ipv4Net> = forwardings.iter().collect();
+                    entries.sort();
+                    for dest in entries {
+                        writeln!(f, "{}{}", indent, dest)?;
+                    }
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{}Error: {}", indent, error)?;
+                    }
+                }
+                Some(_) => {
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{}Empty (Error: {})", indent, error)?;
+                    } else {
+                        writeln!(f, "{}Empty", indent)?;
+                    }
+                }
+                _ => {
+                    if let Some(error) = &status.error {
+                        writeln!(f, "{}None (Error: {})", indent, error)?;
+                    } else {
+                        writeln!(f, "{}None", indent)?;
+                    }
+                }
+            }
+            Ok(())
+        };
+
+        if self.current_state.forwardings == self.desired_state.forwardings {
+            writeln!(f, "Forwardings:")?;
+            write_forwardings(f, &self.current_state.forwardings, "  ")?;
         } else {
-            writeln!(f, "Forwarding:")?;
-            writeln!(f, "  Current: {}", self.current_state.forwarding)?;
-            writeln!(f, "  Desired: {}", self.desired_state.forwarding)?;
+            writeln!(f, "Forwardings:")?;
+            writeln!(f, "  Current:")?;
+            write_forwardings(f, &self.current_state.forwardings, "    ")?;
+            writeln!(f, "  Desired:")?;
+            write_forwardings(f, &self.desired_state.forwardings, "    ")?;
         }
 
         #[cfg(all(
