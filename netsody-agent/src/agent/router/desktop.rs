@@ -1,8 +1,8 @@
 use crate::agent::AgentInner;
 use crate::agent::router::AgentRouterInterface;
-use crate::network::{AppliedStatus, EffectiveRoute, EffectiveRoutingList, Network};
 #[cfg(target_os = "linux")]
 use crate::network::EffectiveForwardingList;
+use crate::network::{AppliedStatus, EffectiveRoute, EffectiveRoutingList, Network};
 use cfg_if::cfg_if;
 use net_route::{Handle, Route};
 use std::collections::HashMap;
@@ -184,15 +184,12 @@ impl AgentRouterInterface for AgentRouter {
                     network.current_state.routes = network.desired_state.routes.clone();
                 }
             }
-
-            // Note: Forwarding is applied globally for all networks below, not per-network
         }
 
-        // Apply global forwarding settings (IP forwarding + gateway rules)
-        // This runs for every network but the operations are idempotent
+        // IP forwarding is a system-level setting, so we need to set up forwarding for all networks at the same time
         cfg_if! {
             if #[cfg(target_os = "linux")] {
-                // Check if any network has forwarding destinations
+                // Check if any network requires us to do forwarding
                 let needs_forwarding = networks.values()
                     .any(|net| net.desired_state.forwardings.applied.as_ref().map_or(false, |list| !list.is_empty()));
 
@@ -201,10 +198,10 @@ impl AgentRouterInterface for AgentRouter {
                     match apply_ip_forwarding(needs_forwarding) {
                         Ok(forwarding_enabled) => {
                             if forwarding_enabled {
-                                // IP forwarding is enabled, now apply gateway rules for all networks
-                                match apply_gateway_rules(networks.values()).await {
+                                // IP forwarding is enabled, now apply forwarding filter rules
+                                match apply_forwarding_filter_rules(&networks).await {
                                     Ok(()) => {
-                                        trace!("Successfully applied IP forwarding and gateway rules.");
+                                        trace!("Successfully applied IP forwarding and forwarding filter rules.");
                                         // Update current_state for all networks that have forwarding destinations
                                         for network in networks.values_mut() {
                                             if let Some(desired_list) = &network.desired_state.forwardings.applied {
@@ -215,14 +212,14 @@ impl AgentRouterInterface for AgentRouter {
                                         }
                                     }
                                     Err(e) => {
-                                        warn!("Failed to apply gateway rules: {}", e);
+                                        warn!("Failed to apply forwarding filter rules: {}", e);
                                         // Update current_state for all networks that have forwarding destinations
                                         for network in networks.values_mut() {
                                             if let Some(desired_list) = &network.desired_state.forwardings.applied {
                                                 if !desired_list.is_empty() {
                                                     network.current_state.forwardings = AppliedStatus::with_error(
                                                         EffectiveForwardingList::default(),
-                                                        format!("IP forwarding enabled but gateway rules failed: {}", e)
+                                                        format!("IP forwarding enabled but forwarding filter rules failed: {}", e)
                                                     );
                                                 }
                                             }
@@ -309,28 +306,33 @@ fn apply_ip_forwarding(needs_forwarding: bool) -> Result<bool, String> {
             Ok(false)
         }
         ("1", false) => {
-            // IP forwarding is enabled, but we don't need it. We keep it enabled, because we can't know if another application needs it.
-            trace!("IP forwarding already enabled by another application, keeping it enabled.");
+            trace!("IP forwarding is enabled, but we don't need it. We keep it enabled, because we can't know if another application needs it.");
             Ok(true)
         }
         _ => Err(format!("Unexpected IP forwarding value: {}", current_value)),
     }
 }
 
-/// Apply gateway rules via iptables for all networks
+/// Apply forwarding filter rules via iptables for all networks
 ///
-/// Configures MASQUERADE (NAT) and FORWARD rules for gateway functionality.
-/// This allows packets from the netsody interface to be routed to the internet.
+/// Configures MASQUERADE (NAT) and FORWARD filter rules to enable gateway functionality.
+/// MASQUERADE rules rewrite source addresses for outgoing packets, while FORWARD rules
+/// allow packets to flow between the netsody interface and physical interfaces.
+///
+/// Note: FORWARD rules are only strictly necessary if the default FORWARD policy is DROP/REJECT.
+/// If the default policy is ACCEPT, packets would be forwarded anyway. However, we explicitly
+/// create these rules to ensure forwarding works regardless of the system's default policy.
 ///
 /// Returns `Ok(())` on success, `Err(msg)` on failure.
 #[cfg(target_os = "linux")]
-async fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) -> Result<(), String> {
+async fn apply_forwarding_filter_rules(networks: &HashMap<Url, Network>) -> Result<(), String> {
     use ipnet::Ipv4Net;
     use net_route::Handle;
     use std::collections::{HashMap, HashSet};
 
     // Collect all destinations from all networks (use HashSet to avoid duplicates)
     let destinations: HashSet<Ipv4Net> = networks
+        .values()
         .flat_map(|net| {
             net.desired_state
                 .forwardings
@@ -347,14 +349,17 @@ async fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) ->
     );
 
     // Get routing table to determine which interface to use for each destination
-    let route_handle = Handle::new()
-        .map_err(|e| format!("Failed to create route handle: {}", e))?;
+    let route_handle =
+        Handle::new().map_err(|e| format!("Failed to create route handle: {}", e))?;
     let routes = route_handle
         .list()
         .await
         .map_err(|e| format!("Failed to list routes: {}", e))?;
-    
-    trace!("Retrieved {} routes from system routing table.", routes.len());
+
+    trace!(
+        "Retrieved {} routes from system routing table.",
+        routes.len()
+    );
 
     // Map destinations to their physical interfaces using routing table
     let mut dest_to_iface: HashMap<Ipv4Net, String> = HashMap::new();
@@ -362,10 +367,31 @@ async fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) ->
         // Find the best matching route for this destination
         let mut best_route: Option<&net_route::Route> = None;
         let mut best_prefix_len: u8 = 0;
-        
+
         for route in &routes {
-            // Only consider IPv4 routes
-            if let IpAddr::V4(route_dest) = route.destination {
+            // Only consider IPv4 routes with an ifindex
+            if let (IpAddr::V4(route_dest), Some(ifindex)) = (route.destination, route.ifindex) {
+                // Convert ifindex to interface name first to check if it's netsody
+                let mut buf = [0u8; libc::IF_NAMESIZE];
+                let result =
+                    unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char) };
+
+                if result.is_null() {
+                    continue; // Skip routes with invalid ifindex
+                }
+
+                let ifname = unsafe {
+                    match std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str() {
+                        Ok(name) => name,
+                        Err(_) => continue, // Skip routes with invalid interface names
+                    }
+                };
+
+                // Skip routes that go through the netsody interface itself
+                if ifname == NETSODY_IFACE {
+                    continue;
+                }
+
                 let route_prefix = route.prefix;
                 // Create network for this route
                 if let Ok(route_net) = Ipv4Net::new(route_dest, route_prefix) {
@@ -380,29 +406,22 @@ async fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) ->
                 }
             }
         }
-        
+
         if let Some(route) = best_route {
             if let Some(ifindex) = route.ifindex {
-                // Convert ifindex to interface name using libc
+                // Convert ifindex to interface name again (we already validated it above)
                 let mut buf = [0u8; libc::IF_NAMESIZE];
-                let result = unsafe {
-                    libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char)
-                };
-                
-                if result.is_null() {
-                    return Err(format!(
-                        "Route for destination '{}' has ifindex {} but if_indextoname failed. Cannot configure gateway rules.",
-                        dest, ifindex
-                    ));
-                }
-                
+                unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char) };
+
                 let ifname = unsafe {
                     std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char)
                         .to_str()
-                        .map_err(|e| format!("Invalid interface name for ifindex {}: {}", ifindex, e))?
+                        .map_err(|e| {
+                            format!("Invalid interface name for ifindex {}: {}", ifindex, e)
+                        })?
                         .to_string()
                 };
-                
+
                 trace!(
                     "Mapping destination '{}' to interface '{}' via routing table (prefix: /{}).",
                     dest, ifname, best_prefix_len
@@ -416,7 +435,7 @@ async fn apply_gateway_rules<'a>(networks: impl Iterator<Item = &'a Network>) ->
             }
         } else {
             return Err(format!(
-                "No route found for destination '{}'. Cannot configure gateway rules without a matching route.",
+                "No route found for destination '{}' (ignoring routes via netsody interface). Cannot configure gateway rules without a matching physical route.",
                 dest
             ));
         }
