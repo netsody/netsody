@@ -714,10 +714,6 @@ impl EffectiveForwardingList {
         self.0.iter()
     }
 
-    pub(crate) fn contains(&self, dest: &Ipv4Net) -> bool {
-        self.0.contains(dest)
-    }
-
     pub(crate) fn add(&mut self, dest: Ipv4Net) {
         self.0.insert(dest);
     }

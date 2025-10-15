@@ -306,7 +306,9 @@ fn apply_ip_forwarding(needs_forwarding: bool) -> Result<bool, String> {
             Ok(false)
         }
         ("1", false) => {
-            trace!("IP forwarding is enabled, but we don't need it. We keep it enabled, because we can't know if another application needs it.");
+            trace!(
+                "IP forwarding is enabled, but we don't need it. We keep it enabled, because we can't know if another application needs it."
+            );
             Ok(true)
         }
         _ => Err(format!("Unexpected IP forwarding value: {}", current_value)),
@@ -327,10 +329,12 @@ fn apply_ip_forwarding(needs_forwarding: bool) -> Result<bool, String> {
 #[cfg(target_os = "linux")]
 async fn apply_forwarding_filter_rules(networks: &HashMap<Url, Network>) -> Result<(), String> {
     use ipnet::Ipv4Net;
-    use net_route::Handle;
+    use libc::{IF_NAMESIZE, c_char, if_indextoname};
+    use net_route::Handle as RouteHandle;
     use std::collections::{HashMap, HashSet};
+    use std::ffi::CStr;
 
-    // Collect all destinations from all networks (use HashSet to avoid duplicates)
+    // Collect all destinations from all networks
     let destinations: HashSet<Ipv4Net> = networks
         .values()
         .flat_map(|net| {
@@ -350,7 +354,7 @@ async fn apply_forwarding_filter_rules(networks: &HashMap<Url, Network>) -> Resu
 
     // Get routing table to determine which interface to use for each destination
     let route_handle =
-        Handle::new().map_err(|e| format!("Failed to create route handle: {}", e))?;
+        RouteHandle::new().map_err(|e| format!("Failed to create route handle: {}", e))?;
     let routes = route_handle
         .list()
         .await
@@ -361,33 +365,30 @@ async fn apply_forwarding_filter_rules(networks: &HashMap<Url, Network>) -> Resu
         routes.len()
     );
 
-    // Map destinations to their physical interfaces using routing table
     let mut dest_to_iface: HashMap<Ipv4Net, String> = HashMap::new();
     for dest in destinations.iter() {
-        // Find the best matching route for this destination
-        let mut best_route: Option<&net_route::Route> = None;
-        let mut best_prefix_len: u8 = 0;
+        // Find the best matching route for this destination (store interface name and prefix length)
+        let mut best_match: Option<(String, u8)> = None; // (interface_name, prefix_len)
 
         for route in &routes {
             // Only consider IPv4 routes with an ifindex
             if let (IpAddr::V4(route_dest), Some(ifindex)) = (route.destination, route.ifindex) {
-                // Convert ifindex to interface name first to check if it's netsody
-                let mut buf = [0u8; libc::IF_NAMESIZE];
-                let result =
-                    unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char) };
+                // Convert ifindex to interface name
+                let mut buf = [0u8; IF_NAMESIZE];
+                let result = unsafe { if_indextoname(ifindex, buf.as_mut_ptr() as *mut c_char) };
 
                 if result.is_null() {
                     continue; // Skip routes with invalid ifindex
                 }
 
                 let ifname = unsafe {
-                    match std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_str() {
-                        Ok(name) => name,
+                    match CStr::from_ptr(buf.as_ptr() as *const c_char).to_str() {
+                        Ok(name) => name.to_string(),
                         Err(_) => continue, // Skip routes with invalid interface names
                     }
                 };
 
-                // Skip routes that go through the netsody interface itself
+                // Skip routes that go through the Netsody interface itself
                 if ifname == NETSODY_IFACE {
                     continue;
                 }
@@ -396,43 +397,25 @@ async fn apply_forwarding_filter_rules(networks: &HashMap<Url, Network>) -> Resu
                 // Create network for this route
                 if let Ok(route_net) = Ipv4Net::new(route_dest, route_prefix) {
                     // Check if this route matches our destination (destination is within route's network)
-                    if route_net.contains(dest) || route_net == *dest {
+                    if route_net.contains(dest) {
                         // Use the most specific route (longest prefix match)
-                        if route_prefix > best_prefix_len {
-                            best_route = Some(route);
-                            best_prefix_len = route_prefix;
+                        if best_match
+                            .as_ref()
+                            .map_or(true, |(_, prefix)| route_prefix > *prefix)
+                        {
+                            best_match = Some((ifname, route_prefix));
                         }
                     }
                 }
             }
         }
 
-        if let Some(route) = best_route {
-            if let Some(ifindex) = route.ifindex {
-                // Convert ifindex to interface name again (we already validated it above)
-                let mut buf = [0u8; libc::IF_NAMESIZE];
-                unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr() as *mut libc::c_char) };
-
-                let ifname = unsafe {
-                    std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char)
-                        .to_str()
-                        .map_err(|e| {
-                            format!("Invalid interface name for ifindex {}: {}", ifindex, e)
-                        })?
-                        .to_string()
-                };
-
-                trace!(
-                    "Mapping destination '{}' to interface '{}' via routing table (prefix: /{}).",
-                    dest, ifname, best_prefix_len
-                );
-                dest_to_iface.insert(*dest, ifname);
-            } else {
-                return Err(format!(
-                    "Route for destination '{}' has no interface index. Cannot configure gateway rules.",
-                    dest
-                ));
-            }
+        if let Some((ifname, prefix_len)) = best_match {
+            trace!(
+                "Mapping destination '{}' to interface '{}' via routing table (prefix: /{}).",
+                dest, ifname, prefix_len
+            );
+            dest_to_iface.insert(*dest, ifname);
         } else {
             return Err(format!(
                 "No route found for destination '{}' (ignoring routes via netsody interface). Cannot configure gateway rules without a matching physical route.",
