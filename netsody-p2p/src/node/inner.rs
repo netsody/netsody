@@ -584,7 +584,14 @@ impl NodeInner {
         };
 
         // update peer information
-        node_peer.ack_rx(time, src, hello_time, udp_socket, relay_peer);
+        node_peer.ack_rx(
+            time,
+            src,
+            hello_time,
+            udp_socket,
+            relay_peer,
+            self.opts.hello_timeout,
+        );
 
         Ok(())
     }

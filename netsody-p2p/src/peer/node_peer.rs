@@ -199,6 +199,7 @@ impl NodePeer {
     /// * `hello_time` - Timestamp of the original HELLO message
     /// * `udp_socket` - UDP socket that received the ACK
     /// * `relay_peer` - PubKey of the relay peer if this ACK was received via a relay path (TCP or UDP), None for direct ACKs
+    /// * `hello_timeout` - Timeout period in seconds
     pub(crate) fn ack_rx(
         &self,
         time: u64,
@@ -206,6 +207,7 @@ impl NodePeer {
         hello_time: u64,
         udp_socket: Option<Arc<UdpSocket>>,
         relay_peer: Option<PubKey>,
+        hello_timeout: u64,
     ) {
         if let Some(relay_peer) = relay_peer {
             // Relayed ACK - we know exactly which super peer sent this ACK (TCP or UDP)
@@ -220,7 +222,7 @@ impl NodePeer {
             let key = Into::<PeerPathKey>::into((udp_socket.local_addr().unwrap(), src));
             if let Some(path) = self.paths.pin().get(&key) {
                 path.ack_rx(time, src, hello_time);
-                self.update_best_path();
+                self.update_best_path(time, hello_timeout);
                 // TODO: udate the send handle here as well, to make directly use of the updated best path
             }
         } else {
@@ -233,26 +235,39 @@ impl NodePeer {
     ///
     /// This method finds the path with the lowest median latency and updates
     /// the internal best path pointer accordingly. Hysteresis is applied to
-    /// prevent frequent path switching.
-    fn update_best_path(&self) {
+    /// prevent frequent path switching. Paths are only considered if they have
+    /// latency data and are reachable.
+    ///
+    /// # Arguments
+    /// * `time` - Current timestamp in microseconds
+    /// * `hello_timeout` - Timeout period in seconds
+    fn update_best_path(&self, time: u64, hello_timeout: u64) {
         // Get current best path information
         let current_best_key = self.best_path_key();
-        let (current_key, current_latency) = if let Some(key) = current_best_key {
+        let (current_key, current_latency, current_reachable) = if let Some(key) = current_best_key
+        {
             let paths_guard = self.paths.guard();
-            let current_latency = self
-                .paths
-                .get(key, &paths_guard)
-                .and_then(super::path::PeerPath::median_lat);
-            (Some(key), current_latency)
+            if let Some(current_path) = self.paths.get(key, &paths_guard) {
+                let current_latency = current_path.median_lat();
+                let current_reachable = current_path.is_reachable(time, hello_timeout);
+                (Some(key), current_latency, current_reachable)
+            } else {
+                (None, None, false)
+            }
         } else {
-            (None, None)
+            (None, None, false)
         };
 
         // Find the best available path using original selection logic
+        // Only consider paths that are reachable and have latency data
         let paths_pin = self.paths.pin();
         let best_candidate = paths_pin
             .iter()
             .filter_map(|(key, path)| {
+                // Only consider paths that are reachable
+                if !path.is_reachable(time, hello_timeout) {
+                    return None;
+                }
                 let latency = path.median_lat()?; // Only consider paths with latency data
                 Some((key, latency))
             })
@@ -286,26 +301,38 @@ impl NodePeer {
 
             // Both current path and candidate exist -> apply hysteresis
             (Some(current_lat), Some((candidate_key, candidate_latency))) => {
-                let threshold =
-                    (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
-                if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
-                    // Candidate is significantly better
+                // If current path is unreachable, always switch to reachable candidate
+                if !current_reachable {
                     trace!(
-                        "Node peer path changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        "Node peer path changed: current path unreachable, switching to reachable candidate (current: {:.1}ms, candidate: {:.1}ms)",
                         current_lat as f64 / 1_000.0,
-                        candidate_latency as f64 / 1_000.0,
-                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                        candidate_latency as f64 / 1_000.0
                     );
                     Some(candidate_key)
                 } else {
-                    // Candidate is not significantly better, keep current
-                    trace!(
-                        "Node peer path unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
-                        current_lat as f64 / 1_000.0,
-                        candidate_latency as f64 / 1_000.0,
-                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
-                    );
-                    current_key
+                    let threshold =
+                        (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
+                    if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
+                        // Candidate is significantly better
+                        trace!(
+                            "Node peer path changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                            current_lat as f64 / 1_000.0,
+                            candidate_latency as f64 / 1_000.0,
+                            threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64
+                                / 1_000.0
+                        );
+                        Some(candidate_key)
+                    } else {
+                        // Candidate is not significantly better, keep current
+                        trace!(
+                            "Node peer path unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                            current_lat as f64 / 1_000.0,
+                            candidate_latency as f64 / 1_000.0,
+                            threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64
+                                / 1_000.0
+                        );
+                        current_key
+                    }
                 }
             }
         };
@@ -332,10 +359,14 @@ impl NodePeer {
         // Get current best relay information
         let current_best_sp = self.best_sp();
         let relay_paths_guard = self.relay_paths.guard();
-        let current_latency = self
-            .relay_paths
-            .get(current_best_sp, &relay_paths_guard)
-            .and_then(super::path::PeerPath::median_lat);
+        let (current_latency, current_reachable) =
+            if let Some(current_path) = self.relay_paths.get(current_best_sp, &relay_paths_guard) {
+                let current_latency = current_path.median_lat();
+                let current_reachable = current_path.is_reachable(time, hello_timeout);
+                (current_latency, current_reachable)
+            } else {
+                (None, false)
+            };
 
         // Find the best available relay using original selection logic
         let relay_paths_pin = self.relay_paths.pin();
@@ -378,26 +409,38 @@ impl NodePeer {
 
             // Both current relay and candidate exist -> apply hysteresis
             (Some(current_lat), Some((candidate_key, candidate_latency))) => {
-                let threshold =
-                    (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
-                if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
-                    // Candidate is significantly better
+                // If current relay is unreachable, always switch to reachable candidate
+                if !current_reachable {
                     trace!(
-                        "Node peer relay changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                        "Node peer relay changed: current relay unreachable, switching to reachable candidate (current: {:.1}ms, candidate: {:.1}ms)",
                         current_lat as f64 / 1_000.0,
-                        candidate_latency as f64 / 1_000.0,
-                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
+                        candidate_latency as f64 / 1_000.0
                     );
                     candidate_key
                 } else {
-                    // Candidate is not significantly better, keep current
-                    trace!(
-                        "Node peer relay unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
-                        current_lat as f64 / 1_000.0,
-                        candidate_latency as f64 / 1_000.0,
-                        threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64 / 1_000.0
-                    );
-                    current_best_sp
+                    let threshold =
+                        (current_lat as f64 * PATH_LAT_HYSTERESIS_IMPROVEMENT_FACTOR) as u64;
+                    if candidate_latency < threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) {
+                        // Candidate is significantly better
+                        trace!(
+                            "Node peer relay changed: candidate significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                            current_lat as f64 / 1_000.0,
+                            candidate_latency as f64 / 1_000.0,
+                            threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64
+                                / 1_000.0
+                        );
+                        candidate_key
+                    } else {
+                        // Candidate is not significantly better, keep current
+                        trace!(
+                            "Node peer relay unchanged: candidate not significantly better (current: {:.1}ms, candidate: {:.1}ms, threshold: {:.1}ms)",
+                            current_lat as f64 / 1_000.0,
+                            candidate_latency as f64 / 1_000.0,
+                            threshold.saturating_sub(PATH_LAT_HYSTERESIS_MIN_DELTA) as f64
+                                / 1_000.0
+                        );
+                        current_best_sp
+                    }
                 }
             }
         };
@@ -440,7 +483,7 @@ impl NodePeer {
             },
             &guard,
         );
-        self.update_best_path();
+        self.update_best_path(time, hello_timeout);
     }
 
     /// Clear all paths to this peer.
@@ -448,7 +491,7 @@ impl NodePeer {
         trace!("Clear paths");
         let guard = self.paths.guard();
         self.paths.clear(&guard);
-        self.update_best_path();
+        self.update_best_path(0, 0);
     }
 
     /// Clear application traffic counters.
