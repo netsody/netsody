@@ -1466,7 +1466,7 @@ groups = ["a"]
             "effective_forwarding_list should return destinations when node is a gateway"
         );
         assert!(
-            forwarding_list.contains(&"10.0.0.0/8".parse().unwrap()),
+            forwarding_list.0.contains(&"10.0.0.0/8".parse().unwrap()),
             "forwarding list should contain 10.0.0.0/8"
         );
     }
