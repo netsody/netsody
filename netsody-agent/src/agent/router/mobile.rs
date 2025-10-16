@@ -31,16 +31,17 @@ impl AgentRouterInterface for AgentRouter {
             network.current_state.routes = network.desired_state.routes.clone();
 
             // forwarding
-            match network.desired_state.forwarding.applied {
-                Some(true) => {
+            if let Some(desired_list) = &network.desired_state.forwardings.applied {
+                if !desired_list.is_empty() {
                     warn!(
                         "We're configured as a gateway. Forwarding is not supported on this platform."
                     );
-                    network.current_state.forwarding = AppliedStatus::error("We're configured as a gateway. Forwarding is not supported on this platform.".to_string());
+                    network.current_state.forwardings = AppliedStatus::error("We're configured as a gateway. Forwarding is not supported on this platform.".to_string());
+                } else {
+                    network.current_state.forwardings = network.desired_state.forwardings.clone();
                 }
-                _ => {
-                    network.current_state.forwarding = network.desired_state.forwarding.clone();
-                }
+            } else {
+                network.current_state.forwardings = network.desired_state.forwardings.clone();
             }
         }
     }

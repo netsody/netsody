@@ -122,7 +122,8 @@ impl AgentInner {
                                     .expect("Failed to get effective routing list");
                                 #[cfg(feature = "dns")]
                                 let desired_hostnames = config.hostnames(&inner.id.pk);
-                                let desired_forwarding = config.is_gateway(&inner.id.pk);
+                                let desired_effective_forwarding_list =
+                                    config.effective_forwarding_list(&inner.id.pk);
                                 AgentState {
                                     ip: AppliedStatus::applied(
                                         Ipv4Net::new(desired_ip, config.subnet.prefix_len())
@@ -134,7 +135,9 @@ impl AgentInner {
                                     routes: AppliedStatus::applied(desired_effective_routing_list),
                                     #[cfg(feature = "dns")]
                                     hostnames: AppliedStatus::applied(desired_hostnames),
-                                    forwarding: AppliedStatus::applied(desired_forwarding),
+                                    forwardings: AppliedStatus::applied(
+                                        desired_effective_forwarding_list,
+                                    ),
                                 }
                             }
                             None => {
