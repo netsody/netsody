@@ -1,6 +1,6 @@
 use crate::agent::netif::AgentNetifInterface;
 use crate::agent::{AgentConfig, AgentInner, ChannelSink, Error, is_netsody_control_packet};
-use etherparse::Ipv4HeaderSlice;
+use etherparse::{Icmpv4Type, Ipv4HeaderSlice, PacketBuilder};
 use flume::Receiver;
 use ipnet::IpNet;
 use p2p::identity::PubKey;
@@ -162,6 +162,44 @@ impl AgentInner {
                                                 );
                                             }
 
+                                            // Check for packets that exceed MTU with Don't Fragment flag set
+                                            // Don't Fragment flag is bit 1 in the flags field (0x4000 in the fragment_offset field)
+                                            let mtu = inner_clone.mtu as usize;
+                                            if buf.len() > mtu && ip_hdr.dont_fragment() {
+                                                trace!(
+                                                    peer=?sender_key,
+                                                    src=?ip_hdr.source_addr(),
+                                                    dst=?ip_hdr.destination_addr(),
+                                                    packet_size=?buf.len(),
+                                                    mtu=?mtu,
+                                                    "Packet size {} bytes exceeds MTU {} bytes with Don't Fragment flag set, sending ICMP Fragmentation Needed",
+                                                    buf.len(),
+                                                    mtu
+                                                );
+
+                                                // Create and send ICMP Fragmentation Needed response
+                                                let icmp_response = create_icmp_fragmentation_needed(&buf, &ip_hdr, inner_clone.mtu);
+
+                                                // Send ICMP response back through Netsody
+                                                if let Ok(send_handle) = inner_clone.node.send_handle(&sender_key) {
+                                                    if let Err(e) = send_handle.send(&icmp_response).await {
+                                                        warn!(
+                                                            peer=?sender_key,
+                                                            error=?e,
+                                                            "Failed to send ICMP Fragmentation Needed response to peer: {}", e
+                                                        );
+                                                    } else {
+                                                        trace!(
+                                                            peer=?sender_key,
+                                                            "Successfully sent ICMP Fragmentation Needed response to peer"
+                                                        );
+                                                    }
+                                                }
+
+                                                // Drop the original packet
+                                                continue;
+                                            }
+
                                             // filter Netsody control plane messages
                                             if is_netsody_control_packet(&buf) {
                                                 trace!(
@@ -311,4 +349,39 @@ impl AgentInner {
 
         trace!("Node runner done.");
     }
+}
+
+/// Create an ICMP "Fragmentation Needed" response (Type 3, Code 4)
+///
+/// # Arguments
+/// * `original_packet` - The original packet that exceeded MTU
+/// * `ip_hdr` - Parsed IPv4 header from the original packet
+/// * `mtu` - The MTU value to include in the ICMP response
+///
+/// # Returns
+/// ICMP packet with swapped source/destination and original IP header + 8 bytes of payload (RFC 792)
+fn create_icmp_fragmentation_needed(
+    original_packet: &[u8],
+    ip_hdr: &Ipv4HeaderSlice,
+    mtu: u16,
+) -> Vec<u8> {
+    // Include original IP header + first 8 bytes of payload (RFC 792)
+    let data_len = (ip_hdr.slice().len() + 8).min(original_packet.len());
+    let icmp_data = &original_packet[..data_len];
+
+    // Build packet with swapped source/destination addresses
+    let builder = PacketBuilder::ipv4(
+        ip_hdr.destination_addr().octets(), // source (swapped)
+        ip_hdr.source_addr().octets(),      // destination (swapped)
+        64,                                 // TTL
+    )
+    .icmpv4(Icmpv4Type::DestinationUnreachable(
+        etherparse::icmpv4::DestUnreachableHeader::FragmentationNeeded { next_hop_mtu: mtu },
+    ));
+
+    // Write to buffer (never fails for Vec<u8>)
+    let mut buf = Vec::with_capacity(data_len + 40); // IP header (20) + ICMP header (8) + data
+    builder.write(&mut buf, icmp_data).unwrap();
+
+    buf
 }
